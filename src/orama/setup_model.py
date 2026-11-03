@@ -69,6 +69,11 @@ class DesiredSetup(BaseModel):
     def _check_consistency(self) -> Self:
         if self.vpn is not None and "torrent" not in self.download_methods:
             raise ValueError("a VPN requires the torrent download method")
+        if self.vpn is not None and "gluetun" in self.removed_apps:
+            raise ValueError(
+                "the VPN container cannot be removed while the VPN is on; "
+                "turn the VPN off instead"
+            )
         d, c = self.data_root, self.config_root
         if d == c or d.is_relative_to(c) or c.is_relative_to(d):
             raise ValueError("data_root and config_root must not be the same or nested")
