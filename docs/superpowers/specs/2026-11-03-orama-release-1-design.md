@@ -222,10 +222,10 @@ changes nothing the second time.
 - Phone-friendly.
 - **Stack:** Python web app serving server-rendered HTML templates with a little
   JavaScript (htmx) for live parts. No front-end framework, no build step.
-- **Design work:** the page design uses the `frontend-design` skill if it is installed
-  when that work starts; otherwise the design plugin skills (`design:design-system`,
-  `design:ux-copy`, `design:accessibility-review`, `design:design-critique`) are used to
-  design and review the pages.
+- **Design work (required):** the pages are designed with the **`frontend-design`**
+  skill (owner installed it). The design plugin skills then review the result:
+  `design:ux-copy` (wording), `design:accessibility-review` (WCAG 2.1 AA) and
+  `design:design-critique` (layout and hierarchy).
 
 ### 8.1 Security
 - Password hashed with a memory-hard algorithm (argon2id); login attempts rate-limited.
@@ -281,9 +281,11 @@ in Orama, playback on the S95F shows **Direct Play** in Plex.
    the S95F.
 3. Re-running the installer on the NAS changes nothing.
 4. The repo contains no secrets, IPs or personal paths (enforced by the unit-layer scan).
-5. A **security review of the whole codebase** has been run with the `security-review`
-   skill (plus `engineering:code-review` for security/correctness), and every finding is
-   fixed or explicitly accepted by the owner.
+5. A **security review of the whole codebase** has been run with the owner's installed
+   **Claude security skill(s)**, plus the built-in `security-review` skill and
+   `engineering:code-review`. Every finding is fixed or explicitly accepted by the
+   owner. If a named security skill is not available in the session doing the review,
+   that is reported to the owner, not silently skipped.
 
 ## 11. Room for later releases
 - Desired-setup record and apply engine are the base for add/remove apps (Release 3).
