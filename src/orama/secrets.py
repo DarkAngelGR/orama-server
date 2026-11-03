@@ -111,6 +111,15 @@ def ensure_app_keys(store: SecretStore, apps: list[str]) -> None:
             store.set(f"apikey:{app}", generate_api_key())
 
 
+class MissingSecret(KeyError):
+    """A secret an enabled app needs is not in the store (named, never shown)."""
+
+    def __init__(self, secret_name: str, app: str) -> None:
+        super().__init__(f"missing secret {secret_name!r} required by app {app!r}")
+        self.secret_name = secret_name
+        self.app = app
+
+
 def env_files_for(setup: DesiredSetup, store: SecretStore) -> dict[str, dict[str, str]]:
     """``{app: {ENV: value}}`` for enabled apps that have secret env vars."""
     result: dict[str, dict[str, str]] = {}
@@ -121,7 +130,7 @@ def env_files_for(setup: DesiredSetup, store: SecretStore) -> dict[str, dict[str
         secret_name = _VPN_KEY_NAME if app == "gluetun" else f"apikey:{app}"
         value = store.get(secret_name)
         if value is None:
-            raise KeyError(f"missing secret {secret_name!r} required by app {app!r}")
+            raise MissingSecret(secret_name, app)
         result[app] = {env: value for env in spec.secret_env}
     return result
 
