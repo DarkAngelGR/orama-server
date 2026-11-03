@@ -23,8 +23,10 @@ from orama_agent.validate import PROJECT_NAME, Refused, Roots
 
 COMPOSE_FILE = "compose.yaml"
 AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
-UP_TIMEOUT = 840  # seconds; below the client's 900 s default
-CALL_TIMEOUT = 120
+# Worst case for one apply: ps (60) + up (720) + ps (60) = 840 s, which leaves a 60 s
+# margin under the client's default of 900 s (orama.agent_client.DEFAULT_TIMEOUT).
+UP_TIMEOUT = 720  # up and restart
+CALL_TIMEOUT = 60  # ps
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
