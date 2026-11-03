@@ -6,10 +6,12 @@ from conftest import make_setup
 
 from orama.catalog import CATALOG
 from orama.compose import build_apps_compose
-from orama.layout import app_env_file
+from orama.layout import app_config_dir, app_env_file
+from orama.setup_model import enabled_apps
 from orama_agent.validate import (
     Refused,
     Roots,
+    check_host_paths,
     safe_path,
     validate_compose,
     validate_env_files,
@@ -53,6 +55,11 @@ def good_doc(roots):
 
 def refused(doc, roots):
     with pytest.raises(Refused):
+        validate_compose(doc, roots)
+
+
+def refused_with(doc, roots, match):
+    with pytest.raises(Refused, match=match):
         validate_compose(doc, roots)
 
 
@@ -791,3 +798,117 @@ def test_env_files_refuse_bad_values(roots, value):
 def test_env_files_refuse_bad_shapes(roots, env_files):
     with pytest.raises(Refused):
         validate_env_files(env_files, roots)
+
+
+# ---------------------------------------------------------------- nesting depth
+
+
+def test_refuses_deeply_nested_doc(roots):
+    doc = good_doc(roots)
+    deep: list = []
+    node = deep
+    for _ in range(5000):
+        child: list = []
+        node.append(child)
+        node = child
+    doc["services"]["sonarr"]["environment"]["TZ"] = deep
+    refused_with(doc, roots, "nested too deeply")
+
+
+# ---------------------------------------------------------------- host paths
+
+
+def ensure_folders(roots, setup):
+    for app in enabled_apps(setup):
+        app_config_dir(roots.config, app).mkdir(parents=True, exist_ok=True)
+
+
+def prepared(roots):
+    setup = full_setup(roots)
+    ensure_folders(roots, setup)
+    doc = build_apps_compose(setup)
+    validate_compose(doc, roots)
+    return doc
+
+
+def test_host_paths_accept_real_dirs(roots):
+    doc = prepared(roots)
+    check_host_paths(doc, roots)
+    app_env_file(roots.config, "sonarr").write_text("SONARR__AUTH__APIKEY='x'\n")
+    check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_symlinked_app_config_dir(roots):
+    doc = prepared(roots)
+    target = roots.config / "config" / "sonarr"
+    target.rmdir()
+    target.symlink_to("/etc")
+    with pytest.raises(Refused, match="is a link"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_symlinked_config_dir(roots, tmp_path):
+    doc = prepared(roots)
+    real = tmp_path / "elsewhere"
+    (roots.config / "config").rename(real)
+    (roots.config / "config").symlink_to(real)
+    with pytest.raises(Refused, match="is a link"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_symlinked_env_file(roots):
+    doc = prepared(roots)
+    app_env_file(roots.config, "sonarr").symlink_to("/etc/passwd")
+    with pytest.raises(Refused, match="secrets file for sonarr"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_env_file_that_is_a_dir(roots):
+    doc = prepared(roots)
+    app_env_file(roots.config, "sonarr").mkdir()
+    with pytest.raises(Refused, match="secrets file for sonarr"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_missing_config_dir(roots):
+    doc = prepared(roots)
+    (roots.config / "config" / "radarr").rmdir()
+    with pytest.raises(Refused, match="does not exist yet"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_config_component_that_is_a_file(roots):
+    doc = prepared(roots)
+    target = roots.config / "config" / "bazarr"
+    target.rmdir()
+    target.write_text("")
+    with pytest.raises(Refused, match="is not a folder"):
+        check_host_paths(doc, roots)
+
+
+def test_host_paths_refuse_swapped_root(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "realcfg").mkdir()
+    (tmp_path / "cfg").symlink_to(tmp_path / "realcfg")
+    roots = Roots(tmp_path / "data", tmp_path / "cfg", 1000, 1000)
+    setup = full_setup(roots)
+    ensure_folders(roots, setup)
+    with pytest.raises(Refused, match="is a link"):
+        check_host_paths(build_apps_compose(setup), roots)
+
+
+def test_validate_compose_refuses_existing_symlinked_config_dir(roots):
+    # The reviewer's PoC: no folders created yet except a symlinked sonarr config dir.
+    (roots.config / "config").mkdir()
+    (roots.config / "config" / "sonarr").symlink_to("/etc")
+    refused_with(good_doc(roots), roots, "is a link")
+
+
+def test_validate_compose_refuses_existing_symlinked_env_file(roots):
+    (roots.config / "config" / "sonarr").mkdir(parents=True)
+    app_env_file(roots.config, "sonarr").symlink_to("/etc/passwd")
+    refused_with(good_doc(roots), roots, "secrets file for sonarr")
+
+
+def test_validate_compose_tolerates_missing_folders(roots):
+    validate_compose(good_doc(roots), roots)  # nothing under roots.config exists yet
