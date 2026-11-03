@@ -15,10 +15,10 @@ from conftest import make_setup
 
 from orama import cli
 from orama.__main__ import make_server
-from orama.catalog import CATALOG, CORE
+from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
 from orama.secrets import SecretStore
-from orama.setup_model import DesiredSetup, enabled_apps
+from orama.setup_model import DesiredSetup, VpnConfig, enabled_apps
 from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
 from orama_agent.validate import Roots
@@ -221,6 +221,48 @@ def test_bootstrap_refuses_symlinks(capsys, roots, name):
     assert list(target.iterdir()) == []
 
 
+@pytest.mark.parametrize("name", ["setup.json", "setup.draft.json"])
+def test_bootstrap_refuses_symlinked_setup_files(capsys, roots, name):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    target = cfg.parent / "target.json"
+    target.write_text("untouched")
+    (cfg / "orama" / name).symlink_to(target)
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert out.err.startswith("✗ ") and "link" in out.err
+    assert target.read_text() == "untouched"
+    assert os.path.islink(cfg / "orama" / name)
+    assert not (cfg / "core.compose.yaml").exists()
+
+
+@pytest.mark.parametrize("bad", sorted({1023, 0, 70000} | UGOS_RESERVED_PORTS))
+def test_bootstrap_reassigns_bad_kept_orama_port(capsys, roots, bad):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    make_setup(data_root=str(data), config_root=str(cfg), ports={"orama": bad}).save(
+        cfg / "orama" / "setup.json"
+    )
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken=""))
+    assert code == 0
+    port = DesiredSetup.load(cfg / "orama" / "setup.json").ports["orama"]
+    assert port == 8765
+    assert out.out.strip() == "8765"
+    core = yaml.safe_load((cfg / "core.compose.yaml").read_text())
+    assert core["services"]["orama"]["ports"] == ["8765:8765"]
+
+
+def test_bootstrap_keeps_good_kept_orama_port(capsys, roots):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    make_setup(data_root=str(data), config_root=str(cfg), ports={"orama": 18080}).save(
+        cfg / "orama" / "setup.json"
+    )
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken="18080"))
+    assert code == 0
+    assert out.out.strip() == "18080"
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -381,6 +423,64 @@ def test_apply_agent_unreachable(capsys, roots, monkeypatch):
     out = capsys.readouterr()
     assert code == 1
     assert out.err.startswith("✗ Cannot reach the Agent")
+
+
+def assert_clean_failure(out, caplog, cfg, starts):
+    assert out.err.startswith(f"✗ {starts}"), out.err
+    assert "Traceback" not in out.err
+    assert len(out.err.strip().splitlines()) == 1
+    try:
+        values = store_values(cfg)
+    except (OSError, ValueError):
+        values = []
+    for value in values:
+        assert value not in out.out and value not in out.err and value not in caplog.text
+
+
+def test_apply_unreadable_secret_store(capsys, caplog, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    (cfg / "orama" / "secrets.bin").mkdir()
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Cannot use Orama's files")
+    assert agent.up_calls == 0
+
+
+def test_apply_undecryptable_secret_store(capsys, caplog, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    store.set("apikey:sonarr", "0123456789abcdef0123456789abcdef")
+    (cfg / "orama" / "secrets.key").write_bytes(b"A" * 43 + b"=")
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Cannot apply: cannot decrypt")
+    assert "0123456789abcdef" not in out.err + out.out + caplog.text
+
+
+def test_apply_missing_vpn_key(capsys, caplog, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data, download_methods={"torrent"}, vpn=VpnConfig())
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Cannot apply: missing secret")
+    assert agent.up_calls == 0
+
+
+def test_apply_agent_socket_is_not_a_socket(capsys, caplog, roots, monkeypatch):
+    data, cfg = roots
+    cfg.mkdir()
+    path = write_setup(cfg, data)
+    (cfg / "plain-file").write_text("")
+    monkeypatch.setenv("ORAMA_AGENT_SOCKET", str(cfg / "plain-file"))
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Cannot reach the Agent")
 
 
 def test_apply_missing_setup(capsys, tmp_path):

@@ -19,11 +19,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
 # apt fetches over HTTPS (ca-certificates ships in the base image).
 ARG DOCKER_CLI_VERSION=5:29.9.2-1~debian.12~bookworm
 ARG COMPOSE_PLUGIN_VERSION=5.7.0-1~debian.12~bookworm
+# Docker's published apt signing key fingerprint; the build fails if the download differs.
+ARG DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+COPY docker/check_key_fingerprint.py /tmp/check_key_fingerprint.py
 RUN set -eux; \
     sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
     install -m 0755 -d /etc/apt/keyrings; \
-    python -c "import urllib.request; urllib.request.urlretrieve('https://download.docker.com/linux/debian/gpg', '/etc/apt/keyrings/docker.asc')"; \
-    chmod a+r /etc/apt/keyrings/docker.asc; \
+    python -c "import urllib.request; urllib.request.urlretrieve('https://download.docker.com/linux/debian/gpg', '/tmp/docker.asc')"; \
+    python /tmp/check_key_fingerprint.py /tmp/docker.asc "${DOCKER_KEY_FINGERPRINT}"; \
+    install -m 0644 /tmp/docker.asc /etc/apt/keyrings/docker.asc; \
+    rm /tmp/docker.asc /tmp/check_key_fingerprint.py; \
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
       > /etc/apt/sources.list.d/docker.list; \
     apt-get update; \
