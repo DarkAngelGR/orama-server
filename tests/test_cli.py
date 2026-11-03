@@ -1,0 +1,428 @@
+import json
+import logging
+import os
+import shutil
+import stat
+import tempfile
+import threading
+import urllib.error
+import urllib.request
+from pathlib import Path, PurePosixPath
+
+import pytest
+import yaml
+from conftest import make_setup
+
+from orama import cli
+from orama.__main__ import make_server
+from orama.catalog import CATALOG, CORE
+from orama.layout import app_config_dir, data_folders
+from orama.secrets import SecretStore
+from orama.setup_model import DesiredSetup, enabled_apps
+from orama_agent.runner import FakeRunner
+from orama_agent.server import AgentServer
+from orama_agent.validate import Roots
+
+AWKWARD = "da ta 'q\"#:Ωμέγα"
+
+
+class Chowns:
+    """Records fchown calls by inode instead of changing owners."""
+
+    def __init__(self):
+        self.inodes = {}
+
+    def __call__(self, fd, uid, gid):
+        self.inodes[os.fstat(fd).st_ino] = (uid, gid)
+
+    def owner(self, path):
+        """The recorded owner of what now sits at ``path`` (root if never chowned)."""
+        return self.inodes.get(os.lstat(path).st_ino, (0, 0))
+
+
+def bootstrap_args(config_root, data_root, taken="80,443", **kw):
+    values = {
+        "--platform": "ubuntu",
+        "--data-root": str(data_root),
+        "--config-root": str(config_root),
+        "--puid": "1000",
+        "--pgid": "1001",
+        "--docker-gid": "998",
+        "--render-gid": "none",
+        "--nvidia": "0",
+        "--taken-ports": taken,
+        "--orama-image": "orama:test",
+        "--agent-image": "orama-agent:test",
+    }
+    values.update(kw)
+    argv = ["bootstrap"]
+    for k, v in values.items():
+        argv += [k, v]
+    return argv
+
+
+@pytest.fixture
+def roots(tmp_path):
+    base = Path(os.path.realpath(tmp_path))
+    return base / "data", base / "cfg"
+
+
+def run_bootstrap(capsys, argv, chowns=None):
+    chowns = chowns if chowns is not None else Chowns()
+    code = cli.main(argv, chown=chowns)
+    out = capsys.readouterr()
+    return code, out, chowns
+
+
+# ---------------------------------------------------------------- bootstrap
+
+def test_bootstrap_writes_core_compose_and_draft(capsys, roots):
+    data, cfg = roots
+    code, out, _chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0
+
+    core = yaml.safe_load((cfg / "core.compose.yaml").read_text())
+    orama = core["services"]["orama"]
+    assert orama["image"] == "orama:test"
+    assert core["services"]["orama-agent"]["image"] == "orama-agent:test"
+    assert core["services"]["orama-agent"]["group_add"] == ["998"]
+    assert orama["user"] == "1000:1001"
+
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert draft.media_servers == {"plex"}
+    assert draft.download_methods == {"usenet"}
+    assert draft.vpn is None
+    assert draft.data_root == PurePosixPath(data)
+    assert draft.config_root == PurePosixPath(cfg)
+    assert (draft.puid, draft.pgid, draft.render_gid, draft.nvidia) == (1000, 1001, None, False)
+    assert draft.timezone == "Etc/UTC"
+    wanted = {a for a, s in CATALOG.items() if s.default_host_port} | {"orama"}
+    assert set(draft.ports) == wanted
+    assert len(set(draft.ports.values())) == len(draft.ports)
+    assert orama["ports"] == [f"{draft.ports['orama']}:{CORE['orama'].container_port}"]
+    assert out.out.strip() == str(draft.ports["orama"])
+
+
+def test_bootstrap_modes_and_owners(capsys, roots):
+    data, cfg = roots
+    code, _, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0
+    mode = lambda p: stat.S_IMODE(os.lstat(p).st_mode)
+    assert mode(cfg) == 0o755
+    assert mode(cfg / "config") == 0o755
+    assert mode(cfg / "core.compose.yaml") == 0o644
+    assert mode(cfg / "orama") == 0o700
+    assert mode(cfg / "orama" / "setup.draft.json") == 0o600
+    assert not (cfg / "app-env").exists()
+    assert chowns.owner(cfg / "orama") == (1000, 1001)
+    assert chowns.owner(cfg / "orama" / "setup.draft.json") == (1000, 1001)
+    for root_owned in (cfg, cfg / "config", cfg / "core.compose.yaml"):
+        assert chowns.owner(root_owned) == (0, 0)
+    assert not list((cfg / "orama").glob(".*tmp")) and not list(cfg.glob(".*tmp"))
+
+
+def test_bootstrap_rerun_keeps_earlier_ports(capsys, roots):
+    data, cfg = roots
+    run_bootstrap(capsys, bootstrap_args(cfg, data, taken="80,443"))
+    first = DesiredSetup.load(cfg / "orama" / "setup.draft.json").ports
+    # Now our own containers hold the ports, plus something new took 8765+.
+    taken = ",".join(str(p) for p in [*first.values(), 8765, 8766, 8767, 80])
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken=taken))
+    assert code == 0
+    second = DesiredSetup.load(cfg / "orama" / "setup.draft.json").ports
+    assert second == first
+    assert out.out.strip() == str(first["orama"])
+
+
+def test_bootstrap_taken_default_port_moves(capsys, roots):
+    data, cfg = roots
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken="8765,32400"))
+    assert code == 0
+    ports = DesiredSetup.load(cfg / "orama" / "setup.draft.json").ports
+    assert ports["orama"] not in (8765, 32400)
+    assert ports["plex"] != 32400
+    assert out.out.strip() == str(ports["orama"])
+
+
+def test_bootstrap_keeps_existing_setup_and_fills_missing_ports(capsys, roots):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    existing = make_setup(
+        data_root=str(data), config_root=str(cfg), media_servers={"jellyfin"},
+        download_methods={"torrent"}, ports={"jellyfin": 18096},
+    )
+    existing.save(cfg / "orama" / "setup.json")
+    code, _out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0
+    assert not (cfg / "orama" / "setup.draft.json").exists()
+    kept = DesiredSetup.load(cfg / "orama" / "setup.json")
+    assert kept.media_servers == {"jellyfin"}
+    assert kept.download_methods == {"torrent"}
+    assert kept.ports["jellyfin"] == 18096
+    assert "orama" in kept.ports and "sonarr" in kept.ports
+
+
+def test_bootstrap_keeps_existing_draft(capsys, roots):
+    data, cfg = roots
+    run_bootstrap(capsys, bootstrap_args(cfg, data))
+    path = cfg / "orama" / "setup.draft.json"
+    draft = DesiredSetup.load(path)
+    path.write_text(json.dumps({**draft.to_json_dict(), "timezone": "Europe/Athens"}))
+    code, _, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, **{"--puid": "2000"}))
+    assert code == 0
+    again = DesiredSetup.load(path)
+    assert again.timezone == "Europe/Athens"
+    assert again.puid == 1000
+
+
+def test_bootstrap_awkward_data_root_survives(capsys, tmp_path):
+    base = Path(os.path.realpath(tmp_path))
+    data, cfg = base / AWKWARD / "data", base / f"cfg {AWKWARD}"
+    code, _, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0
+    core = yaml.safe_load((cfg / "core.compose.yaml").read_text(encoding="utf-8"))
+    env = core["services"]["orama-agent"]["environment"]
+    assert env["ORAMA_DATA_ROOT"] == str(data)
+    assert env["ORAMA_CONFIG_ROOT"] == str(cfg)
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert str(draft.data_root) == str(data)
+    assert str(draft.config_root) == str(cfg)
+
+
+def test_bootstrap_canonicalises_roots(capsys, tmp_path):
+    base = Path(os.path.realpath(tmp_path))
+    (base / "real-data").mkdir()
+    (base / "data-link").symlink_to(base / "real-data")
+    cfg = base / "cfg"
+    code, _, _ = run_bootstrap(capsys, bootstrap_args(cfg, base / "x" / ".." / "data-link"))
+    assert code == 0
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert draft.data_root == PurePosixPath(base / "real-data")
+
+
+def test_bootstrap_render_gid_and_nvidia(capsys, roots):
+    data, cfg = roots
+    argv = bootstrap_args(cfg, data, **{"--render-gid": "105", "--nvidia": "1"})
+    assert run_bootstrap(capsys, argv)[0] == 0
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert (draft.render_gid, draft.nvidia) == (105, True)
+
+
+@pytest.mark.parametrize("name", ["orama", "core.compose.yaml", "config"])
+def test_bootstrap_refuses_symlinks(capsys, roots, name):
+    data, cfg = roots
+    cfg.mkdir()
+    target = cfg.parent / "elsewhere"
+    target.mkdir()
+    (cfg / name).symlink_to(target)
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert "link" in out.err
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"--platform": "fedora"},
+        {"--render-gid": "abc"},
+        {"--nvidia": "2"},
+        {"--taken-ports": "80,http"},
+        {"--puid": "-1"},
+    ],
+)
+def test_bootstrap_rejects_bad_arguments(capsys, roots, override):
+    data, cfg = roots
+    with pytest.raises(SystemExit) as exc:
+        cli.main(bootstrap_args(cfg, data, **override), chown=Chowns())
+    assert exc.value.code != 0
+    assert not cfg.exists()
+
+
+def test_bootstrap_rejects_nested_roots(capsys, roots):
+    _data, cfg = roots
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, cfg / "data"))
+    assert code == 1
+    assert out.err.startswith("✗")
+
+
+def test_bootstrap_empty_taken_ports(capsys, roots):
+    data, cfg = roots
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken=""))
+    assert code == 0
+    assert out.out.strip() == "8765"
+
+
+# ---------------------------------------------------------------- apply
+
+@pytest.fixture
+def agent(roots, monkeypatch):
+    data, cfg = roots
+    data.mkdir()
+    cfg.mkdir()
+    agent_roots = Roots(data=data, config=cfg, puid=1000, pgid=1001)
+    sock_dir = tempfile.mkdtemp(prefix="oc", dir="/tmp")
+    socket_path = os.path.join(sock_dir, "agent.sock")
+    runner = FakeRunner()
+    server = AgentServer(agent_roots, runner, socket_path, chown=lambda *a, **k: None,
+                         read_timeout=5)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    monkeypatch.setenv("ORAMA_AGENT_SOCKET", socket_path)
+    try:
+        yield runner
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def write_setup(cfg, data, **kw):
+    (cfg / "orama").mkdir(mode=0o700, exist_ok=True)
+    values = {"data_root": str(data), "config_root": str(cfg), "puid": 1000, "pgid": 1001}
+    values.update(kw)
+    setup = make_setup(**values)
+    path = cfg / "orama" / "setup.json"
+    setup.save(path)
+    return path
+
+
+def store_values(cfg):
+    return SecretStore(cfg / "orama" / "secrets.bin").values()
+
+
+def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, roots, agent):
+    data, cfg = roots
+    caplog.set_level(logging.DEBUG)
+    path = write_setup(cfg, data)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 0, out.err
+
+    setup = DesiredSetup.load(path)
+    for folder in data_folders(PurePosixPath(data)):
+        assert Path(folder).is_dir()
+    for app in enabled_apps(setup):
+        assert Path(app_config_dir(PurePosixPath(cfg), app)).is_dir()
+    assert agent.up_calls == 1
+    sent = yaml.safe_load((cfg / "compose.yaml").read_text())
+    assert sorted(sent["services"]) == sorted(enabled_apps(setup))
+
+    # Ports were filled in and saved.
+    assert {a for a in enabled_apps(setup) if CATALOG[a].default_host_port} <= set(setup.ports)
+    assert (cfg / "app-env" / "sonarr.env").exists()
+
+    lines = out.out.splitlines()
+    assert lines[0] == "✓ Folders ready"
+    assert {f"✓ {a} started" for a in enabled_apps(setup)} <= set(lines)
+
+    secrets = store_values(cfg)
+    assert len(secrets) == 3
+    for value in secrets:
+        assert value not in out.out and value not in out.err and value not in caplog.text
+
+
+def test_apply_second_run_reports_nothing_to_change(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    capsys.readouterr()
+    keys = store_values(cfg)
+    ports = DesiredSetup.load(path).ports
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == ["✓ Folders ready", "✓ Nothing to change"]
+    assert store_values(cfg) == keys
+    assert DesiredSetup.load(path).ports == ports
+
+
+def test_apply_keeps_existing_ports(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data, ports={"plex": 32401, "orama": 8800})
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    ports = DesiredSetup.load(path).ports
+    assert ports["plex"] == 32401 and ports["orama"] == 8800
+    assert len(set(ports.values())) == len(ports)
+
+
+def test_apply_refusal_exits_nonzero_with_agent_message(capsys, caplog, roots, agent):
+    data, cfg = roots
+    other = data.parent / "other-data"
+    path = write_setup(cfg, other)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.err.startswith("✗ The folder ")
+    assert "is not one Orama may create." in out.err
+    assert agent.up_calls == 0
+    for value in store_values(cfg):
+        assert value not in out.out and value not in out.err and value not in caplog.text
+
+
+def test_apply_runner_failure_exits_nonzero(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    agent.fail_next_up = True
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.out.splitlines() == ["✓ Folders ready"]
+    assert out.err.startswith("✗ ")
+    assert "docker compose up failed" in out.err
+
+
+def test_apply_agent_unreachable(capsys, roots, monkeypatch):
+    data, cfg = roots
+    cfg.mkdir()
+    path = write_setup(cfg, data)
+    monkeypatch.setenv("ORAMA_AGENT_SOCKET", str(cfg / "nope.sock"))
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.err.startswith("✗ Cannot reach the Agent")
+
+
+def test_apply_missing_setup(capsys, tmp_path):
+    code = cli.main(["apply", "--setup", str(tmp_path / "missing.json")])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.err.startswith("✗ ")
+
+
+# ---------------------------------------------------------------- orama HTTP server
+
+@pytest.fixture
+def http_base():
+    server = make_server("127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+def get(url):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(url, timeout=5) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def test_http_healthz(http_base):
+    assert get(f"{http_base}/healthz") == (200, "ok")
+
+
+def test_http_root(http_base):
+    assert get(f"{http_base}/") == (
+        200, "Orama is running — setup page arrives in a later update."
+    )
+
+
+def test_http_unknown_path(http_base):
+    assert get(f"{http_base}/nope")[0] == 404
