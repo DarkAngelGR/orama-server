@@ -199,3 +199,14 @@ def test_real_compose_accepts_generated_yaml(tmp_path, kind):
     r = subprocess.run(["docker", "compose", "-f", str(f), "config", "-q"],
                        check=False, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_gluetun_has_no_ports_when_qbittorrent_removed():
+    s = full(removed_apps={"qbittorrent"})
+    g = build_apps_compose(s)["services"]["gluetun"]
+    assert "ports" not in g
+
+
+def test_removing_gluetun_while_vpn_on_is_refused():
+    with pytest.raises(ValueError, match="turn the VPN off"):
+        full(removed_apps={"gluetun"})

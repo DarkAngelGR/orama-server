@@ -31,7 +31,8 @@ def _environment(spec: ServiceSpec, setup: DesiredSetup) -> dict[str, str]:
     if spec.env_style == "jellyfin":
         return {"TZ": tz}
     if spec.env_style == "gluetun":
-        assert setup.vpn is not None
+        if setup.vpn is None:
+            raise ValueError("gluetun requires a VPN configuration")
         env = {
             "VPN_SERVICE_PROVIDER": setup.vpn.provider,
             "VPN_TYPE": "wireguard",
@@ -97,7 +98,9 @@ def _service(spec: ServiceSpec, setup: DesiredSetup, vpn_on: bool) -> dict[str, 
     svc["networks"] = [NETWORK]
     if spec.name == "gluetun":
         # Gluetun owns qBittorrent's network, so it publishes qBittorrent's port.
-        svc["ports"] = [f"{_host_port(CATALOG['qbittorrent'], setup)}:{QBITTORRENT_WEBUI_PORT}"]
+        if "qbittorrent" in enabled_apps(setup):
+            svc["ports"] = [f"{_host_port(CATALOG['qbittorrent'], setup)}:{QBITTORRENT_WEBUI_PORT}"
+            ]
     else:
         host_port = _host_port(spec, setup)
         if host_port is not None:
