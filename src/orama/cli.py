@@ -30,7 +30,13 @@ from orama.compose import build_apps_compose, build_core_compose, dump_yaml
 from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
-from orama.secrets import SecretStore, ensure_app_keys, env_files_for, install_redaction
+from orama.secrets import (
+    MissingSecret,
+    SecretStore,
+    ensure_app_keys,
+    env_files_for,
+    install_redaction,
+)
 from orama.setup_model import DesiredSetup, enabled_apps
 
 CORE_COMPOSE_FILE = "core.compose.yaml"
@@ -38,6 +44,7 @@ SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
 SECRETS_FILE = "secrets.bin"
 APP_CONFIG_PARENT = "config"
+SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -109,7 +116,14 @@ def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> in
     args = _parser().parse_args(argv)
     try:
         if args.command == "bootstrap":
-            port = bootstrap(args, chown or _default_chown())
+            try:
+                port = bootstrap(args, chown or _default_chown())
+            except OSError as e:
+                where = f" at {e.filename}" if isinstance(e.filename, str) else ""
+                raise Failed(
+                    f"Orama could not prepare its folder{where} "
+                    f"({e.strerror or type(e).__name__})."
+                ) from None
             print(port)
         else:
             apply(args.setup)
@@ -138,8 +152,7 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             nvidia=args.nvidia,
         )
     except ValidationError as e:
-        reason = e.errors()[0]["msg"].removeprefix("Value error, ")
-        raise Failed(f"These folders cannot be used: {reason}.") from None
+        raise Failed("These folders cannot be used. " + _plain_errors(e)) from None
     state_name = orama_state_dir(PurePosixPath(".")).name
 
     if not os.path.lexists(config_root):
@@ -174,6 +187,31 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
     finally:
         os.close(config_fd)
     return setup.ports["orama"]
+
+
+_FIELD_NAMES = {
+    "data_root": "the data folder",
+    "config_root": "the Orama folder",
+    "puid": "the user id",
+    "pgid": "the group id",
+    "render_gid": "the graphics group id",
+}
+
+
+def _plain_errors(e: ValidationError) -> str:
+    """One plain sentence per validation error, in words instead of field names."""
+    sentences = []
+    for err in e.errors():
+        msg = str(err["msg"]).removeprefix("Value error, ")
+        msg = msg.replace("data_root and config_root", "the data folder and the Orama folder")
+        msg = msg.replace("the same or nested", "the same folder or one inside the other")
+        for field, words in _FIELD_NAMES.items():
+            msg = msg.replace(field, words)
+        loc = err.get("loc") or ()
+        subject = _FIELD_NAMES.get(str(loc[0])) if loc else None
+        sentence = f"{subject} {msg}" if subject else msg
+        sentences.append(sentence[:1].upper() + sentence[1:].rstrip(".") + ".")
+    return " ".join(sentences)
 
 
 def _usable_port(port: object) -> bool:
@@ -221,16 +259,27 @@ def _make_dir(parent_fd: int, name: str, shown: PurePosixPath, mode: int) -> int
 def _existing_setup(state_fd: int, shown: PurePosixPath) -> tuple[str, DesiredSetup | None]:
     """The saved setup, else the earlier draft, else nothing (the draft name)."""
     for name in (SETUP_FILE, DRAFT_FILE):
+        # Orama (PUID) can write this file and we run as root: never follow a link, never
+        # block on a FIFO, read only a regular file, and only so much of it.
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
         try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=state_fd)
+            fd = os.open(name, flags, dir_fd=state_fd)
         except FileNotFoundError:
             continue
         except OSError as e:
             if e.errno == errno.ELOOP:
                 raise Failed(f"{shown / name} is a link; Orama will not read it.") from None
             raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise Failed(f"{shown / name} is not a regular file; move it away and run again.")
         with os.fdopen(fd, "rb") as f:
-            raw = f.read()
+            try:
+                raw = f.read(SETUP_LIMIT + 1)
+            except OSError as e:
+                raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
+        if len(raw) > SETUP_LIMIT:
+            raise Failed(f"{shown / name} is too large to be a setup; fix or remove it.")
         try:
             return name, DesiredSetup.model_validate_json(raw)
         except ValueError:
@@ -305,8 +354,16 @@ def apply(setup_path: Path) -> None:
         setup.save(setup_path)
     except AgentError as e:
         raise Failed(e.message) from None
-    except KeyError as e:  # a missing secret, named but never shown
-        raise Failed(f"Cannot apply: {e.args[0]}.") from None
+    except MissingSecret as e:  # named in plain words, never shown
+        if e.app == "gluetun":
+            raise Failed(
+                "The VPN key has not been entered yet. VPN setup arrives with the setup "
+                "page; turn the VPN off for now."
+            ) from None
+        raise Failed(
+            f"Orama could not find the key it keeps for {e.app}. Run the installer again "
+            "to recreate it."
+        ) from None
     except ValueError as e:  # e.g. the secret store cannot be decrypted; messages hold no values
         raise Failed(f"Cannot apply: {e}.") from None
     except OSError as e:

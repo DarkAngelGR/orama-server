@@ -288,6 +288,70 @@ def test_bootstrap_rejects_nested_roots(capsys, roots):
     assert out.err.startswith("✗")
 
 
+@pytest.mark.parametrize("data_rel,config_rel,words", [
+    ("cfg/data", "cfg", "The data folder and the Orama folder"),
+    ("da:ta", "cfg", "The data folder"),
+    ("data", "c:fg", "The Orama folder"),
+])
+def test_bootstrap_invalid_roots_are_plain(capsys, tmp_path, data_rel, config_rel, words):
+    base = Path(os.path.realpath(tmp_path))
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(base / config_rel, base / data_rel))
+    assert code == 1
+    assert out.err.startswith("✗ ") and len(out.err.strip().splitlines()) == 1
+    assert words in out.err
+    for jargon in ("data_root", "config_root", "Value error", "validation error"):
+        assert jargon not in out.err
+
+
+def test_bootstrap_unexpected_os_error_is_plain(capsys, tmp_path):
+    base = Path(os.path.realpath(tmp_path))
+    (base / "file").write_text("")
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(base / "file" / "cfg", base / "data"))
+    assert code == 1
+    assert out.err.startswith("✗ ") and len(out.err.strip().splitlines()) == 1
+    assert "Traceback" not in out.err
+
+
+def _state_with(cfg, name, make):
+    (cfg / "orama").mkdir(parents=True)
+    make(cfg / "orama" / name)
+
+
+@pytest.mark.parametrize("name", ["setup.json", "setup.draft.json"])
+def test_bootstrap_saved_setup_fifo_does_not_hang(capsys, roots, name):
+    data, cfg = roots
+    _state_with(cfg, name, os.mkfifo)
+    result = {}
+    thread = threading.Thread(
+        target=lambda: result.update(r=run_bootstrap(capsys, bootstrap_args(cfg, data))),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(10)
+    if thread.is_alive():  # unblock the hung open so the test run can end
+        os.close(os.open(cfg / "orama" / name, os.O_WRONLY | os.O_NONBLOCK))
+        pytest.fail("bootstrap blocked on a FIFO")
+    code, out, _ = result["r"]
+    assert code == 1 and out.err.startswith("✗ ") and "not a regular file" in out.err
+    assert not (cfg / "core.compose.yaml").exists()
+
+
+def test_bootstrap_saved_setup_directory_is_plain(capsys, roots):
+    data, cfg = roots
+    _state_with(cfg, "setup.json", os.mkdir)
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1 and out.err.startswith("✗ ") and "not a regular file" in out.err
+    assert "Traceback" not in out.err
+
+
+def test_bootstrap_saved_setup_oversized_is_refused(capsys, roots):
+    data, cfg = roots
+    _state_with(cfg, "setup.json", lambda p: p.write_bytes(b" " * (1024 * 1024 + 1)))
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1 and out.err.startswith("✗ ") and "too large" in out.err
+    assert not (cfg / "core.compose.yaml").exists()
+
+
 def test_bootstrap_empty_taken_ports(capsys, roots):
     data, cfg = roots
     code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken=""))
@@ -467,7 +531,21 @@ def test_apply_missing_vpn_key(capsys, caplog, roots, agent):
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr()
     assert code == 1
-    assert_clean_failure(out, caplog, cfg, "Cannot apply: missing secret")
+    assert_clean_failure(out, caplog, cfg, "The VPN key has not been entered yet.")
+    assert "turn the VPN off" in out.err
+    assert "vpn:" not in out.err and "gluetun" not in out.err
+    assert agent.up_calls == 0
+
+
+def test_apply_missing_app_key_is_plain(capsys, caplog, roots, agent, monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    monkeypatch.setattr(cli, "ensure_app_keys", lambda store, apps: None)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Orama could not find the key it keeps for ")
+    assert "apikey:" not in out.err and "missing secret" not in out.err
     assert agent.up_calls == 0
 
 
