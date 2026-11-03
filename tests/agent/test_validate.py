@@ -330,7 +330,7 @@ def test_refuses_keys_outside_allowlist(roots, key, value):
 
 def test_refuses_wrong_container_name(roots):
     doc = good_doc(roots)
-    doc["services"]["sonarr"]["container_name"] = "orama-orama-agent"
+    doc["services"]["sonarr"]["container_name"] = "orama-server-agent"
     refused(doc, roots)
 
 
@@ -343,7 +343,7 @@ def test_refuses_wrong_restart(roots):
 # ---------------------------------------------------------------- network_mode
 
 
-@pytest.mark.parametrize("mode", ["host", "container:orama-orama-agent", "none", "bridge"])
+@pytest.mark.parametrize("mode", ["host", "container:orama-server-agent", "none", "bridge"])
 def test_refuses_other_network_modes(roots, mode):
     doc = good_doc(roots)
     doc["services"]["qbittorrent"]["network_mode"] = mode

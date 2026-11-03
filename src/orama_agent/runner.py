@@ -30,7 +30,7 @@ PULL_TIMEOUT = 3600  # a first install downloads every app image
 UP_TIMEOUT = 720  # up and restart
 CALL_TIMEOUT = 60  # ps
 STDERR_TAIL_LINES = 40
-LOG_HINT = "To see why, run: sudo docker logs orama-orama-agent"
+LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
 _WHAT = {
     "pull": "Downloading the apps",
     "up": "Starting the apps",

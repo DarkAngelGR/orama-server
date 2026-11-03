@@ -160,7 +160,7 @@ def test_core_layout():
     c = core()
     assert c["name"] == "orama-core"
     o, a = c["services"]["orama"], c["services"]["orama-agent"]
-    assert o["container_name"] == "orama-orama" and a["container_name"] == "orama-orama-agent"
+    assert o["container_name"] == "orama-server" and a["container_name"] == "orama-server-agent"
     assert o["image"] == CORE["orama"].image and a["image"] == CORE["orama-agent"].image
     assert o["ports"] == ["8765:8765"] and o["user"] == "1000:1000"
     assert {"type": "bind", "source": "/srv/orama/orama", "target": "/srv/orama/orama"} in (

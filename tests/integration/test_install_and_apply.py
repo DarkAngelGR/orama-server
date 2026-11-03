@@ -74,7 +74,7 @@ def install(host: Host, outputs: Outputs, name: str) -> tuple[int, str]:
 
 
 def apply(host: Host, outputs: Outputs, name: str) -> tuple[int, str]:
-    out = run(["docker", "exec", "orama-orama", "python", "-m", "orama.cli", "apply",
+    out = run(["docker", "exec", "orama-server", "python", "-m", "orama.cli", "apply",
                "--setup", str(host.state_dir / "setup.json")], timeout=APPLY_TIMEOUT)
     outputs.add(host, name, out.stdout)
     return out.returncode, out.stdout
@@ -122,7 +122,7 @@ def stored_secrets(host: Host) -> dict[str, str]:
         "store = SecretStore(Path(sys.argv[1]))\n"
         "print(json.dumps({n: store.get(n) for n in store.names()}))\n"
     )
-    out = run(["docker", "exec", "orama-orama", "python", "-c", snippet,
+    out = run(["docker", "exec", "orama-server", "python", "-c", snippet,
                str(host.state_dir / "secrets.bin")])
     assert out.returncode == 0, "reading the secret store failed (output withheld)"
     return json.loads(out.stdout)
@@ -150,7 +150,7 @@ def applied(clean_host: Host, installed: dict, outputs: Outputs) -> dict:
         "from orama.setup_model import DesiredSetup\n"
         "DesiredSetup.model_validate_json(sys.stdin.read()).save(sys.argv[1])\n"
     )
-    save = run(["docker", "exec", "-i", "orama-orama", "python", "-c", snippet, str(target)],
+    save = run(["docker", "exec", "-i", "orama-server", "python", "-c", snippet, str(target)],
                input=json.dumps(setup))
     assert save.returncode == 0, f"saving the setup failed:\n{save.stdout}"
 
@@ -213,13 +213,13 @@ def poll_http(port: int, path: str, headers: dict[str, str] | None = None,
 # ---------------------------------------------------------------- install
 
 def test_installer_starts_orama(installed: dict):
-    for name in ("orama-orama", "orama-orama-agent"):
+    for name in ("orama-server", "orama-server-agent"):
         assert docker_inspect(name)["State"]["Status"] == "running", name
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
 
 def test_orama_has_no_docker_socket_and_only_its_state_folder(clean_host: Host, installed):
-    info = docker_inspect("orama-orama")
+    info = docker_inspect("orama-server")
     targets = {m["Destination"] for m in info["Mounts"]}
     sources = bind_sources(info)
     assert not DOCKER_SOCKETS & (targets | set(sources))
@@ -229,7 +229,7 @@ def test_orama_has_no_docker_socket_and_only_its_state_folder(clean_host: Host, 
 
 
 def test_agent_has_no_network(installed):
-    info = docker_inspect("orama-orama-agent")
+    info = docker_inspect("orama-server-agent")
     assert info["HostConfig"]["NetworkMode"] == "none"
     assert published_host_ports(info) == set()
     assert not info["NetworkSettings"].get("Ports")
@@ -321,7 +321,7 @@ def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Ou
     values = [v for v in stored_secrets(clean_host).values() if v]
     assert values, "the secret store is empty"
     texts = dict(outputs.texts)
-    for name in ("orama-orama", "orama-orama-agent"):
+    for name in ("orama-server", "orama-server-agent"):
         texts[f"docker logs {name}"] = run(["docker", "logs", name]).stdout
     # Booleans only: an assertion must never show a secret value.
     leaks = sorted(where for where, text in texts.items() if any(v in text for v in values))
