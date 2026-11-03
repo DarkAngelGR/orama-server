@@ -9,7 +9,7 @@ from conftest import make_setup
 
 from orama.catalog import CATALOG, CORE
 from orama.compose import build_apps_compose, build_core_compose, dump_yaml
-from orama.layout import app_env_file
+from orama.layout import app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
 
 AWKWARD = '/volume1/Ταινίες & TV #1: "x"'
@@ -221,3 +221,27 @@ def test_gluetun_has_no_ports_when_qbittorrent_removed():
 def test_removing_gluetun_while_vpn_on_is_refused():
     with pytest.raises(ValueError, match="turn the VPN off"):
         full(removed_apps={"gluetun"})
+
+
+@pytest.mark.parametrize("doc_kind", ["apps", "core"])
+def test_no_mount_exposes_app_env_dir_except_agent(doc_kind):
+    # Env files live in an Agent-only folder: no app (and not Orama) may mount it or a parent.
+    s = full()
+    doc = build_apps_compose(s) if doc_kind == "apps" else core()
+    env_dir = app_env_dir(s.config_root)
+    for name, svc in doc["services"].items():
+        if name == "orama-agent":
+            continue
+        for v in svc.get("volumes", []):
+            if v["type"] != "bind":
+                continue
+            src = P(v["source"])
+            assert not src.is_relative_to(env_dir), (name, src)
+            assert not env_dir.is_relative_to(src), (name, src)
+
+
+def test_env_file_pin_is_in_app_env_dir():
+    s = full()
+    doc = build_apps_compose(s)
+    assert doc["services"]["sonarr"]["env_file"] == ["/srv/orama/app-env/sonarr.env"]
+    assert doc["services"]["gluetun"]["env_file"] == ["/srv/orama/app-env/gluetun.env"]
