@@ -23,15 +23,39 @@ from orama_agent.validate import PROJECT_NAME, Refused, Roots
 
 COMPOSE_FILE = "compose.yaml"
 AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
-# Worst case for one apply: ps (60) + up (720) + ps (60) = 840 s, which leaves a 60 s
-# margin under the client's default of 900 s (orama.agent_client.DEFAULT_TIMEOUT).
+# Worst case for one apply: ps (60) + pull (3600) + up (720) + ps (60) = 4440 s, which
+# leaves a 60 s margin under the client's default of 4500 s
+# (orama.agent_client.DEFAULT_TIMEOUT).
+PULL_TIMEOUT = 3600  # a first install downloads every app image
 UP_TIMEOUT = 720  # up and restart
 CALL_TIMEOUT = 60  # ps
+STDERR_TAIL_LINES = 40
+LOG_HINT = "To see why, run: sudo docker logs orama-orama-agent"
+_WHAT = {
+    "pull": "Downloading the apps",
+    "up": "Starting the apps",
+    "ps": "Checking the apps",
+    "restart": "Restarting the app",
+}
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class RunnerError(Exception):
-    """docker compose failed. The message is safe to show and log."""
+    """docker compose failed. The message is plain and safe to show and log.
+
+    ``detail`` is the tail of compose's stderr. It may hold secrets (compose can echo
+    container settings): it is never sent to the client, and is logged only redacted.
+    """
+
+    def __init__(self, message: str, detail: str = "") -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
+def _tail(text: str | bytes | None) -> str:
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    return "\n".join((text or "").splitlines()[-STDERR_TAIL_LINES:])
 
 
 def project_file(roots: Roots) -> Path:
@@ -85,18 +109,24 @@ class ComposeRunner:
 
     def _compose(self, file: str, args: list[str], timeout: int) -> str:
         argv = self._prefix(file) + args
+        what = _WHAT[args[0]]
         try:
             proc = self._run(
                 argv, env=_child_env(), capture_output=True, text=True, timeout=timeout,
                 check=False, shell=False,
             )
-        except subprocess.TimeoutExpired:
-            raise RunnerError(f"docker compose {args[0]} did not finish in time.") from None
-        except OSError:
-            raise RunnerError("docker compose could not be started.") from None
+        except subprocess.TimeoutExpired as e:
+            raise RunnerError(f"{what} did not finish in time. {LOG_HINT}", _tail(e.stderr)) from None
+        except OSError as e:
+            raise RunnerError(
+                f"{what} failed: Docker Compose could not be started. {LOG_HINT}",
+                f"{type(e).__name__}: {e.strerror or ''}",
+            ) from None
         if proc.returncode != 0:
-            # stderr is not passed on: it may echo container settings.
-            raise RunnerError(f"docker compose {args[0]} failed (exit code {proc.returncode}).")
+            raise RunnerError(
+                f"{what} failed. {LOG_HINT}",
+                f"exit code {proc.returncode}\n{_tail(proc.stderr)}",
+            )
         return proc.stdout
 
     def _containers(self, file: str) -> list[dict[str, Any]]:
@@ -104,11 +134,15 @@ class ComposeRunner:
         try:
             return parse_ps(out)
         except ValueError:
-            raise RunnerError("docker compose ps printed something Orama cannot read.") from None
+            raise RunnerError(
+                f"Checking the apps failed: Docker Compose printed something Orama cannot "
+                f"read. {LOG_HINT}"
+            ) from None
 
     def up(self, project_file: str) -> list[str]:
         """Bring the project up; return services whose container is new or recreated."""
         before = {c.get("Service"): c.get("ID") for c in self._containers(project_file)}
+        self._compose(project_file, ["pull", "--quiet"], PULL_TIMEOUT)
         self._compose(
             project_file, ["up", "-d", "--remove-orphans", "--wait"], UP_TIMEOUT
         )
@@ -151,7 +185,7 @@ class FakeRunner:
         self.up_files.append(project_file)
         if self.fail_next_up:
             self.fail_next_up = False
-            raise RunnerError("docker compose up failed (exit code 1).")
+            raise RunnerError(f"Starting the apps failed. {LOG_HINT}", "exit code 1")
         content = Path(project_file).read_text()
         if content == self._last:
             return []

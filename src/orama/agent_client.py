@@ -9,9 +9,9 @@ from typing import Any
 
 DEFAULT_SOCKET = "/run/orama/agent.sock"
 MAX_RESPONSE = 16 * 1024 * 1024
-# Strictly above the Agent's worst case for one apply: ps 60 + up 720 + ps 60 = 840 s
-# (orama_agent.runner.CALL_TIMEOUT / UP_TIMEOUT), plus a 60 s margin.
-DEFAULT_TIMEOUT = 900.0
+# Strictly above the Agent's worst case for one apply: ps 60 + pull 3600 + up 720 + ps 60
+# = 4440 s (orama_agent.runner.CALL_TIMEOUT / PULL_TIMEOUT / UP_TIMEOUT), plus a 60 s margin.
+DEFAULT_TIMEOUT = 4500.0
 
 
 class AgentError(Exception):
