@@ -23,7 +23,7 @@ from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
 from orama_agent.validate import Roots
 
-AWKWARD = "da ta 'q\"#:Ωμέγα"
+AWKWARD = "da ta 'q\"#&Ωμέγα"
 
 
 class Chowns:

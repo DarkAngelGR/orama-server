@@ -27,6 +27,12 @@ def test_roots_must_be_absolute_normalised_and_not_root(bad):
         make_setup(config_root=bad)
 
 
+@pytest.mark.parametrize("field", ["data_root", "config_root"])
+def test_roots_must_not_contain_colon(field):
+    with pytest.raises(ValidationError, match="Docker cannot mount"):
+        make_setup(**{field: "/srv/a:b"})
+
+
 def test_roots_are_normalised():
     s = make_setup(data_root="/srv//data/./")
     assert str(s.data_root) == "/srv/data"
@@ -106,7 +112,7 @@ def test_save_load_roundtrip(tmp_path):
 
 
 def test_unusual_path_characters_roundtrip(tmp_path):
-    root = '/mnt/Μέσα θέματα/it\'s "data" #1:a'
+    root = '/mnt/Μέσα θέματα/it\'s "data" #1 & a'
     s = make_setup(data_root=root)
     assert str(s.data_root) == root
     path = tmp_path / "setup.json"
