@@ -1,0 +1,470 @@
+import json
+import logging
+import os
+import shutil
+import socket
+import stat
+import subprocess
+import tempfile
+import threading
+from pathlib import Path, PurePosixPath
+
+import pytest
+import yaml
+from conftest import make_setup
+
+from orama.agent_client import AgentClient, AgentError
+from orama.catalog import CATALOG
+from orama.compose import build_apps_compose
+from orama.layout import app_config_dir, app_env_dir, app_env_file, data_folders
+from orama_agent.runner import ComposeRunner, FakeRunner, RunnerError
+from orama_agent.server import MAX_REQUEST, AgentServer, _write_atomic
+from orama_agent.validate import Refused, Roots
+
+PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
+SECRET = "s3cr3tvalue-0123456789abcdef"
+
+# ---------------------------------------------------------------- fixtures
+
+@pytest.fixture
+def roots(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "cfg").mkdir()
+    return Roots(
+        data=Path(os.path.realpath(tmp_path / "data")),
+        config=Path(os.path.realpath(tmp_path / "cfg")),
+        puid=1000,
+        pgid=1001,
+    )
+
+class Chowns:
+    """Records chown calls instead of changing owners (the suite also runs as non-root)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, target, uid, gid, **kw):
+        path = os.readlink(f"/proc/self/fd/{target}") if isinstance(target, int) else target
+        self.calls.append((str(path), uid, gid))
+
+    def paths(self):
+        return [p for p, _, _ in self.calls]
+
+class Agent:
+    def __init__(self, server, runner, socket_path, chowns):
+        self.server = server
+        self.runner = runner
+        self.socket_path = socket_path
+        self.chowns = chowns
+        self.client = AgentClient(socket_path, timeout=10)
+
+    def raw(self, line: bytes) -> bytes:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(10)
+            s.connect(self.socket_path)
+            s.sendall(line)
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+            return buf
+
+    def call(self, cmd, args, id_="t1"):
+        line = json.dumps({"id": id_, "cmd": cmd, "args": args}).encode() + b"\n"
+        return json.loads(self.raw(line))
+
+@pytest.fixture
+def agent(roots):
+    sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
+    socket_path = os.path.join(sock_dir, "agent.sock")
+    runner = FakeRunner()
+    chowns = Chowns()
+    server = AgentServer(roots, runner, socket_path, chown=chowns, read_timeout=5)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        yield Agent(server, runner, socket_path, chowns)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+def setup_for(roots, **kw):
+    values = {
+        "data_root": str(roots.data), "config_root": str(roots.config), "ports": PORTS,
+        "puid": roots.puid, "pgid": roots.pgid,
+    }
+    values.update(kw)
+    return make_setup(**values)
+
+def doc_and_env(roots):
+    doc = build_apps_compose(setup_for(roots))
+    env = {
+        app: {name: SECRET for name in CATALOG[app].secret_env}
+        for app in doc["services"]
+        if CATALOG[app].secret_env
+    }
+    return doc, env
+
+def all_folders(roots, doc):
+    folders = [str(p) for p in data_folders(PurePosixPath(roots.data))]
+    folders += [str(app_config_dir(PurePosixPath(roots.config), a)) for a in doc["services"]]
+    return folders
+
+def prepared(agent, roots):
+    doc, env = doc_and_env(roots)
+    agent.client.ensure_folders(all_folders(roots, doc))
+    return doc, env
+
+# ---------------------------------------------------------------- protocol
+
+def test_unknown_command_refused(agent):
+    resp = agent.call("rm -rf", {})
+    assert resp == {"id": "t1", "ok": False, "error": "unknown command"}
+
+def test_self_update_not_implemented(agent):
+    resp = agent.call("self-update", {})
+    assert resp == {"id": "t1", "ok": False, "error": "not implemented in Plan 1"}
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"{not json\n",
+        b"[1, 2]\n",
+        b'{"cmd": "status", "args": {}}\n',
+        b'{"id": 5, "cmd": "status", "args": {}}\n',
+        b'{"id": "x", "cmd": 3, "args": {}}\n',
+        b'{"id": "x", "cmd": "status", "args": []}\n',
+        b"\xff\xfe\n",
+    ],
+)
+def test_malformed_requests_get_errors_and_server_keeps_running(agent, line):
+    resp = json.loads(agent.raw(line))
+    assert resp["ok"] is False and resp["error"]
+    assert agent.call("status", {})["ok"] is True
+
+def test_oversized_request_rejected(agent):
+    big = b'{"id": "x", "cmd": "status", "args": {"pad": "' + b"a" * MAX_REQUEST + b'"}}\n'
+    resp = json.loads(agent.raw(big))
+    assert resp["ok"] is False and "too large" in resp["error"]
+    assert agent.call("status", {})["ok"] is True
+
+def test_unexpected_exception_is_internal_error(agent, caplog):
+    def boom():
+        raise ValueError(SECRET)
+
+    agent.runner.ps = boom
+    with caplog.at_level(logging.DEBUG):
+        resp = agent.call("status", {})
+    assert resp == {"id": "t1", "ok": False, "error": "internal error"}
+    assert SECRET not in caplog.text
+    assert agent.call("self-update", {})["ok"] is False  # still serving
+
+def test_unexpected_args_refused(agent):
+    assert agent.call("status", {"x": 1})["ok"] is False
+
+def test_socket_mode_and_group(agent, roots):
+    mode = os.lstat(agent.socket_path).st_mode
+    assert stat.S_ISSOCK(mode) and stat.S_IMODE(mode) == 0o660
+    assert (agent.socket_path, -1, roots.pgid) in agent.chowns.calls
+
+def test_stale_socket_replaced_but_regular_file_refused(roots):
+    sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
+    try:
+        path = os.path.join(sock_dir, "agent.sock")
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(path)
+        stale.close()
+        server = AgentServer(roots, FakeRunner(), path, chown=Chowns())
+        server.server_close()
+        os.unlink(path)
+        Path(path).write_text("not a socket")
+        with pytest.raises(Refused):
+            AgentServer(roots, FakeRunner(), path, chown=Chowns())
+        assert Path(path).read_text() == "not a socket"
+    finally:
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+# ---------------------------------------------------------------- ensure-folders
+
+def test_ensure_folders_creates_with_owner_and_mode(agent, roots):
+    doc, _ = doc_and_env(roots)
+    wanted = all_folders(roots, doc)
+    created = agent.client.ensure_folders(wanted)
+    assert set(wanted) <= set(created)
+    for p in wanted:
+        assert stat.S_IMODE(os.lstat(p).st_mode) == 0o2775
+        assert (p, roots.puid, roots.pgid) in agent.chowns.calls
+    parent = roots.config / "config"
+    assert stat.S_IMODE(os.lstat(parent).st_mode) == 0o755
+    assert str(parent) not in agent.chowns.paths()
+    assert agent.client.ensure_folders(wanted) == []  # already there
+
+def test_ensure_folders_creates_missing_data_parents(agent, roots):
+    created = agent.client.ensure_folders([str(roots.data / "media/movies")])
+    assert created == [str(roots.data / "media"), str(roots.data / "media/movies")]
+
+@pytest.mark.parametrize(
+    "which",
+    ["config_root", "config_dir", "app_env", "orama_state", "data_root", "unknown_app",
+     "outside", "relative", "not_str"],
+)
+def test_ensure_folders_refuses_paths_outside_the_set(agent, roots, which):
+    path = {
+        "config_root": str(roots.config),
+        "config_dir": str(roots.config / "config"),
+        "app_env": str(app_env_dir(PurePosixPath(roots.config))),
+        "orama_state": str(roots.config / "orama"),
+        "data_root": str(roots.data),
+        "unknown_app": str(roots.config / "config/evil"),
+        "outside": "/etc/cron.d",
+        "relative": "media",
+        "not_str": 7,
+    }[which]
+    resp = agent.call("ensure-folders", {"paths": [path]})
+    assert resp["ok"] is False
+    assert agent.chowns.calls == [(agent.socket_path, -1, roots.pgid)]
+
+def test_ensure_folders_refuses_outside_roots(agent):
+    with pytest.raises(AgentError):
+        agent.client.ensure_folders(["/etc"])
+
+def test_ensure_folders_refuses_planted_symlink_in_data_root(agent, roots, tmp_path):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (roots.data / "media").symlink_to(target)
+    with pytest.raises(AgentError, match="link"):
+        agent.client.ensure_folders([str(roots.data / "media/movies")])
+    assert list(target.iterdir()) == []
+    assert all(p == agent.socket_path for p in agent.chowns.paths())
+
+def test_ensure_folders_refuses_file_in_place_of_folder(agent, roots):
+    (roots.data / "media").write_text("x")
+    with pytest.raises(AgentError):
+        agent.client.ensure_folders([str(roots.data / "media")])
+
+# ---------------------------------------------------------------- apply
+
+def test_apply_rejects_invalid_compose_and_runs_nothing(agent, roots):
+    doc, env = prepared(agent, roots)
+    doc["services"]["sonarr"]["privileged"] = True
+    with pytest.raises(AgentError, match="elevated"):
+        agent.client.apply(doc, env)
+    assert agent.runner.up_calls == 0
+    assert not (roots.config / "compose.yaml").exists()
+    assert not os.path.exists(app_env_file(PurePosixPath(roots.config), "sonarr"))
+
+def test_apply_rejects_invalid_env_files_and_writes_nothing(agent, roots):
+    doc, env = prepared(agent, roots)
+    env["sonarr"] = {"SONARR__AUTH__APIKEY": "a'b"}
+    with pytest.raises(AgentError):
+        agent.client.apply(doc, env)
+    assert agent.runner.up_calls == 0
+    assert not (roots.config / "compose.yaml").exists()
+    assert not os.path.exists(app_env_dir(PurePosixPath(roots.config)))
+
+def test_apply_writes_env_files_0600_and_compose(agent, roots):
+    doc, env = prepared(agent, roots)
+    changed = agent.client.apply(doc, env)
+    assert sorted(changed) == sorted(doc["services"])
+
+    env_dir = Path(app_env_dir(PurePosixPath(roots.config)))
+    assert stat.S_IMODE(os.lstat(env_dir).st_mode) == 0o700
+    for app, values in env.items():
+        path = Path(app_env_file(PurePosixPath(roots.config), app))
+        st = os.lstat(path)
+        assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+        assert st.st_uid == os.geteuid()
+        expected = "".join(f"{k}='{v}'\n" for k, v in values.items())
+        assert path.read_text() == expected
+
+    compose = roots.config / "compose.yaml"
+    assert stat.S_IMODE(os.lstat(compose).st_mode) == 0o644
+    assert yaml.safe_load(compose.read_text()) == doc
+    assert SECRET not in compose.read_text()
+
+    empty_env = env_dir / "compose.env"
+    assert empty_env.read_text() == ""
+    assert stat.S_IMODE(os.lstat(empty_env).st_mode) == 0o600
+    assert agent.runner.up_files == [str(compose)]
+    assert [p for p in env_dir.iterdir() if p.name.endswith(".tmp")] == []
+
+def test_apply_refuses_planted_symlink_at_env_file(agent, roots, tmp_path):
+    doc, env = prepared(agent, roots)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    env_dir = Path(app_env_dir(PurePosixPath(roots.config)))
+    env_dir.mkdir(mode=0o700)
+    (env_dir / "sonarr.env").symlink_to(victim)
+    with pytest.raises(AgentError, match="link"):  # validate_compose refuses it up front
+        agent.client.apply(doc, env)
+    assert victim.read_text() == "untouched"
+    assert agent.runner.up_calls == 0
+
+def test_atomic_write_replaces_symlink_without_following(tmp_path):
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "sonarr.env").symlink_to(victim)
+    fd = os.open(tmp_path / "dir", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        _write_atomic(fd, "sonarr.env", b"K='v'\n", 0o600)
+    finally:
+        os.close(fd)
+    assert victim.read_text() == "untouched"
+    st = os.lstat(tmp_path / "dir" / "sonarr.env")
+    assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+    assert (tmp_path / "dir" / "sonarr.env").read_text() == "K='v'\n"
+    assert sorted(p.name for p in (tmp_path / "dir").iterdir()) == ["sonarr.env"]
+
+def test_apply_refuses_symlinked_env_dir(agent, roots, tmp_path):
+    doc, env = prepared(agent, roots)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    Path(app_env_dir(PurePosixPath(roots.config))).symlink_to(elsewhere)
+    with pytest.raises(AgentError, match="link"):
+        agent.client.apply(doc, env)
+    assert list(elsewhere.iterdir()) == []
+    assert agent.runner.up_calls == 0
+
+def test_apply_checks_host_paths_before_up(agent, roots):
+    doc, env = doc_and_env(roots)  # app config folders never created
+    with pytest.raises(AgentError, match="does not exist"):
+        agent.client.apply(doc, env)
+    assert agent.runner.up_calls == 0
+
+def test_apply_twice_reports_no_changes(agent, roots):  # [RF 3]
+    doc, env = prepared(agent, roots)
+    first = agent.client.apply(doc, env)
+    second = agent.client.apply(doc, env)
+    assert first != [] and second == [] and agent.runner.up_calls == 2
+
+def test_interrupted_apply_then_rerun_converges(agent, roots):  # [RF 3]
+    doc, env = prepared(agent, roots)
+    agent.runner.fail_next_up = True
+    with pytest.raises(AgentError):
+        agent.client.apply(doc, env)
+    assert agent.client.apply(doc, env) != []  # converges on retry
+    assert agent.client.apply(doc, env) == []
+
+def test_env_values_never_logged(agent, roots, caplog):
+    doc, env = prepared(agent, roots)
+    with caplog.at_level(logging.DEBUG):
+        agent.client.apply(doc, env)
+        agent.runner.fail_next_up = True
+        with pytest.raises(AgentError):
+            agent.client.apply(doc, env)
+        bad = dict(env, sonarr={"SONARR__AUTH__APIKEY": SECRET + "'"})
+        with pytest.raises(AgentError) as err:
+            agent.client.apply(doc, bad)
+    assert "apply" in caplog.text
+    assert SECRET not in caplog.text
+    assert SECRET not in str(err.value)
+
+# ---------------------------------------------------------------- status / restart
+
+def test_status_returns_runner_ps(agent, roots):
+    doc, env = prepared(agent, roots)
+    agent.client.apply(doc, env)
+    assert agent.client.status() == {s: "running" for s in doc["services"]}
+
+def test_restart_known_app(agent):
+    agent.client.restart("sonarr")
+    assert agent.runner.restarts == ["sonarr"]
+
+@pytest.mark.parametrize("app", ["evil", "sonarr; rm -rf /", "Sonarr", 3, ""])
+def test_restart_refuses_unknown_app(agent, app):
+    assert agent.call("restart", {"app": app})["ok"] is False
+    assert agent.runner.restarts == []
+
+# ---------------------------------------------------------------- client
+
+def test_client_raises_agent_error_with_message(agent):
+    with pytest.raises(AgentError, match="Sonarr|app Orama knows"):
+        agent.client.restart("nope")
+
+def test_client_honours_timeout(tmp_path):
+    sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
+    try:
+        path = os.path.join(sock_dir, "silent.sock")
+        silent = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        silent.bind(path)
+        silent.listen(1)
+        with pytest.raises((AgentError, TimeoutError)):
+            AgentClient(path, timeout=0.3).status()
+        silent.close()
+    finally:
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+# ---------------------------------------------------------------- ComposeRunner
+
+class FakeRun:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        out = self.outputs.pop(0) if self.outputs else ""
+        rc = 1 if out is None else 0
+
+        return subprocess.CompletedProcess(argv, rc, stdout=out or "", stderr="")
+
+def _prefix(roots):
+    return [
+        "docker", "compose",
+        "--project-directory", str(roots.config),
+        "--env-file", str(roots.config / "app-env" / "compose.env"),
+        "-p", "orama-apps",
+    ]
+
+def test_compose_runner_up_argv_env_and_changed(roots, monkeypatch):
+    monkeypatch.setenv("COMPOSE_FILE", "/evil.yaml")
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "evil")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    before = json.dumps([
+        {"Service": "sonarr", "ID": "a1", "State": "running"},
+        {"Service": "radarr", "ID": "b1", "State": "running"},
+    ])
+    after = "\n".join([
+        json.dumps({"Service": "sonarr", "ID": "a1", "State": "running"}),
+        json.dumps({"Service": "radarr", "ID": "b2", "State": "running"}),
+        json.dumps({"Service": "plex", "ID": "c1", "State": "running"}),
+    ])
+    run = FakeRun([before, "", after])
+    runner = ComposeRunner(roots, run=run)
+    project = str(roots.config / "compose.yaml")
+    assert runner.up(project) == ["plex", "radarr"]
+
+    up_argv = run.calls[1][0]
+    assert up_argv == _prefix(roots) + [
+        "-f", project, "up", "-d", "--remove-orphans", "--wait",
+    ]
+    assert run.calls[0][0] == _prefix(roots) + ["-f", project, "ps", "-a", "--format", "json"]
+    for _argv, kw in run.calls:
+        assert "shell" not in kw or kw["shell"] is False
+        assert not any(k.startswith("COMPOSE") for k in kw["env"])
+        assert set(kw["env"]) <= {"PATH", "HOME", "DOCKER_HOST"}
+        assert kw["env"]["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+
+def test_compose_runner_ps_parses_empty_and_array(roots):
+    assert ComposeRunner(roots, run=FakeRun([""])).ps() == {}
+    out = json.dumps([{"Service": "plex", "ID": "x", "State": "exited"}])
+    assert ComposeRunner(roots, run=FakeRun([out])).ps() == {"plex": "exited"}
+
+def test_compose_runner_up_failure_raises(roots):
+    runner = ComposeRunner(roots, run=FakeRun(["", None]))
+    with pytest.raises(RunnerError):
+        runner.up(str(roots.config / "compose.yaml"))
+
+def test_compose_runner_restart(roots):
+    run = FakeRun([""])
+    ComposeRunner(roots, run=run).restart("sonarr")
+    assert run.calls[0][0] == _prefix(roots) + [
+        "-f", str(roots.config / "compose.yaml"), "restart", "sonarr",
+    ]
+    with pytest.raises(Refused):
+        ComposeRunner(roots, run=run).restart("--help")
