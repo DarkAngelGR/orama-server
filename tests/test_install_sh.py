@@ -139,6 +139,61 @@ def test_working_docker_is_left_alone(tmp_path):
     assert "apt-get" not in out.stdout
 
 
+# A fake docker whose `compose version` and `info` answers are chosen per test.
+def _docker(tmp_path, *, compose=True, daemon=True, runtimes='{"runc":{}}'):
+    body = (
+        'case "$1 ${2:-}" in\n'
+        f'  "compose version") exit {0 if compose else 1} ;;\n'
+        f'  "info --format") echo {shlex.quote(runtimes)}; exit {0 if daemon else 1} ;;\n'
+        f'  "info "*) exit {0 if daemon else 1} ;;\n'
+        '  *) exit 0 ;;\n'
+        'esac'
+    )
+    return fake_bin(tmp_path, "docker", body) / "docker"
+
+
+def _no_docker_install(text):
+    assert "apt-get install" not in text and "docker-ce" not in text
+    assert "download.docker.com" not in text
+
+
+@pytest.mark.parametrize("platform,fixture", [("debian", DEBIAN), ("ubuntu", UBUNTU)])
+def test_existing_docker_daemon_down_is_started_not_reinstalled(tmp_path, platform, fixture):
+    out = run_fn(f"ensure_docker {platform}", OS_RELEASE_FILE=fixture,
+                 DOCKER_BIN=_docker(tmp_path, daemon=False), DRY_RUN="1")
+    assert out.returncode == 0, out.stdout
+    assert "+ systemctl start docker" in out.stdout
+    _no_docker_install(out.stdout)
+
+
+def test_existing_docker_that_will_not_start_stops_plainly(tmp_path):
+    bin_dir = fake_bin(tmp_path, "systemctl", 'echo "systemctl $*" >> "$(dirname "$0")/calls"')
+    out = run_fn("ensure_docker debian", OS_RELEASE_FILE=DEBIAN,
+                 DOCKER_BIN=_docker(tmp_path, daemon=False), DOCKER_START_TRIES="1",
+                 PATH=f"{bin_dir}:{os.environ['PATH']}")
+    assert out.returncode == 1
+    assert "Docker is installed but is not running" in out.stdout
+    assert (bin_dir / "calls").read_text() == "systemctl start docker\n"
+    _no_docker_install(out.stdout)
+
+
+def test_existing_docker_without_compose_names_the_package(tmp_path):
+    out = run_fn("ensure_docker ubuntu", OS_RELEASE_FILE=UBUNTU,
+                 DOCKER_BIN=_docker(tmp_path, compose=False), DRY_RUN="1")
+    assert out.returncode == 1
+    assert "docker-compose-plugin" in out.stdout and "docker-compose-v2" in out.stdout
+    assert "systemctl" not in out.stdout
+    _no_docker_install(out.stdout.replace("docker-compose-plugin", ""))
+
+
+def test_ugos_docker_daemon_down_points_to_app_center(tmp_path):
+    out = run_fn("ensure_docker ugos", OS_RELEASE_FILE=UGOS,
+                 DOCKER_BIN=_docker(tmp_path, daemon=False), DRY_RUN="1")
+    assert out.returncode == 1 and "App Center" in out.stdout
+    assert "systemctl" not in out.stdout
+    _no_docker_install(out.stdout)
+
+
 @pytest.mark.parametrize("fixture,distro,codename", [(DEBIAN, "debian", "bookworm"),
                                                      (UBUNTU, "ubuntu", "noble")])
 def test_dry_run_installs_from_docker_repo(fixture, distro, codename):
@@ -222,6 +277,30 @@ def test_numeric_gid_of_existing_path(tmp_path):
     f.touch()
     out = run_fn(f"numeric_gid_of {shlex.quote(str(f))}")
     assert out.stdout == f"{f.stat().st_gid}\n"
+
+
+@pytest.mark.parametrize("runtimes,cdi,expected", [
+    ('{"io.containerd.runc.v2":{},"nvidia":{"path":"nvidia-container-runtime"}}', False, "1"),
+    ('{"runc":{"path":"runc"}}', True, "1"),
+    ('{"runc":{"path":"runc"}}', False, "0"),
+])
+def test_has_nvidia_reflects_what_docker_can_use(tmp_path, runtimes, cdi, expected):
+    spec = tmp_path / "cdi" / "nvidia.yaml"
+    if cdi:
+        spec.parent.mkdir()
+        spec.write_text("cdiVersion: 0.5.0\n")
+    out = run_fn("has_nvidia", merge=False, DOCKER_BIN=_docker(tmp_path, runtimes=runtimes),
+                 NVIDIA_CDI_SPECS=f"{tmp_path}/none.yaml {spec}")
+    assert out.stdout == f"{expected}\n"
+
+
+def test_nvidia_smi_alone_is_not_nvidia(tmp_path):
+    bin_dir = fake_bin(tmp_path, "nvidia-smi", "exit 0")
+    fake_bin(tmp_path, "nvidia-ctk", "exit 0")
+    out = run_fn("has_nvidia", merge=False, DOCKER_BIN=_docker(tmp_path),
+                 NVIDIA_CDI_SPECS=f"{tmp_path}/none.yaml",
+                 PATH=f"{bin_dir}:{os.environ['PATH']}")
+    assert out.stdout == "0\n"
 
 
 def test_taken_ports_deduplicated(tmp_path):
@@ -484,3 +563,36 @@ def test_check_existing_setup_mismatch_hides_control_characters(tmp_path):
     assert "\x1b" not in out.stdout and "\x07" not in out.stdout
     assert "\nFAKE LINE" not in out.stdout
     assert r"\x1b[31mb\nFAKE LINE\x07" in out.stdout
+
+
+# ---------------------------------------------------------------- main
+
+@pytest.mark.parametrize("var", ["ORAMA_DATA_ROOT", "ORAMA_CONFIG_ROOT"])
+def test_main_refuses_bad_root_before_touching_docker(var):
+    # A host without Docker: a refusal must come before any attempt to install it.
+    out = run_fn("require_root() { :; }; require_x86_64() { :; }; main",
+                 OS_RELEASE_FILE=UBUNTU, DOCKER_BIN="/nonexistent", DRY_RUN="1",
+                 SUDO_UID="1000", SUDO_GID="1000", **{var: "/srv/a:b"})
+    assert out.returncode == 1
+    assert '":"' in out.stdout and var in out.stdout
+    assert "Installing Docker" not in out.stdout
+    _no_docker_install(out.stdout)
+
+
+def test_main_refuses_root_ids_before_touching_docker():
+    out = run_fn("require_root() { :; }; require_x86_64() { :; }; main",
+                 OS_RELEASE_FILE=UBUNTU, DOCKER_BIN="/nonexistent", DRY_RUN="1",
+                 ORAMA_PUID="0", ORAMA_PGID="0")
+    assert out.returncode == 1 and "root" in out.stdout
+    _no_docker_install(out.stdout)
+
+
+def test_main_refuses_mismatched_setup_before_touching_docker(tmp_path):
+    config = tmp_path / "c"
+    _saved(config, "setup.json", data_root="/srv/other")
+    out = run_fn("require_root() { :; }; require_x86_64() { :; }; main",
+                 OS_RELEASE_FILE=UBUNTU, DOCKER_BIN="/nonexistent", DRY_RUN="1",
+                 SUDO_UID="1000", SUDO_GID="1000", ORAMA_CONFIG_ROOT=config,
+                 ORAMA_DATA_ROOT="/srv/data")
+    assert out.returncode == 1 and "different settings" in out.stdout
+    _no_docker_install(out.stdout)

@@ -19,6 +19,8 @@ ORAMA_VERSION="${ORAMA_VERSION:-$ORAMA_DEFAULT_VERSION}"
 OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
 PASSWD_FILE="${PASSWD_FILE:-/etc/passwd}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
+DOCKER_START_TRIES="${DOCKER_START_TRIES:-15}"
+NVIDIA_CDI_SPECS="${NVIDIA_CDI_SPECS:-/etc/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml}"
 SS_BIN="${SS_BIN:-ss}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -124,6 +126,29 @@ docker_works() {
   "$DOCKER_BIN" version > /dev/null 2>&1 && "$DOCKER_BIN" compose version > /dev/null 2>&1
 }
 
+docker_running() {
+  "$DOCKER_BIN" info > /dev/null 2>&1
+}
+
+# Docker is already on this computer: use it as it is, never replace or reinstall it.
+use_existing_docker() {
+  local platform=$1 try
+  "$DOCKER_BIN" compose version > /dev/null 2>&1 ||
+    fail "Docker is installed but Docker Compose is missing. Install the package docker-compose-plugin (from Docker's repository) or, if your Docker came from $platform's own docker.io package, docker-compose-v2. Then run this again."
+  docker_running && return 0
+  if [[ "$platform" == ugos ]]; then
+    fail "Docker is not running on this NAS. Please enable Docker in the UGOS App Center, then run this again."
+  fi
+  say "Docker is installed but not running; starting it..."
+  run systemctl start docker || true
+  is_dry_run && return 0
+  for ((try = 0; try < DOCKER_START_TRIES; try++)); do
+    docker_running && return 0
+    sleep 1
+  done
+  fail "Docker is installed but is not running, and it could not be started. Start it with: sudo systemctl start docker (or restart the computer), then run this again."
+}
+
 # Stop unless `file` holds exactly one key: Docker's published signing key.
 check_docker_key() {
   local file=$1 home fingerprints
@@ -137,11 +162,12 @@ check_docker_key() {
 
 ensure_docker() {
   local platform=$1 codename key_download
-  if docker_works; then
+  if command -v "$DOCKER_BIN" > /dev/null 2>&1; then
+    use_existing_docker "$platform"
     return 0
   fi
   if [[ "$platform" == ugos ]]; then
-    fail "Docker is not running on this NAS. Please install/enable Docker from the UGOS App Center, then run this again."
+    fail "Docker is not installed on this NAS. Please install Docker from the UGOS App Center, then run this again."
   fi
 
   say "Installing Docker from Docker's official repository..."
@@ -206,11 +232,16 @@ numeric_gid_of() {
   stat -c %g -- "$1" 2> /dev/null || say none
 }
 
-# "1" if this computer has NVIDIA tools, else "0".
+# "1" if Docker can give containers an NVIDIA GPU (its nvidia runtime, or an NVIDIA CDI
+# spec), else "0". NVIDIA drivers alone (nvidia-smi) are not enough for Docker to use it.
 has_nvidia() {
-  local tool
-  for tool in nvidia-smi nvidia-container-cli nvidia-ctk; do
-    if command -v "$tool" > /dev/null 2>&1; then
+  local spec
+  if "$DOCKER_BIN" info --format '{{json .Runtimes}}' 2> /dev/null | grep -q nvidia; then
+    say 1
+    return 0
+  fi
+  for spec in $NVIDIA_CDI_SPECS; do
+    if [[ -f "$spec" ]]; then
       say 1
       return 0
     fi
@@ -436,21 +467,28 @@ print_address() {
 # ---------------------------------------------------------------- main
 
 main() {
-  local platform ids docker_gid render_gid nvidia taken
+  local platform ids docker_gid render_gid nvidia taken have_python
   platform=$(detect_platform)
   require_x86_64
   require_root
   say "Installing Orama $ORAMA_VERSION on $platform."
 
-  ensure_docker "$platform"
+  # Everything that can refuse runs before Docker is installed, so a refusal changes nothing.
   ids=$(install_user "$platform")
   PUID=${ids%%:*}
   PGID=${ids#*:}
   resolve_roots "$platform"
   say "Media folder: $DATA_ROOT. Orama folder: $CONFIG_ROOT. Owner: user $PUID, group $PGID."
+  have_python=0
+  if command -v python3 > /dev/null 2>&1; then
+    have_python=1
+    check_existing_setup
+  fi
 
+  ensure_docker "$platform"
   get_images
-  check_existing_setup
+  # Without python3 on the host, the check runs inside the Orama image.
+  [[ "$have_python" == 1 ]] || check_existing_setup
   docker_gid=$(numeric_gid_of "$DOCKER_SOCK")
   [[ "$docker_gid" != none ]] ||
     fail "Docker is installed but $DOCKER_SOCK is missing, so Orama cannot manage apps. Make sure Docker is running, then run this again."

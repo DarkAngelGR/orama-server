@@ -1,8 +1,7 @@
 """Host platform detection."""
 
 import shlex
-import shutil
-from collections.abc import Callable
+from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
@@ -55,5 +54,14 @@ def render_gid(dev: Path = Path("/dev/dri/renderD128")) -> int | None:
         return None
 
 
-def has_nvidia(which: Callable[[str], str | None] = shutil.which) -> bool:
-    return any(which(t) for t in ("nvidia-smi", "nvidia-container-cli", "nvidia-ctk"))
+NVIDIA_CDI_SPECS = (Path("/etc/cdi/nvidia.yaml"), Path("/var/run/cdi/nvidia.yaml"))
+
+
+def has_nvidia(docker_runtimes: str, cdi_specs: Iterable[Path] = NVIDIA_CDI_SPECS) -> bool:
+    """True if Docker can give containers an NVIDIA GPU.
+
+    ``docker_runtimes`` is the output of ``docker info --format '{{json .Runtimes}}'``.
+    NVIDIA drivers alone (``nvidia-smi``) are not enough: Docker needs its nvidia runtime
+    or an NVIDIA CDI spec.
+    """
+    return "nvidia" in docker_runtimes or any(p.is_file() for p in cdi_specs)
