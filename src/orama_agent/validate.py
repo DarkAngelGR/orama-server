@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -55,6 +56,7 @@ _DIGITS = re.compile(r"[0-9]+")
 _PORT = re.compile(r"([0-9]{1,5}):([0-9]{1,5})")
 _WORD = re.compile(r"[A-Za-z0-9_+./-]{1,64}")  # TZ and VPN provider names
 _SHOW_MAX = 80
+_MAX_DEPTH = 20  # the builder's deepest value (the GPU reservation) is about 10 levels down
 
 
 class Refused(Exception):
@@ -143,7 +145,7 @@ def validate_compose(doc: dict, roots: Roots) -> None:
     if not isinstance(doc, dict):
         raise Refused("The apps description is not a mapping.")
     # Compose interpolates $VAR / ${VAR:-x} after we validate, so no string may hold '$'.
-    _refuse_interpolation(doc)
+    _refuse_interpolation(doc, 0)
     extra = set(doc) - TOP_LEVEL_KEYS
     if extra:
         raise Refused(f"The apps description has unsupported sections: {_names(extra)}.")
@@ -160,19 +162,23 @@ def validate_compose(doc: dict, roots: Roots) -> None:
         if not isinstance(svc, dict):
             raise Refused(f"The settings for {name} are not a mapping.")
         _validate_service(name, CATALOG[name], svc, services, roots)
+    # Folders may not exist before the first deploy; whatever exists must not be a link.
+    _check_host_paths(doc, roots, must_exist=False)
 
 
-def _refuse_interpolation(node: Any) -> None:
+def _refuse_interpolation(node: Any, depth: int) -> None:
+    if depth > _MAX_DEPTH:
+        raise Refused("The apps description is nested too deeply.")
     if isinstance(node, str):
         if "$" in node:
             raise Refused("The apps description may not contain '$' (variable substitution).")
     elif isinstance(node, dict):
         for key, value in node.items():
-            _refuse_interpolation(key)
-            _refuse_interpolation(value)
+            _refuse_interpolation(key, depth + 1)
+            _refuse_interpolation(value, depth + 1)
     elif isinstance(node, list):
         for item in node:
-            _refuse_interpolation(item)
+            _refuse_interpolation(item, depth + 1)
 
 
 def _validate_service(
@@ -346,6 +352,68 @@ def _validate_identity(name: str, spec: ServiceSpec, svc: dict, roots: Roots) ->
 
 def _names(keys: set) -> str:
     return ", ".join(sorted(_show(k) for k in keys))
+
+
+# ---------------------------------------------------------------- host paths
+
+
+def check_host_paths(doc: dict, roots: Roots) -> None:
+    """Check on disk that the pinned config mounts and env files are what they claim.
+
+    ``validate_compose`` pins these paths as strings and already refuses any existing
+    component below the roots that is a symlink (Docker would follow it to a host folder
+    such as /etc). This strict form also requires every folder to exist. Task 7's apply
+    must call it on a doc that passed ``validate_compose``, after the app config folders
+    have been created, immediately before ``docker compose up``.
+    """
+    _check_host_paths(doc, roots, must_exist=True)
+
+
+def _check_host_paths(doc: dict, roots: Roots, *, must_exist: bool) -> None:
+    for root in (roots.data, roots.config):
+        _check_real_dir(root, must_exist=True)
+    for name, svc in doc["services"].items():
+        for vol in svc.get("volumes", []):
+            source = Path(vol["source"])
+            if source != roots.config and _inside(source, roots.config):
+                _check_dirs_below(source, roots.config, must_exist)
+        for env_file in svc.get("env_file", []):
+            path = Path(env_file)
+            if _check_dirs_below(path.parent, roots.config, must_exist):
+                _check_env_file(name, path)
+
+
+def _check_dirs_below(path: Path, root: Path, must_exist: bool) -> bool:
+    """Walk each component below root; True if all of them exist as real folders."""
+    current = root
+    for part in path.relative_to(root).parts:
+        current = current / part
+        if not _check_real_dir(current, must_exist):
+            return False
+    return True
+
+
+def _check_real_dir(path: Path, must_exist: bool) -> bool:
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        if must_exist:
+            raise Refused(f"The folder {_show(str(path))} does not exist yet.") from None
+        return False
+    if stat.S_ISLNK(mode):
+        raise Refused(f"The folder {_show(str(path))} is a link; Orama only uses real folders.")
+    if not stat.S_ISDIR(mode):
+        raise Refused(f"{_show(str(path))} is not a folder.")
+    return True
+
+
+def _check_env_file(name: str, path: Path) -> None:
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return  # written later by the Agent itself
+    if not stat.S_ISREG(mode):
+        raise Refused(f"The secrets file for {name} is a link or not a regular file.")
 
 
 # ---------------------------------------------------------------- env files

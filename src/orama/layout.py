@@ -34,9 +34,14 @@ def app_env_file(config_root: PurePosixPath, app: str) -> PurePosixPath:
     return app_config_dir(config_root, app) / "orama.env"
 
 
+def orama_state_dir(config_root: PurePosixPath) -> PurePosixPath:
+    """Orama's own state (setup, secrets, generated compose). The only folder it mounts."""
+    return config_root / "orama"
+
+
 def config_folders(setup: DesiredSetup) -> list[PurePosixPath]:
     folders = [app_config_dir(setup.config_root, app) for app in enabled_apps(setup)]
-    folders.append(setup.config_root / "orama")
+    folders.append(orama_state_dir(setup.config_root))
     return folders
 
 

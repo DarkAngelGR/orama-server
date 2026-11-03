@@ -163,7 +163,9 @@ def test_core_layout():
     assert o["container_name"] == "orama-orama" and a["container_name"] == "orama-orama-agent"
     assert o["image"] == CORE["orama"].image and a["image"] == CORE["orama-agent"].image
     assert o["ports"] == ["8765:8765"] and o["user"] == "1000:1000"
-    assert {"type": "bind", "source": "/srv/orama", "target": "/srv/orama"} in o["volumes"]
+    assert {"type": "bind", "source": "/srv/orama/orama", "target": "/srv/orama/orama"} in (
+        o["volumes"]
+    )
     assert {"type": "volume", "source": "orama-run", "target": "/run/orama"} in o["volumes"]
     for p in ("/srv/orama", "/srv/data"):
         assert {"type": "bind", "source": p, "target": p} in a["volumes"]
@@ -171,6 +173,15 @@ def test_core_layout():
     assert a["environment"] == {
         "ORAMA_DATA_ROOT": "/srv/data", "ORAMA_CONFIG_ROOT": "/srv/orama",
         "ORAMA_PUID": "1000", "ORAMA_PGID": "1000"}
+
+
+def test_orama_mounts_only_its_state_dir():
+    # Orama must not be able to rewrite app config dirs or env files (the Agent mounts those).
+    binds = [v for v in core()["services"]["orama"]["volumes"] if v["type"] == "bind"]
+    assert binds == [{"type": "bind", "source": "/srv/orama/orama", "target": "/srv/orama/orama"}]
+    for v in binds:
+        assert v["source"] != "/srv/orama"
+        assert not P(v["source"]).is_relative_to("/srv/data")
 
 
 def test_core_image_overrides():

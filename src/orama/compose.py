@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from orama.catalog import CATALOG, CORE, ServiceSpec
-from orama.layout import app_config_dir, app_env_file
+from orama.layout import app_config_dir, app_env_file, orama_state_dir
 from orama.setup_model import DesiredSetup, enabled_apps
 
 NETWORK = "orama"
@@ -132,6 +132,7 @@ def build_core_compose(
 ) -> dict[str, Any]:
     run_volume = {"type": "volume", "source": "orama-run", "target": "/run/orama"}
     orama_spec, agent_spec = CORE["orama"], CORE["orama-agent"]
+    state_dir = orama_state_dir(config_root)
     return {
         "name": "orama-core",
         "services": {
@@ -141,7 +142,8 @@ def build_core_compose(
                 "restart": "unless-stopped",
                 "user": f"{puid}:{pgid}",
                 "ports": [f"{orama_port}:{orama_spec.container_port}"],
-                "volumes": [_bind(config_root, str(config_root)), dict(run_volume)],
+                # Only its own state dir: app config dirs and env files stay out of reach.
+                "volumes": [_bind(state_dir, str(state_dir)), dict(run_volume)],
             },
             "orama-agent": {
                 "image": agent_image or agent_spec.image,
