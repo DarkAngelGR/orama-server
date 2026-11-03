@@ -43,8 +43,16 @@ def test_render_gid_reads_group(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "present,expected",
-    [("nvidia-smi", True), ("nvidia-ctk", True), ("nvidia-container-cli", True), ("ls", False)],
+    "runtimes,cdi,expected",
+    [
+        ('{"io.containerd.runc.v2":{},"nvidia":{"path":"nvidia-container-runtime"}}', False, True),
+        ('{"runc":{"path":"runc"}}', True, True),
+        ('{"runc":{"path":"runc"}}', False, False),
+        ("", False, False),
+    ],
 )
-def test_has_nvidia(present, expected):
-    assert has_nvidia(lambda name: f"/usr/bin/{name}" if name == present else None) is expected
+def test_has_nvidia_reflects_what_docker_can_use(tmp_path, runtimes, cdi, expected):
+    spec = tmp_path / "nvidia.yaml"
+    if cdi:
+        spec.write_text("cdiVersion: 0.5.0\n")
+    assert has_nvidia(runtimes, cdi_specs=(tmp_path / "none.yaml", spec)) is expected
