@@ -25,6 +25,8 @@ def roots(tmp_path):
     return Roots(
         data=type(tmp_path)(os.path.realpath(tmp_path / "data")),
         config=type(tmp_path)(os.path.realpath(tmp_path / "cfg")),
+        puid=1000,
+        pgid=1000,
     )
 
 
@@ -84,8 +86,13 @@ def test_accepts_builder_output_through_yaml(roots):
 # ---------------------------------------------------------------- Roots
 
 
-def _env(monkeypatch, data, cfg):
-    for key, value in (("ORAMA_DATA_ROOT", data), ("ORAMA_CONFIG_ROOT", cfg)):
+def _env(monkeypatch, data, cfg, puid="1000", pgid="1000"):
+    for key, value in (
+        ("ORAMA_DATA_ROOT", data),
+        ("ORAMA_CONFIG_ROOT", cfg),
+        ("ORAMA_PUID", puid),
+        ("ORAMA_PGID", pgid),
+    ):
         if value is None:
             monkeypatch.delenv(key, raising=False)
         else:
@@ -99,6 +106,20 @@ def test_roots_from_env(monkeypatch, tmp_path):
     r = Roots.from_env()
     assert r.data == type(tmp_path)(os.path.realpath(tmp_path / "d"))
     assert r.config == type(tmp_path)(os.path.realpath(tmp_path / "c"))
+    assert (r.puid, r.pgid) == (1000, 1000)
+
+
+@pytest.mark.parametrize(
+    "puid,pgid",
+    [(None, "1000"), ("1000", None), ("0", "1000"), ("1000", "0"), ("abc", "1000"),
+     ("", "1000"), ("-1", "1000"), ("1000", "10 0")],
+)
+def test_roots_from_env_refuses_bad_ids(monkeypatch, tmp_path, puid, pgid):
+    (tmp_path / "d").mkdir()
+    (tmp_path / "c").mkdir()
+    _env(monkeypatch, str(tmp_path / "d"), str(tmp_path / "c"), puid, pgid)
+    with pytest.raises(Refused):
+        Roots.from_env()
 
 
 def test_roots_are_realpath_resolved(monkeypatch, tmp_path):
@@ -179,7 +200,25 @@ def test_refuses_symlink_escape(tmp_path):
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "evil").symlink_to("/etc")
     with pytest.raises(Refused):
-        safe_path(str(tmp_path / "data" / "evil"), Roots(tmp_path / "data", tmp_path / "cfg"))
+        safe_path(
+            str(tmp_path / "data" / "evil"),
+            Roots(tmp_path / "data", tmp_path / "cfg", 1000, 1000),
+        )
+
+
+def test_safe_path_returns_resolved_path(roots):
+    (roots.data / "real").mkdir()
+    (roots.data / "link").symlink_to(roots.data / "real")
+    assert safe_path(str(roots.data / "link"), roots) == roots.data / "real"
+
+
+def test_safe_path_refuses_docker_socket_even_inside_a_root(tmp_path):
+    (tmp_path / "cfg").mkdir()
+    roots = Roots(type(tmp_path)("/run"), tmp_path / "cfg", 1000, 1000)
+    with pytest.raises(Refused):
+        safe_path("/run/docker.sock", roots)
+    with pytest.raises(Refused):
+        safe_path("/var/run/docker.sock", roots)
 
 
 # ---------------------------------------------------------------- top level
@@ -475,10 +514,66 @@ def test_refuses_bad_volume_entries(roots, vol):
     refused(doc, roots)
 
 
-def test_accepts_read_only_bind(roots):
+def test_refuses_read_only_variant_of_pinned_mount(roots):
     doc = good_doc(roots)
     doc["services"]["sonarr"]["volumes"][1]["read_only"] = True
-    validate_compose(doc, roots)
+    refused(doc, roots)
+
+
+def test_refuses_interpolation_escape_in_mount(roots):
+    # ${X:-..} is not literally '..' and realpaths inside the root, but compose
+    # interpolates it to '../..', escaping to the host.
+    payload = "/".join(["${X:-..}"] * 12)
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"].append(
+        {"type": "bind", "source": f"{roots.data}/{payload}", "target": "/host"}
+    )
+    refused(doc, roots)
+
+
+def test_refuses_dollar_in_environment(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["environment"]["TZ"] = "${HOME}"
+    refused(doc, roots)
+
+
+def test_refuses_dollar_anywhere(roots):
+    doc = good_doc(roots)
+    doc["networks"] = {"orama": {"driver": "$bridge"}}
+    refused(doc, roots)
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["image"] += "$"
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["CFG", "CFG/orama", "CFG/config/radarr", "CFG/config/sonarr/orama.env", "DATA/media"],
+)
+def test_refuses_mounts_other_than_pinned(roots, source):
+    source = source.replace("CFG", str(roots.config)).replace("DATA", str(roots.data))
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"].append(
+        {"type": "bind", "source": source, "target": "/extra"}
+    )
+    refused(doc, roots)
+
+
+def test_refuses_pinned_mount_moved(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"][0]["source"] = str(roots.config / "config" / "radarr")
+    refused(doc, roots)
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"][1]["target"] = "/etc"
+    refused(doc, roots)
+
+
+def test_refuses_data_mount_on_app_without_data(roots):
+    doc = good_doc(roots)
+    doc["services"]["prowlarr"]["volumes"].append(
+        {"type": "bind", "source": str(roots.data), "target": "/data"}
+    )
+    refused(doc, roots)
 
 
 # ---------------------------------------------------------------- env_file
@@ -530,6 +625,83 @@ def test_refuses_non_string_environment(roots, env):
     doc = good_doc(roots)
     doc["services"]["sonarr"]["environment"] = env
     refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "app,key,value",
+    [
+        ("sonarr", "DOCKER_MODS", "evil/mod:1"),
+        ("sonarr", "PUID", "0"),
+        ("sonarr", "PGID", "0"),
+        ("sonarr", "UMASK", "000"),
+        ("qbittorrent", "WEBUI_PORT", "22"),
+        ("plex", "PLEX_UID", "0"),
+        ("plex", "PLEX_GID", "1001"),
+        ("gluetun", "VPN_TYPE", "openvpn"),
+        ("gluetun", "VPN_PORT_FORWARDING", "off"),
+        ("gluetun", "VPN_SERVICE_PROVIDER", "a b"),
+        ("gluetun", "VPN_SERVICE_PROVIDER", ""),
+        ("jellyfin", "PUID", "1000"),
+        ("sonarr", "TZ", "x" * 65),
+        ("sonarr", "TZ", "Europe/Athens;rm"),
+        ("sonarr", "WEBUI_PORT", "8090"),
+    ],
+)
+def test_environment_is_pinned(roots, app, key, value):
+    doc = good_doc(roots)
+    doc["services"][app]["environment"][key] = value
+    refused(doc, roots)
+
+
+def test_refuses_missing_environment_key(roots):
+    doc = good_doc(roots)
+    del doc["services"]["sonarr"]["environment"]["UMASK"]
+    refused(doc, roots)
+
+
+def test_refuses_environment_on_service_without_one(roots):
+    doc = build_apps_compose(setup_for(roots))
+    doc["services"]["plex"]["environment"]["X"] = "y"
+    refused(doc, roots)
+
+
+def test_accepts_other_timezone_and_provider(roots):
+    doc = build_apps_compose(
+        setup_for(
+            roots,
+            download_methods={"torrent"},
+            vpn={"provider": "mullvad", "port_forwarding": False},
+            timezone="America/Argentina/Buenos_Aires",
+        )
+    )
+    validate_compose(doc, roots)
+
+
+def test_refuses_ids_not_matching_agent(roots):
+    doc = build_apps_compose(setup_for(roots, puid=1001))
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("user", ["0:0", "1000:0", "1001:1000"])
+def test_refuses_user_mismatch(roots, user):
+    doc = good_doc(roots)
+    doc["services"]["jellyfin"]["user"] = user
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("groups", [["0"], ["105", "106"], [], ["00"]])
+def test_refuses_bad_group_add(roots, groups):
+    doc = good_doc(roots)
+    doc["services"]["plex"]["group_add"] = groups
+    refused(doc, roots)
+
+
+def test_refusal_message_truncates_untrusted_names(roots):
+    doc = good_doc(roots)
+    doc["services"]["x" * 500] = {}
+    with pytest.raises(Refused) as exc:
+        validate_compose(doc, roots)
+    assert len(str(exc.value)) < 200
 
 
 def test_refusal_message_hides_environment_values(roots):
