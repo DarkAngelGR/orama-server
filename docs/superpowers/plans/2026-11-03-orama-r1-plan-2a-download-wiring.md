@@ -377,5 +377,6 @@ tests/integration/fake_newznab.py (T9)
 ## Plan 2a done when
 
 - `unit`, `images`, `integration` and `publish` are green on `main`.
+- **Security scan (owner requirement):** after Task 9 and before the final whole-branch review, scan the Plan 2a changes with the owner's Claude Security plugin (agent `claude-security:claude-security`, "scan changes" for the Plan 2a commit range). Every finding is fixed (in the final-review fix wave) or reported to the owner for an explicit accept. If the plugin is unavailable in the session, tell the owner — don't skip it silently.
 - An owner-facing summary is written in plain language. For example: "After apply, your download apps are connected: Prowlarr gives your indexers to Sonarr and Radarr, which send downloads to SABnzbd and qBittorrent into the shared folders. Running apply again changes nothing. Subtitles, quality rules, Plex and Jellyfin come in Plan 2b."
 - `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` gets a short Plan 2a section with any rulings made during execution and the items Plan 2b must pick up.
