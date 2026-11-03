@@ -2,8 +2,8 @@
 
 Image tags checked on 2026-11-03 against the registries (GHCR tag lists for
 LinuxServer images, Docker Hub for the rest). Every tag is an exact version;
-"latest" is forbidden. LinuxServer images are published as lscr.io aliases of
-ghcr.io/linuxserver, so the tags below exist under both names.
+"latest" is forbidden. LinuxServer images are referenced as ghcr.io/linuxserver/<app>, the
+registry whose tags were actually verified (lscr.io is an alias of it).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def orama_version() -> str:
 def _lsio(name: str, tag: str, port: int, *, mounts_data: bool = True,
           secret: tuple[str, ...] = ()) -> ServiceSpec:
     return ServiceSpec(
-        name=name, image=f"lscr.io/linuxserver/{name}:{tag}",
+        name=name, image=f"ghcr.io/linuxserver/{name}:{tag}",
         container_port=port, default_host_port=port, config_mount="/config",
         mounts_data=mounts_data, env_style="linuxserver", secret_env=secret,
     )

@@ -47,3 +47,8 @@ def test_secret_env_and_gluetun_privileges():
     assert CATALOG["gluetun"].cap_add == ("NET_ADMIN",)
     assert CATALOG["gluetun"].devices == ("/dev/net/tun",)
     assert CATALOG["plex"].secret_env == ()
+
+
+def test_linuxserver_apps_use_ghcr_prefix():
+    for name in ("sonarr", "radarr", "prowlarr", "bazarr", "sabnzbd", "qbittorrent"):
+        assert CATALOG[name].image.startswith(f"ghcr.io/linuxserver/{name}:")
