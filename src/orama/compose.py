@@ -138,7 +138,7 @@ def build_core_compose(
         "services": {
             "orama": {
                 "image": orama_image or orama_spec.image,
-                "container_name": "orama-orama",
+                "container_name": "orama-server",
                 "restart": "unless-stopped",
                 "user": f"{puid}:{pgid}",
                 "ports": [f"{orama_port}:{orama_spec.container_port}"],
@@ -147,7 +147,7 @@ def build_core_compose(
             },
             "orama-agent": {
                 "image": agent_image or agent_spec.image,
-                "container_name": "orama-orama-agent",
+                "container_name": "orama-server-agent",
                 "restart": "unless-stopped",
                 "network_mode": "none",
                 "group_add": [str(docker_gid)],

@@ -603,7 +603,7 @@ def test_failed_apply_logs_redacted_tail_and_answers_plainly(real_agent, roots, 
     with caplog.at_level(logging.INFO), pytest.raises(AgentError) as err:
         real_agent.apply(doc, env)
     assert err.value.message == (
-        "Downloading the apps failed. To see why, run: sudo docker logs orama-orama-agent"
+        "Downloading the apps failed. To see why, run: sudo docker logs orama-server-agent"
     )
     assert "line-" not in err.value.message
     assert "line-10" in caplog.text and "line-49" in caplog.text
@@ -620,7 +620,7 @@ def test_failed_restart_redacts_stored_env_values(real_agent, roots, caplog):
     with caplog.at_level(logging.INFO), pytest.raises(AgentError) as err:
         real_agent.restart("sonarr")
     assert err.value.message == (
-        "Restarting the app failed. To see why, run: sudo docker logs orama-orama-agent"
+        "Restarting the app failed. To see why, run: sudo docker logs orama-server-agent"
     )
     assert "restart failed: token=***" in caplog.text
     assert STORED not in caplog.text and STORED not in err.value.message
