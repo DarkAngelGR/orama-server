@@ -58,3 +58,32 @@ jobs:
           tags: |
             ghcr.io/darkangelgr/orama-agent:${{ steps.tags.outputs.version }}
             ghcr.io/darkangelgr/orama-agent:${{ steps.tags.outputs.sha }}
+
+  integration:
+    # Plan 1 on a real Docker host: install twice, deploy the apps, nothing leaks.
+    needs: [unit, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Test dependencies
+        run: uv sync --frozen
+      - name: Dedicated install user
+        run: |
+          sudo useradd --no-create-home --user-group --shell /usr/sbin/nologin orama-it
+          echo "ORAMA_TEST_PUID=$(id -u orama-it)" >> "$GITHUB_ENV"
+          echo "ORAMA_TEST_PGID=$(id -g orama-it)" >> "$GITHUB_ENV"
+      - name: Integration test
+        # As root; the venv's python keeps uv's cache out of root's hands.
+        run: >-
+          sudo -E env "PATH=$PATH" ORAMA_INTEGRATION=1
+          ORAMA_IT_LOG_DIR="$GITHUB_WORKSPACE/integration-logs"
+          .venv/bin/python -m pytest -m integration -v -p no:cacheprovider
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs
+          path: integration-logs/
+          if-no-files-found: ignore
