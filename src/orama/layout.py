@@ -29,9 +29,19 @@ def app_config_dir(config_root: PurePosixPath, app: str) -> PurePosixPath:
     return config_root / "config" / app
 
 
+def app_env_dir(config_root: PurePosixPath) -> PurePosixPath:
+    """Agent-only folder for per-app env files.
+
+    Kept outside every app's config folder (apps mount those read-write, so an app could
+    swap its env file for a link) and outside Orama's state folder. It is never in
+    ``config_folders`` and never mounted by any app or by Orama.
+    """
+    return config_root / "app-env"
+
+
 def app_env_file(config_root: PurePosixPath, app: str) -> PurePosixPath:
     """Per-app env file holding secret values (mode 0600 on disk)."""
-    return app_config_dir(config_root, app) / "orama.env"
+    return app_env_dir(config_root) / f"{app}.env"
 
 
 def orama_state_dir(config_root: PurePosixPath) -> PurePosixPath:

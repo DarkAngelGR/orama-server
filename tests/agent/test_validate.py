@@ -6,7 +6,7 @@ from conftest import make_setup
 
 from orama.catalog import CATALOG
 from orama.compose import build_apps_compose
-from orama.layout import app_config_dir, app_env_file
+from orama.layout import app_config_dir, app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
 from orama_agent.validate import (
     Refused,
@@ -555,7 +555,8 @@ def test_refuses_dollar_anywhere(roots):
 
 @pytest.mark.parametrize(
     "source",
-    ["CFG", "CFG/orama", "CFG/config/radarr", "CFG/config/sonarr/orama.env", "DATA/media"],
+    ["CFG", "CFG/orama", "CFG/config/radarr", "CFG/app-env", "CFG/app-env/sonarr.env",
+     "DATA/media"],
 )
 def test_refuses_mounts_other_than_pinned(roots, source):
     source = source.replace("CFG", str(roots.config)).replace("DATA", str(roots.data))
@@ -821,6 +822,7 @@ def test_refuses_deeply_nested_doc(roots):
 def ensure_folders(roots, setup):
     for app in enabled_apps(setup):
         app_config_dir(roots.config, app).mkdir(parents=True, exist_ok=True)
+    app_env_dir(roots.config).mkdir(exist_ok=True)
 
 
 def prepared(roots):
@@ -905,10 +907,43 @@ def test_validate_compose_refuses_existing_symlinked_config_dir(roots):
 
 
 def test_validate_compose_refuses_existing_symlinked_env_file(roots):
-    (roots.config / "config" / "sonarr").mkdir(parents=True)
+    app_env_dir(roots.config).mkdir()
     app_env_file(roots.config, "sonarr").symlink_to("/etc/passwd")
     refused_with(good_doc(roots), roots, "secrets file for sonarr")
 
 
 def test_validate_compose_tolerates_missing_folders(roots):
     validate_compose(good_doc(roots), roots)  # nothing under roots.config exists yet
+
+
+def test_env_file_pin_is_agent_only_dir(roots):
+    doc = good_doc(roots)
+    assert doc["services"]["sonarr"]["env_file"] == [str(roots.config / "app-env" / "sonarr.env")]
+    validate_compose(doc, roots)
+    doc["services"]["sonarr"]["env_file"] = [str(roots.config / "config/sonarr/orama.env")]
+    refused_with(doc, roots, "its own secrets file")
+
+
+def test_host_paths_refuse_symlinked_app_env_dir(roots, tmp_path):
+    doc = prepared(roots)
+    real = tmp_path / "elsewhere-env"
+    app_env_dir(roots.config).rename(real)
+    app_env_dir(roots.config).symlink_to(real)
+    with pytest.raises(Refused, match="is a link"):
+        check_host_paths(doc, roots)
+    refused_with(doc, roots, "is a link")
+
+
+def test_host_paths_refuse_missing_app_env_dir(roots):
+    doc = prepared(roots)
+    app_env_dir(roots.config).rmdir()
+    with pytest.raises(Refused, match="does not exist yet"):
+        check_host_paths(doc, roots)
+
+
+def test_no_app_mount_reaches_app_env_dir(roots):
+    env_dir = app_env_dir(roots.config)
+    for svc in good_doc(roots)["services"].values():
+        for v in svc.get("volumes", []):
+            src = type(env_dir)(v["source"])
+            assert not src.is_relative_to(env_dir) and not env_dir.is_relative_to(src)
