@@ -411,7 +411,7 @@ def test_apply_runner_failure_exits_nonzero(capsys, roots, agent):
     assert code == 1
     assert out.out.splitlines() == ["✓ Folders ready"]
     assert out.err.startswith("✗ ")
-    assert "docker compose up failed" in out.err
+    assert "Starting the apps failed. To see why, run: sudo docker logs" in out.err
 
 
 def test_apply_agent_unreachable(capsys, roots, monkeypatch):

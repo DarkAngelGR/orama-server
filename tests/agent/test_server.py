@@ -19,6 +19,7 @@ from orama.compose import build_apps_compose
 from orama.layout import app_config_dir, app_env_dir, app_env_file, data_folders
 from orama_agent.runner import (
     CALL_TIMEOUT,
+    PULL_TIMEOUT,
     UP_TIMEOUT,
     ComposeRunner,
     FakeRunner,
@@ -457,7 +458,9 @@ def test_client_raises_agent_error_with_message(agent):
         agent.client.restart("nope")
 
 def test_client_timeout_exceeds_agent_worst_case():
-    assert DEFAULT_TIMEOUT > CALL_TIMEOUT + UP_TIMEOUT + CALL_TIMEOUT
+    # One apply: ps, pull, up, ps.
+    assert PULL_TIMEOUT == 3600
+    assert DEFAULT_TIMEOUT > CALL_TIMEOUT + PULL_TIMEOUT + UP_TIMEOUT + CALL_TIMEOUT
     assert AgentClient().timeout == DEFAULT_TIMEOUT
 
 
@@ -509,15 +512,19 @@ def test_compose_runner_up_argv_env_and_changed(roots, monkeypatch):
         json.dumps({"Service": "radarr", "ID": "b2", "State": "running"}),
         json.dumps({"Service": "plex", "ID": "c1", "State": "running"}),
     ])
-    run = FakeRun([before, "", after])
+    run = FakeRun([before, "", "", after])
     runner = ComposeRunner(roots, run=run)
     project = str(roots.config / "compose.yaml")
     assert runner.up(project) == ["plex", "radarr"]
 
-    up_argv = run.calls[1][0]
+    pull_argv, pull_kw = run.calls[1]
+    assert pull_argv == _prefix(roots) + ["-f", project, "pull", "--quiet"]
+    assert pull_kw["timeout"] == PULL_TIMEOUT
+    up_argv, up_kw = run.calls[2]
     assert up_argv == _prefix(roots) + [
         "-f", project, "up", "-d", "--remove-orphans", "--wait",
     ]
+    assert up_kw["timeout"] == UP_TIMEOUT
     assert run.calls[0][0] == _prefix(roots) + ["-f", project, "ps", "-a", "--format", "json"]
     for _argv, kw in run.calls:
         assert "shell" not in kw or kw["shell"] is False
@@ -543,3 +550,77 @@ def test_compose_runner_restart(roots):
     ]
     with pytest.raises(Refused):
         ComposeRunner(roots, run=run).restart("--help")
+
+
+# ---------------------------------------------------------------- compose failures
+
+STORED = "st0r3dsecret-fedcba9876543210"
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    """A `docker` on PATH: pull fails with 50 lines of stderr (one with the secret) while
+    the flag file exists; restart always fails printing the stored secret; else succeeds."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    flag = tmp_path / "fail-pull"
+    lines = "\n".join(f"line-{i:02d}" + (f" key={SECRET}" if i == 45 else "") for i in range(50))
+    script = bin_dir / "docker"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        'case " $* " in\n'
+        f'  *" pull "*) if [[ -e {flag} ]]; then printf "%s\\n" "{lines}" >&2; exit 1; fi ;;\n'
+        f'  *" restart "*) echo "restart failed: token={STORED}" >&2; exit 1 ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    return flag
+
+
+@pytest.fixture
+def real_agent(roots, fake_docker):
+    sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
+    path = os.path.join(sock_dir, "agent.sock")
+    server = AgentServer(roots, ComposeRunner(roots), path, chown=Chowns())
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        yield AgentClient(path, timeout=10)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+def test_failed_apply_logs_redacted_tail_and_answers_plainly(real_agent, roots, fake_docker,
+                                                             caplog):
+    doc, env = doc_and_env(roots)
+    real_agent.ensure_folders(all_folders(roots, doc))
+    fake_docker.touch()
+    with caplog.at_level(logging.INFO), pytest.raises(AgentError) as err:
+        real_agent.apply(doc, env)
+    assert err.value.message == (
+        "Downloading the apps failed. To see why, run: sudo docker logs orama-orama-agent"
+    )
+    assert "line-" not in err.value.message
+    assert "line-10" in caplog.text and "line-49" in caplog.text
+    assert "line-09" not in caplog.text  # only the last 40 lines
+    assert "line-45 key=***" in caplog.text
+    assert SECRET not in caplog.text
+
+
+def test_failed_restart_redacts_stored_env_values(real_agent, roots, caplog):
+    doc, env = doc_and_env(roots)
+    real_agent.ensure_folders(all_folders(roots, doc))
+    env = dict(env, sonarr={"SONARR__AUTH__APIKEY": STORED})
+    real_agent.apply(doc, env)  # writes the stored env files
+    with caplog.at_level(logging.INFO), pytest.raises(AgentError) as err:
+        real_agent.restart("sonarr")
+    assert err.value.message == (
+        "Restarting the app failed. To see why, run: sudo docker logs orama-orama-agent"
+    )
+    assert "restart failed: token=***" in caplog.text
+    assert STORED not in caplog.text and STORED not in err.value.message

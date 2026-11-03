@@ -7,7 +7,9 @@ Orama (the client) and every app container are untrusted. Folders and files are 
 by walking from the Agent's own roots one component at a time through directory file
 descriptors, never following a symlink, so a link planted by an app cannot redirect a
 root-owned write or chown. Logs carry the command name, request id and outcome only:
-never arguments, so env-file values never reach a log.
+never arguments. When docker compose fails, the tail of its stderr is logged too, with
+every env-file value (from the request and from the stored files) replaced by ``***``;
+the client only ever gets a plain message.
 """
 
 from __future__ import annotations
@@ -111,6 +113,23 @@ def _write_atomic(dir_fd: int, name: str, data: bytes, mode: int) -> None:
 def _env_file_text(values: dict[str, str]) -> bytes:
     # Single-quoted: compose takes the value literally (validate_env_files refuses quotes).
     return "".join(f"{key}='{value}'\n" for key, value in values.items()).encode()
+
+
+def _env_file_values(text: str) -> list[str]:
+    """The values of a file written by ``_env_file_text``."""
+    values = []
+    for line in text.splitlines():
+        _key, sep, rest = line.partition("=")
+        if sep:
+            values.append(rest[1:-1] if len(rest) >= 2 and rest[0] == rest[-1] == "'" else rest)
+    return values
+
+
+def redact(text: str, values: Any) -> str:
+    """``text`` with every non-empty value replaced by ``***`` (longest first)."""
+    for value in sorted({v for v in values if isinstance(v, str) and v}, key=len, reverse=True):
+        text = text.replace(value, "***")
+    return text
 
 
 class Agent:
@@ -238,6 +257,38 @@ class Agent:
                 raise
         return fd
 
+    def secret_values(self, cmd: str, args: dict[str, Any]) -> list[str]:
+        """Every env-file value this request carried or the Agent has stored, for redaction."""
+        values: list[str] = []
+        env_files = args.get("env_files") if cmd == "apply" else None
+        if isinstance(env_files, dict):
+            for app_values in env_files.values():
+                if isinstance(app_values, dict):
+                    values += [v for v in app_values.values() if isinstance(v, str)]
+        values += self._stored_env_values()
+        return values
+
+    def _stored_env_values(self) -> list[str]:
+        values: list[str] = []
+        try:
+            config_fd = os.open(self.roots.config, _DIR_FLAGS)
+            try:
+                env_fd = os.open(app_env_dir(PurePosixPath(".")).name, _DIR_FLAGS,
+                                 dir_fd=config_fd)
+            finally:
+                os.close(config_fd)
+        except OSError:
+            return values
+        try:
+            for name in os.listdir(env_fd):
+                if name.endswith(".env"):
+                    values += _env_file_values(_read_small(env_fd, name))
+        except OSError:
+            pass
+        finally:
+            os.close(env_fd)
+        return values
+
     # ------------------------------------------------------------ status / restart
 
     def status(self, args: dict[str, Any]) -> dict[str, str]:
@@ -267,6 +318,21 @@ class Agent:
             return _exists(config_fd, COMPOSE_FILE)
         finally:
             os.close(config_fd)
+
+
+def _read_small(dir_fd: int, name: str) -> str:
+    """A regular file's text (never a link, FIFO or more than MAX_REQUEST bytes), else ""."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                     dir_fd=dir_fd)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        return os.read(fd, MAX_REQUEST).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
 
 
 def _exists(dir_fd: int, name: str) -> bool:
@@ -395,6 +461,11 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         except (Refused, RunnerError) as e:
             # Both messages are written to be safe to show and log.
             log.warning("%s id=%s: refused: %s", cmd, shown_id, e)
+            if isinstance(e, RunnerError) and e.detail:
+                # Only here, and only redacted: compose's own words, for whoever reads the log.
+                detail = redact(e.detail, self.agent.secret_values(cmd, args))
+                log.warning("%s id=%s: docker compose said (secrets hidden as ***):\n%s",
+                            cmd, shown_id, detail)
             return {"id": rid, "ok": False, "error": str(e)}
         except Exception as e:  # noqa: BLE001 - never leak details or args to the client
             log.error("%s id=%s: internal error (%s)", cmd, shown_id, type(e).__name__)
