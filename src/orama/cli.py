@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from orama.agent_client import DEFAULT_SOCKET, AgentClient, AgentError
-from orama.catalog import CATALOG
+from orama.catalog import CATALOG, UGOS_RESERVED_PORTS
 from orama.compose import build_apps_compose, build_core_compose, dump_yaml
 from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
@@ -156,9 +156,11 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             os.fchmod(state_fd, 0o700)
             name, existing = _existing_setup(state_fd, config_root / state_name)
             setup = existing or draft
+            # A kept setup is Orama-writable: only sane ports survive, the rest are reassigned.
+            kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
             apps = [a for a, s in CATALOG.items() if s.default_host_port] + ["orama"]
-            ports = assign_ports(apps, previous=setup.ports, taken=args.taken_ports)
-            setup = setup.model_copy(update={"ports": {**setup.ports, **ports}})
+            ports = assign_ports(apps, previous=kept, taken=args.taken_ports)
+            setup = setup.model_copy(update={"ports": {**kept, **ports}})
             text = _setup_text(setup)
             _write_atomic(state_fd, name, text, 0o600, owner=(args.puid, args.pgid), chown=chown)
         finally:
@@ -172,6 +174,12 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
     finally:
         os.close(config_fd)
     return setup.ports["orama"]
+
+
+def _usable_port(port: object) -> bool:
+    return (
+        type(port) is int and 1024 <= port <= 65535 and port not in UGOS_RESERVED_PORTS
+    )
 
 
 def _setup_text(setup: DesiredSetup) -> bytes:
@@ -294,13 +302,15 @@ def apply(setup_path: Path) -> None:
         client.ensure_folders(folders)
         print("✓ Folders ready", flush=True)
         changed = client.apply(build_apps_compose(setup), env_files_for(setup, store))
+        setup.save(setup_path)
     except AgentError as e:
         raise Failed(e.message) from None
-    except KeyError as e:
+    except KeyError as e:  # a missing secret, named but never shown
         raise Failed(f"Cannot apply: {e.args[0]}.") from None
-    except ValueError as e:
+    except ValueError as e:  # e.g. the secret store cannot be decrypted; messages hold no values
         raise Failed(f"Cannot apply: {e}.") from None
-    setup.save(setup_path)
+    except OSError as e:
+        raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
     for app in changed:
         print(f"✓ {app} started")
     if not changed:

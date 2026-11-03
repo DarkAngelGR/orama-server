@@ -18,6 +18,8 @@ jobs:
         run: if [ -f install.sh ]; then shellcheck install.sh; fi
 
   images:
+    # A red commit must never publish: <version> is the tag users install.
+    needs: unit
     runs-on: ubuntu-24.04
     permissions:
       contents: read
