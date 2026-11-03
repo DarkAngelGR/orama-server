@@ -46,6 +46,7 @@ SOCKET_MODE = 0o660
 SHARED_DIR_MODE = 0o2775  # data folders and app config folders, PUID:PGID
 AGENT_DIR_MODE = 0o755  # <config>/config, root-owned
 ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
+APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -197,27 +198,52 @@ class Agent:
             os.close(config_fd)
 
         check_host_paths(doc, self.roots)
-        return {"changed": self.runner.up(str(project_file(self.roots)))}
+        return {"changed": self._up(doc)}
+
+    def _up(self, doc: dict[str, Any]) -> list[str]:
+        """Run up behind a marker file, so an interrupted apply is reported in full.
+
+        A failed ``up`` may already have recreated some containers; the retry would then
+        see their IDs unchanged and under-report. While the marker from a failed run is
+        present, every service in the document counts as changed.
+        """
+        config_fd = os.open(self.roots.config, _DIR_FLAGS)
+        try:
+            env_fd = self._open_env_dir(config_fd)
+        finally:
+            os.close(config_fd)
+        try:
+            incomplete = _exists(env_fd, APPLY_MARKER)
+            _write_atomic(env_fd, APPLY_MARKER, b"", 0o600)
+            changed = self.runner.up(str(project_file(self.roots)))
+            os.unlink(APPLY_MARKER, dir_fd=env_fd)
+        finally:
+            os.close(env_fd)
+        return sorted(doc["services"]) if incomplete else changed
 
     def _open_env_dir(self, config_fd: int) -> int:
+        """Open (creating if missing, root 0700) the Agent-only env folder; never a link."""
         name = app_env_dir(PurePosixPath(".")).name
         try:
             os.mkdir(name, ENV_DIR_MODE, dir_fd=config_fd)
+            made = True
         except FileExistsError:
-            pass
+            made = False
         fd = _open_child_dir(config_fd, name, Path(app_env_dir(PurePosixPath(self.roots.config))))
-        try:
-            os.fchmod(fd, ENV_DIR_MODE)
-        except BaseException:
-            os.close(fd)
-            raise
+        if made:
+            try:
+                os.fchmod(fd, ENV_DIR_MODE)
+            except BaseException:
+                os.close(fd)
+                raise
         return fd
 
     # ------------------------------------------------------------ status / restart
 
     def status(self, args: dict[str, Any]) -> dict[str, str]:
         _expect_keys(args, set())
-        self._ensure_agent_env_file()
+        if not self._ensure_agent_env_file():
+            return {}  # nothing applied yet
         return self.runner.ps()
 
     def restart(self, args: dict[str, Any]) -> None:
@@ -228,17 +254,27 @@ class Agent:
         self._ensure_agent_env_file()
         self.runner.restart(app)
 
-    def _ensure_agent_env_file(self) -> None:
-        """compose needs the empty --env-file to exist even before the first apply."""
+    def _ensure_agent_env_file(self) -> bool:
+        """Create the empty --env-file if missing; True if a compose file exists yet."""
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
         try:
             env_fd = self._open_env_dir(config_fd)
             try:
-                _write_atomic(env_fd, AGENT_ENV_FILE, b"", 0o600)
+                if not _exists(env_fd, AGENT_ENV_FILE):
+                    _write_atomic(env_fd, AGENT_ENV_FILE, b"", 0o600)
             finally:
                 os.close(env_fd)
+            return _exists(config_fd, COMPOSE_FILE)
         finally:
             os.close(config_fd)
+
+
+def _exists(dir_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _expect_keys(args: dict[str, Any], keys: set[str]) -> None:
@@ -259,6 +295,8 @@ def _parse(line: bytes) -> tuple[str, str, dict[str, Any]]:
         req = json.loads(line.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise _Bad("request is not valid JSON") from None
+    except RecursionError:  # deeply nested input
+        raise _Bad("malformed request") from None
     if not isinstance(req, dict):
         raise _Bad("request is not a JSON object")
     rid, cmd, args = req.get("id"), req.get("cmd"), req.get("args", {})
@@ -324,15 +362,22 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         super().__init__(socket_path, _Handler)
 
     def server_bind(self) -> None:
-        old = os.umask(0o177)  # the socket never exists with wider permissions than 0600
+        old = os.umask(0o777 & ~SOCKET_MODE)  # bind creates the socket 0660 directly
         try:
             super().server_bind()
         finally:
             os.umask(old)
         self._chown(self.socket_path, -1, self.roots.pgid, follow_symlinks=False)
-        os.chmod(self.socket_path, SOCKET_MODE)
 
     def respond(self, line: bytes) -> dict[str, Any]:
+        """Always an answer: nothing raised while handling a line reaches the handler."""
+        try:
+            return self._respond(line)
+        except Exception as e:  # noqa: BLE001
+            log.error("request failed: internal error (%s)", type(e).__name__)
+            return {"id": None, "ok": False, "error": "internal error"}
+
+    def _respond(self, line: bytes) -> dict[str, Any]:
         try:
             rid, cmd, args = _parse(line)
         except _Bad as e:

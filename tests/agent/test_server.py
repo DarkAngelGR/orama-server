@@ -13,11 +13,17 @@ import pytest
 import yaml
 from conftest import make_setup
 
-from orama.agent_client import AgentClient, AgentError
+from orama.agent_client import DEFAULT_TIMEOUT, AgentClient, AgentError
 from orama.catalog import CATALOG
 from orama.compose import build_apps_compose
 from orama.layout import app_config_dir, app_env_dir, app_env_file, data_folders
-from orama_agent.runner import ComposeRunner, FakeRunner, RunnerError
+from orama_agent.runner import (
+    CALL_TIMEOUT,
+    UP_TIMEOUT,
+    ComposeRunner,
+    FakeRunner,
+    RunnerError,
+)
 from orama_agent.server import MAX_REQUEST, AgentServer, _write_atomic
 from orama_agent.validate import Refused, Roots
 
@@ -139,6 +145,7 @@ def test_self_update_not_implemented(agent):
         b'{"id": "x", "cmd": 3, "args": {}}\n',
         b'{"id": "x", "cmd": "status", "args": []}\n',
         b"\xff\xfe\n",
+        b"[" * 200000 + b"\n",
     ],
 )
 def test_malformed_requests_get_errors_and_server_keeps_running(agent, line):
@@ -152,7 +159,9 @@ def test_oversized_request_rejected(agent):
     assert resp["ok"] is False and "too large" in resp["error"]
     assert agent.call("status", {})["ok"] is True
 
-def test_unexpected_exception_is_internal_error(agent, caplog):
+def test_unexpected_exception_is_internal_error(agent, roots, caplog):
+    (roots.config / "compose.yaml").write_text("name: orama-apps\n")
+
     def boom():
         raise ValueError(SECRET)
 
@@ -162,6 +171,19 @@ def test_unexpected_exception_is_internal_error(agent, caplog):
     assert resp == {"id": "t1", "ok": False, "error": "internal error"}
     assert SECRET not in caplog.text
     assert agent.call("self-update", {})["ok"] is False  # still serving
+
+def test_respond_never_raises(agent, monkeypatch, caplog):
+    import orama_agent.server as server_mod
+
+    def boom(_line):
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr(server_mod, "_parse", boom)
+    with caplog.at_level(logging.DEBUG):
+        resp = agent.call("status", {})
+    assert resp == {"id": None, "ok": False, "error": "internal error"}
+    assert SECRET not in caplog.text
+
 
 def test_unexpected_args_refused(agent):
     assert agent.call("status", {"x": 1})["ok"] is False
@@ -350,6 +372,40 @@ def test_interrupted_apply_then_rerun_converges(agent, roots):  # [RF 3]
     assert agent.client.apply(doc, env) != []  # converges on retry
     assert agent.client.apply(doc, env) == []
 
+class SameIdsRunner(FakeRunner):
+    """Like the real runner after a partial up: containers already recreated keep their IDs."""
+
+    def up(self, project_file):
+        super().up(project_file)
+        return []
+
+
+def test_failed_apply_reports_every_service_on_retry(roots):
+    sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
+    path = os.path.join(sock_dir, "agent.sock")
+    runner = SameIdsRunner()
+    server = AgentServer(roots, runner, path, chown=Chowns())
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        client = AgentClient(path, timeout=10)
+        doc, env = doc_and_env(roots)
+        client.ensure_folders(all_folders(roots, doc))
+        marker = Path(app_env_dir(PurePosixPath(roots.config))) / ".apply-incomplete"
+        runner.fail_next_up = True
+        with pytest.raises(AgentError):
+            client.apply(doc, env)
+        assert marker.exists()
+        assert client.apply(doc, env) == sorted(doc["services"])
+        assert not marker.exists()
+        assert client.apply(doc, env) == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        shutil.rmtree(sock_dir, ignore_errors=True)
+
+
 def test_env_values_never_logged(agent, roots, caplog):
     doc, env = prepared(agent, roots)
     with caplog.at_level(logging.DEBUG):
@@ -365,6 +421,20 @@ def test_env_values_never_logged(agent, roots, caplog):
     assert SECRET not in str(err.value)
 
 # ---------------------------------------------------------------- status / restart
+
+def test_status_before_first_apply_is_empty(agent, roots):
+    agent.runner.ps = lambda: pytest.fail("ps called with no compose file")
+    assert agent.client.status() == {}
+
+
+def test_status_creates_agent_env_file_only_if_missing(agent, roots):
+    env_file = Path(app_env_dir(PurePosixPath(roots.config))) / "compose.env"
+    agent.client.status()
+    assert env_file.read_text() == "" and stat.S_IMODE(os.lstat(env_file).st_mode) == 0o600
+    inode = os.lstat(env_file).st_ino
+    agent.client.status()
+    assert os.lstat(env_file).st_ino == inode  # not rewritten
+
 
 def test_status_returns_runner_ps(agent, roots):
     doc, env = prepared(agent, roots)
@@ -386,6 +456,11 @@ def test_client_raises_agent_error_with_message(agent):
     with pytest.raises(AgentError, match="Sonarr|app Orama knows"):
         agent.client.restart("nope")
 
+def test_client_timeout_exceeds_agent_worst_case():
+    assert DEFAULT_TIMEOUT > CALL_TIMEOUT + UP_TIMEOUT + CALL_TIMEOUT
+    assert AgentClient().timeout == DEFAULT_TIMEOUT
+
+
 def test_client_honours_timeout(tmp_path):
     sock_dir = tempfile.mkdtemp(prefix="oa", dir="/tmp")
     try:
@@ -393,7 +468,7 @@ def test_client_honours_timeout(tmp_path):
         silent = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         silent.bind(path)
         silent.listen(1)
-        with pytest.raises((AgentError, TimeoutError)):
+        with pytest.raises(AgentError):
             AgentClient(path, timeout=0.3).status()
         silent.close()
     finally:

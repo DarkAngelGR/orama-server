@@ -9,6 +9,9 @@ from typing import Any
 
 DEFAULT_SOCKET = "/run/orama/agent.sock"
 MAX_RESPONSE = 16 * 1024 * 1024
+# Strictly above the Agent's worst case for one apply: ps 60 + up 720 + ps 60 = 840 s
+# (orama_agent.runner.CALL_TIMEOUT / UP_TIMEOUT), plus a 60 s margin.
+DEFAULT_TIMEOUT = 900.0
 
 
 class AgentError(Exception):
@@ -20,7 +23,9 @@ class AgentError(Exception):
 
 
 class AgentClient:
-    def __init__(self, socket_path: str = DEFAULT_SOCKET, timeout: float = 900) -> None:
+    def __init__(
+        self, socket_path: str = DEFAULT_SOCKET, timeout: float = DEFAULT_TIMEOUT
+    ) -> None:
         self.socket_path = socket_path
         self.timeout = timeout
 
