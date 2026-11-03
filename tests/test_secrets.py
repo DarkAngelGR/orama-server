@@ -129,8 +129,6 @@ def test_env_files_for_missing_secret_names_app_not_value(tmp_path):
     assert "sonarr" in msg and "apikey:sonarr" in msg
 
 
-
-
 def test_logs_never_contain_secrets(tmp_path, caplog):
     st = SecretStore(tmp_path / "s.bin")
     st.set("apikey:radarr", fake_secret())
@@ -198,3 +196,49 @@ def test_install_redaction_idempotent(tmp_path):
         assert sum(isinstance(f, RedactingFilter) for f in handler.filters) == 1
     finally:
         root.removeHandler(handler)
+
+
+def test_bad_format_args_do_not_raise_and_are_redacted(tmp_path, caplog):
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("k", "badargsecret")
+    install_redaction(st)
+    logging.getLogger("x").warning("bad %d badargsecret apikey=zzz999", "notanint")
+    assert "badargsecret" not in caplog.text and "zzz999" not in caplog.text
+
+
+def test_unreadable_store_does_not_raise_and_pattern_redacts(tmp_path, caplog):
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("k", "gonesecret")
+    install_redaction(st)
+    (tmp_path / "s.key").unlink()
+    logging.getLogger("x").warning("hello apikey=zzz999")
+    assert "hello" in caplog.text and "zzz999" not in caplog.text
+
+
+def test_read_with_missing_key_does_not_create_key(tmp_path):
+    p = tmp_path / "s.bin"
+    SecretStore(p).set("a", "valuevalue")
+    (tmp_path / "s.key").unlink()
+    blob = p.read_bytes()
+    with pytest.raises(ValueError, match="decrypt"):
+        SecretStore(p).get("a")
+    assert not (tmp_path / "s.key").exists()
+    assert p.read_bytes() == blob
+
+
+def test_key_suffix_path_refused(tmp_path):
+    with pytest.raises(ValueError):
+        SecretStore(tmp_path / "secrets.key")
+
+
+def test_exc_info_cleared_and_exc_text_redacted(tmp_path):
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("k", "tracebacksecret")
+    try:
+        raise RuntimeError("boom tracebacksecret")
+    except RuntimeError:
+        import sys
+        rec = logging.LogRecord("x", logging.ERROR, __file__, 1, "failed", (), sys.exc_info())
+    RedactingFilter(st).filter(rec)
+    assert rec.exc_info is None
+    assert "tracebacksecret" not in rec.exc_text and "RuntimeError" in rec.exc_text

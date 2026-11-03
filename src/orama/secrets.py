@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import secrets
-import traceback
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -52,13 +51,18 @@ def _write_private(path: Path, data: bytes, *, exclusive: bool = False) -> None:
 class SecretStore:
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
+        if self._path.suffix == ".key":
+            raise ValueError(f"secret store path must not end in .key: {self._path}")
         self._key_path = self._path.with_suffix(".key")
 
-    def _fernet(self) -> Fernet:
-        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    def _fernet(self, *, create: bool = False) -> Fernet:
         try:
             key = self._key_path.read_bytes()
         except FileNotFoundError:
+            if not create:
+                raise ValueError(
+                    f"cannot decrypt secret store {self._path}: key file is missing"
+                ) from None
             try:
                 _write_private(self._key_path, Fernet.generate_key(), exclusive=True)
             except FileExistsError:
@@ -84,7 +88,8 @@ class SecretStore:
     def set(self, name: str, value: str) -> None:
         data = self._load()
         data[name] = value
-        token = self._fernet().encrypt(json.dumps(data).encode())
+        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        token = self._fernet(create=True).encrypt(json.dumps(data).encode())
         _write_private(self._path, token)
 
     def names(self) -> list[str]:
@@ -121,15 +126,6 @@ def env_files_for(setup: DesiredSetup, store: SecretStore) -> dict[str, dict[str
     return result
 
 
-def _redact_text(text: str, store: SecretStore) -> str:
-    literals = sorted(
-        {v for v in store.values() if len(v) >= _MIN_LITERAL_LEN}, key=len, reverse=True
-    )
-    for v in literals:
-        text = text.replace(v, "***")
-    return _PATTERN.sub("***", text)
-
-
 class RedactingFilter(logging.Filter):
     """Replaces stored secret values and secret-looking key/value pairs with ***."""
 
@@ -138,15 +134,37 @@ class RedactingFilter(logging.Filter):
         self.store = store
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = _redact_text(record.getMessage(), self.store)
+        # Handler.handle() runs filters outside its error guard, so this must never raise.
+        try:
+            literals = self._literals()
+        except Exception:  # unreadable store: fall back to the pattern rule alone  # noqa: BLE001
+            literals = []
+        try:
+            message = record.getMessage()
+        except Exception:  # bad format args: drop them, keep the raw message  # noqa: BLE001
+            message = str(record.msg)
+        record.msg = self._redact(message, literals)
         record.args = ()
-        if record.exc_info and not record.exc_text:
-            record.exc_text = "".join(traceback.format_exception(*record.exc_info))
+        try:
+            if record.exc_info and not record.exc_text:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+        except Exception:  # noqa: BLE001
+            record.exc_text = "<exception>"
         if record.exc_text:
-            record.exc_text = _redact_text(record.exc_text, self.store)
+            record.exc_text = self._redact(record.exc_text, literals)
+        record.exc_info = None  # no handler may re-render the unredacted exception
         if record.stack_info:
-            record.stack_info = _redact_text(record.stack_info, self.store)
+            record.stack_info = self._redact(record.stack_info, literals)
         return True
+
+    def _literals(self) -> list[str]:
+        return [v for v in self.store.values() if len(v) >= _MIN_LITERAL_LEN]
+
+    @staticmethod
+    def _redact(text: str, literals: list[str]) -> str:
+        for v in sorted(set(literals), key=len, reverse=True):
+            text = text.replace(v, "***")
+        return _PATTERN.sub("***", text)
 
 
 def install_redaction(store: SecretStore) -> None:
