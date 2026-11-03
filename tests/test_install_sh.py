@@ -17,8 +17,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "os-release"
 UBUNTU, DEBIAN, UGOS, FEDORA = (
     str(FIXTURES / n) for n in ("ubuntu-24.04", "debian-12", "ugos-pro", "fedora-40")
 )
-AWKWARD = "da ta 'q\"#:Ωμέγα"
-AWKWARD_ROOT = AWKWARD.replace(":", "")  # Docker cannot bind folders whose path has ":"
+AWKWARD = "da ta 'q\"#:Ωμέγα"  # ":" only where it is quoted, never as a root
+AWKWARD_ROOT = AWKWARD.replace(":", "&")  # Docker cannot mount a path with ":"
 
 
 def _env(**overrides):
@@ -459,3 +459,28 @@ def test_print_address(tmp_path, listing, expected):
     out = run_fn("print_address 8765", PATH=f"{bin_dir}:{os.environ['PATH']}")
     assert out.returncode == 0
     assert f"Orama is ready. Open {expected} in your browser." in out.stdout
+
+
+def test_check_existing_setup_fifo_does_not_hang(tmp_path):
+    config = tmp_path / "c"
+    (config / "orama").mkdir(parents=True)
+    os.mkfifo(config / "orama" / "setup.json")
+    out = _check(config)  # run_fn has a timeout: a blocking open would fail the test
+    assert out.returncode == 1 and "Cannot read the earlier Orama settings" in out.stdout
+
+
+def test_check_existing_setup_oversized_file_is_refused(tmp_path):
+    config = tmp_path / "c"
+    _saved(config, "setup.json", padding="x" * (1024 * 1024 + 1))
+    out = _check(config)
+    assert out.returncode == 1 and "Cannot read the earlier Orama settings" in out.stdout
+
+
+def test_check_existing_setup_mismatch_hides_control_characters(tmp_path):
+    config = tmp_path / "c"
+    _saved(config, "setup.json", data_root="/srv/a\x1b[31mb\nFAKE LINE\x07")
+    out = _check(config)
+    assert out.returncode == 1 and "ORAMA_DATA_ROOT" in out.stdout
+    assert "\x1b" not in out.stdout and "\x07" not in out.stdout
+    assert "\nFAKE LINE" not in out.stdout
+    assert r"\x1b[31mb\nFAKE LINE\x07" in out.stdout

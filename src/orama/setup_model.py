@@ -33,6 +33,8 @@ def _validate_root(value: Any) -> PurePosixPath:
         raise ValueError("must be an absolute path")
     if "\x00" in value:
         raise ValueError("must not contain NUL")
+    if ":" in value:
+        raise ValueError('must not contain ":" (Docker cannot mount such a folder)')
     path = PurePosixPath(value)
     if ".." in path.parts:
         raise ValueError("must not contain '..'")

@@ -272,12 +272,20 @@ prepare_data_root() {
 # Args: file data_root config_root puid pgid install_url.
 # shellcheck disable=SC2016  # Python source, not shell
 SETUP_CHECK_PY='
-import json, os, shlex, sys
+import json, os, shlex, stat, sys
 path, data_root, config_root, puid, pgid, url = sys.argv[1:7]
+LIMIT = 1024 * 1024  # a real setup is a few KiB
 try:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, encoding="utf-8") as f:
-        saved = json.load(f)
+    # The file is writable by Orama (PUID) and we run as root: never follow a link, never
+    # block on a FIFO, read only a regular file, and only so much of it.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ValueError
+        raw = f.read(LIMIT + 1)
+    if len(raw) > LIMIT:
+        raise ValueError
+    saved = json.loads(raw.decode("utf-8"))
     fields = [
         ("data folder", "ORAMA_DATA_ROOT", saved["data_root"], data_root),
         ("Orama folder", "ORAMA_CONFIG_ROOT", saved["config_root"], config_root),
@@ -288,13 +296,23 @@ try:
         raise ValueError
 except Exception:
     sys.exit(2)
+
+def shown(value):
+    """Printable values as they are; anything with control characters escaped."""
+    text = str(value)
+    return text if text.isprintable() else repr(text)
+
 diff = [f for f in fields if f[2] != f[3]]
 for label, env, old, new in diff:
-    print(f"    {label}: saved {old}, this run {new}  ({env})")
+    print(f"    {label}: saved {shown(old)}, this run {shown(new)}  ({env})")
 if diff:
-    print("  To keep the saved settings, run the installer again with them, for example:")
-    sets = " ".join(f"{env}={shlex.quote(str(old))}" for _, env, old, _ in diff)
-    print(f"    curl -fsSL {url} | sudo {sets} bash")
+    if all(str(old).isprintable() for _, _, old, _ in diff):
+        print("  To keep the saved settings, run the installer again with them, for example:")
+        sets = " ".join(f"{env}={shlex.quote(str(old))}" for _, env, old, _ in diff)
+        print(f"    curl -fsSL {url} | sudo {sets} bash")
+    else:
+        print("  To keep the saved settings, run the installer again with the variables above")
+        print("  set to the saved values.")
 sys.exit(1 if diff else 0)
 '
 

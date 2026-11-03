@@ -12,7 +12,7 @@ from orama.compose import build_apps_compose, build_core_compose, dump_yaml
 from orama.layout import app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
 
-AWKWARD = '/volume1/Ταινίες & TV #1: "x"'
+AWKWARD = '/volume1/Ταινίες & TV #1 "x"'
 PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
 
 
