@@ -1,0 +1,621 @@
+import copy
+import os
+
+import pytest
+from conftest import make_setup
+
+from orama.catalog import CATALOG
+from orama.compose import build_apps_compose
+from orama.layout import app_env_file
+from orama_agent.validate import (
+    Refused,
+    Roots,
+    safe_path,
+    validate_compose,
+    validate_env_files,
+)
+
+PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
+
+
+@pytest.fixture
+def roots(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "cfg").mkdir()
+    return Roots(
+        data=type(tmp_path)(os.path.realpath(tmp_path / "data")),
+        config=type(tmp_path)(os.path.realpath(tmp_path / "cfg")),
+    )
+
+
+def setup_for(roots, **kw):
+    values = {"data_root": str(roots.data), "config_root": str(roots.config), "ports": PORTS}
+    values.update(kw)
+    return make_setup(**values)
+
+
+def full_setup(roots):
+    return setup_for(
+        roots,
+        media_servers={"plex", "jellyfin"},
+        download_methods={"usenet", "torrent"},
+        vpn={"provider": "protonvpn", "port_forwarding": True},
+        render_gid=105,
+        nvidia=True,
+    )
+
+
+def good_doc(roots):
+    return build_apps_compose(full_setup(roots))
+
+
+def refused(doc, roots):
+    with pytest.raises(Refused):
+        validate_compose(doc, roots)
+
+
+# ---------------------------------------------------------------- accepts
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["minimal", "full", "torrent_no_vpn", "jellyfin_render_only"],
+)
+def test_accepts_builder_output(roots, kind):
+    setup = {
+        "minimal": lambda: setup_for(roots),
+        "full": lambda: full_setup(roots),
+        "torrent_no_vpn": lambda: setup_for(roots, download_methods={"torrent"}),
+        "jellyfin_render_only": lambda: setup_for(
+            roots, media_servers={"jellyfin"}, render_gid=44
+        ),
+    }[kind]()
+    validate_compose(build_apps_compose(setup), roots)
+
+
+def test_accepts_builder_output_through_yaml(roots):
+    import yaml
+
+    from orama.compose import dump_yaml
+
+    validate_compose(yaml.safe_load(dump_yaml(good_doc(roots))), roots)
+
+
+# ---------------------------------------------------------------- Roots
+
+
+def _env(monkeypatch, data, cfg):
+    for key, value in (("ORAMA_DATA_ROOT", data), ("ORAMA_CONFIG_ROOT", cfg)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+
+
+def test_roots_from_env(monkeypatch, tmp_path):
+    (tmp_path / "d").mkdir()
+    (tmp_path / "c").mkdir()
+    _env(monkeypatch, str(tmp_path / "d"), str(tmp_path / "c"))
+    r = Roots.from_env()
+    assert r.data == type(tmp_path)(os.path.realpath(tmp_path / "d"))
+    assert r.config == type(tmp_path)(os.path.realpath(tmp_path / "c"))
+
+
+def test_roots_are_realpath_resolved(monkeypatch, tmp_path):
+    (tmp_path / "d").mkdir()
+    (tmp_path / "c").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "d")
+    _env(monkeypatch, str(tmp_path / "link"), str(tmp_path / "c"))
+    assert Roots.from_env().data == type(tmp_path)(os.path.realpath(tmp_path / "d"))
+
+
+@pytest.mark.parametrize(
+    "data,cfg",
+    [
+        (None, "/srv/cfg"),
+        ("/srv/data", None),
+        ("", "/srv/cfg"),
+        ("relative", "/srv/cfg"),
+        ("/", "/srv/cfg"),
+        ("/srv/data/../x", "/srv/cfg"),
+        ("/srv/same", "/srv/same"),
+        ("/srv/data", "/srv/data/cfg"),
+        ("/srv/data/sub", "/srv/data"),
+    ],
+)
+def test_roots_from_env_refuses_bad_roots(monkeypatch, data, cfg):
+    _env(monkeypatch, data, cfg)
+    with pytest.raises(Refused):
+        Roots.from_env()
+
+
+def test_roots_from_env_refuses_nested_via_symlink(monkeypatch, tmp_path):
+    (tmp_path / "d" / "c").mkdir(parents=True)
+    (tmp_path / "clink").symlink_to(tmp_path / "d" / "c")
+    _env(monkeypatch, str(tmp_path / "d"), str(tmp_path / "clink"))
+    with pytest.raises(Refused):
+        Roots.from_env()
+
+
+# ---------------------------------------------------------------- safe_path
+
+
+def test_safe_path_accepts_inside_and_root(roots):
+    assert safe_path(str(roots.data), roots) == roots.data
+    assert safe_path(str(roots.config / "config" / "sonarr"), roots) == (
+        roots.config / "config" / "sonarr"
+    )
+
+
+@pytest.mark.parametrize("src", ["/etc", "/", "relative", "/srv/data/../../etc", ""])
+def test_safe_path_refuses(roots, src):
+    with pytest.raises(Refused):
+        safe_path(src, roots)
+
+
+def test_safe_path_refuses_dotdot_even_if_inside(roots):
+    with pytest.raises(Refused):
+        safe_path(str(roots.data) + "/media/../media", roots)
+
+
+def test_safe_path_refuses_nul(roots):
+    with pytest.raises(Refused):
+        safe_path(str(roots.data) + "/a\0b", roots)
+
+
+def test_safe_path_refuses_sibling_prefix(roots):
+    sibling = str(roots.data) + "2"
+    os.mkdir(sibling)
+    with pytest.raises(Refused):
+        safe_path(sibling, roots)
+
+
+def test_safe_path_refuses_non_string(roots):
+    with pytest.raises(Refused):
+        safe_path(roots.data, roots)  # type: ignore[arg-type]
+
+
+def test_refuses_symlink_escape(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "evil").symlink_to("/etc")
+    with pytest.raises(Refused):
+        safe_path(str(tmp_path / "data" / "evil"), Roots(tmp_path / "data", tmp_path / "cfg"))
+
+
+# ---------------------------------------------------------------- top level
+
+
+def test_refuses_non_dict(roots):
+    refused([], roots)
+
+
+def test_refuses_unknown_top_level_key(roots):
+    doc = good_doc(roots)
+    doc["volumes"] = {"x": {}}
+    refused(doc, roots)
+
+
+def test_refuses_wrong_project_name(roots):
+    doc = good_doc(roots)
+    doc["name"] = "orama-core"
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "networks",
+    [
+        {"orama": {"external": True}},
+        {"orama": {"driver": "host"}},
+        {"orama": {"driver": "bridge", "driver_opts": {"x": "y"}}},
+        {"orama": {"driver": "bridge"}, "other": {"driver": "bridge"}},
+        {"host": {"driver": "bridge"}},
+        ["orama"],
+    ],
+)
+def test_refuses_bad_top_level_networks(roots, networks):
+    doc = good_doc(roots)
+    doc["networks"] = networks
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- services
+
+
+def test_refuses_unknown_service(roots):
+    doc = good_doc(roots)
+    doc["services"]["evil"] = copy.deepcopy(doc["services"]["sonarr"])
+    refused(doc, roots)
+
+
+def test_refuses_core_service_name(roots):
+    doc = good_doc(roots)
+    doc["services"]["orama-agent"] = copy.deepcopy(doc["services"]["sonarr"])
+    refused(doc, roots)
+
+
+def test_refuses_swapped_image(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["image"] = "evil/sonarr:4.0.20.3014-ls329"
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("privileged", True),
+        ("pid", "host"),
+        ("ipc", "host"),
+        ("security_opt", ["seccomp:unconfined"]),
+        ("userns_mode", "host"),
+        ("volumes_from", ["gluetun"]),
+    ],
+)
+def test_refuses_dangerous_keys(roots, key, value):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"][key] = value
+    refused(doc, roots)
+
+
+def test_refuses_privileged(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["privileged"] = True
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("command", ["sh", "-c", "id"]),
+        ("entrypoint", "/bin/sh"),
+        ("sysctls", {"net.ipv4.ip_forward": "1"}),
+        ("cgroup", "host"),
+        ("extra_hosts", ["a:1.2.3.4"]),
+        ("healthcheck", {"test": ["CMD", "true"]}),
+        ("labels", {"a": "b"}),
+        ("cap_drop", ["ALL"]),
+        ("tmpfs", ["/tmp"]),
+    ],
+)
+def test_refuses_keys_outside_allowlist(roots, key, value):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"][key] = value
+    refused(doc, roots)
+
+
+def test_refuses_wrong_container_name(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["container_name"] = "orama-orama-agent"
+    refused(doc, roots)
+
+
+def test_refuses_wrong_restart(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["restart"] = "always"
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- network_mode
+
+
+@pytest.mark.parametrize("mode", ["host", "container:orama-orama-agent", "none", "bridge"])
+def test_refuses_other_network_modes(roots, mode):
+    doc = good_doc(roots)
+    doc["services"]["qbittorrent"]["network_mode"] = mode
+    refused(doc, roots)
+
+
+def test_refuses_gluetun_network_mode_on_other_service(roots):
+    doc = good_doc(roots)
+    svc = doc["services"]["sonarr"]
+    del svc["networks"]
+    del svc["ports"]
+    svc["network_mode"] = "service:gluetun"
+    refused(doc, roots)
+
+
+def test_refuses_gluetun_network_mode_without_gluetun(roots):
+    doc = good_doc(roots)
+    del doc["services"]["gluetun"]
+    refused(doc, roots)
+
+
+def test_refuses_network_mode_with_networks(roots):
+    doc = good_doc(roots)
+    doc["services"]["qbittorrent"]["networks"] = ["orama"]
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("networks", [["default"], ["orama", "other"], "orama", []])
+def test_refuses_bad_service_networks(roots, networks):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["networks"] = networks
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- depends_on
+
+
+@pytest.mark.parametrize(
+    "deps",
+    [
+        {"gluetun": {"condition": "service_started"}},
+        {"sonarr": {"condition": "service_healthy"}},
+        ["gluetun"],
+    ],
+)
+def test_refuses_bad_depends_on(roots, deps):
+    doc = good_doc(roots)
+    doc["services"]["qbittorrent"]["depends_on"] = deps
+    refused(doc, roots)
+
+
+def test_refuses_depends_on_on_other_service(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["depends_on"] = {"gluetun": {"condition": "service_healthy"}}
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- cap_add / devices / deploy
+
+
+def test_refuses_cap_add_not_in_catalogue(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["cap_add"] = ["NET_ADMIN"]
+    refused(doc, roots)
+
+
+def test_refuses_extra_cap_on_gluetun(roots):
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["cap_add"] = ["NET_ADMIN", "SYS_ADMIN"]
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "app,devices",
+    [
+        ("sonarr", ["/dev/dri:/dev/dri"]),
+        ("plex", ["/dev/sda:/dev/sda"]),
+        ("plex", ["/dev/dri:/dev/dri", "/dev/mem:/dev/mem"]),
+        ("gluetun", ["/dev/net/tun:/dev/net/tun", "/dev/kmsg:/dev/kmsg"]),
+        ("plex", "/dev/dri:/dev/dri"),
+    ],
+)
+def test_refuses_bad_devices(roots, app, devices):
+    doc = good_doc(roots)
+    doc["services"][app]["devices"] = devices
+    refused(doc, roots)
+
+
+def test_refuses_gpu_reservation_on_non_media_server(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["deploy"] = copy.deepcopy(doc["services"]["plex"]["deploy"])
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "deploy",
+    [
+        {"resources": {"limits": {"cpus": "4"}}},
+        {"mode": "global"},
+        {"resources": {"reservations": {"devices": [
+            {"driver": "nvidia", "capabilities": ["gpu"], "count": "all", "options": {"x": "y"}}
+        ]}}},
+    ],
+)
+def test_refuses_other_deploy_shapes(roots, deploy):
+    doc = good_doc(roots)
+    doc["services"]["plex"]["deploy"] = deploy
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- user / group_add
+
+
+@pytest.mark.parametrize("user", ["root", "1000:wheel", "1000:", ":1000", 1000, "10 00"])
+def test_refuses_non_numeric_user(roots, user):
+    doc = good_doc(roots)
+    doc["services"]["jellyfin"]["user"] = user
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("groups", [["video"], [105], "105", ["10a"]])
+def test_refuses_non_numeric_group_add(roots, groups):
+    doc = good_doc(roots)
+    doc["services"]["plex"]["group_add"] = groups
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- volumes
+
+
+@pytest.mark.parametrize("src", ["/etc", "/", "relative", "/srv/data/../../etc"])
+def test_refuses_mounts_outside_roots(roots, src):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"][0]["source"] = src
+    refused(doc, roots)
+
+
+def test_refuses_docker_socket_mount(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"].append(
+        {"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"}
+    )
+    refused(doc, roots)
+
+
+def test_refuses_docker_socket_symlinked_inside_root(roots):
+    link = roots.data / "sock"
+    link.symlink_to("/var/run/docker.sock")
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"].append(
+        {"type": "bind", "source": str(link), "target": "/var/run/docker.sock"}
+    )
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "vol",
+    [
+        {"type": "volume", "source": "orama-run", "target": "/run"},
+        {"type": "tmpfs", "target": "/tmp"},
+        {"type": "bind", "source": "SRC", "target": "/x", "bind": {"propagation": "shared"}},
+        {"type": "bind", "source": "SRC", "target": "/x", "read_only": "yes"},
+        {"type": "bind", "source": "SRC"},
+        {"type": "bind", "source": "SRC", "target": "relative"},
+        "SRC:/data",
+    ],
+)
+def test_refuses_bad_volume_entries(roots, vol):
+    if isinstance(vol, dict) and vol.get("source") == "SRC":
+        vol["source"] = str(roots.data)
+    elif vol == "SRC:/data":
+        vol = f"{roots.data}:/data"
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"].append(vol)
+    refused(doc, roots)
+
+
+def test_accepts_read_only_bind(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["volumes"][1]["read_only"] = True
+    validate_compose(doc, roots)
+
+
+# ---------------------------------------------------------------- env_file
+
+
+def test_refuses_env_file_elsewhere(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["env_file"] = [str(app_env_file(roots.config, "radarr"))]
+    refused(doc, roots)
+
+
+def test_refuses_env_file_on_app_without_secrets(roots):
+    doc = good_doc(roots)
+    doc["services"]["bazarr"]["env_file"] = [str(app_env_file(roots.config, "bazarr"))]
+    refused(doc, roots)
+
+
+def test_refuses_env_file_extra_entry(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["env_file"].append(str(roots.data / "x.env"))
+    refused(doc, roots)
+
+
+def test_env_file_computed_from_agent_roots(roots, tmp_path):
+    other_cfg = tmp_path / "othercfg"
+    other_cfg.mkdir()
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["env_file"] = [str(app_env_file(other_cfg, "sonarr"))]
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- environment
+
+
+def test_refuses_secret_name_in_environment(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["environment"]["SONARR__AUTH__APIKEY"] = "x"
+    refused(doc, roots)
+
+
+def test_refuses_other_apps_secret_name_in_environment(roots):
+    doc = good_doc(roots)
+    doc["services"]["bazarr"]["environment"]["WIREGUARD_PRIVATE_KEY"] = "x"
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("env", [{"PUID": 1000}, ["PUID=1000"], {1: "x"}])
+def test_refuses_non_string_environment(roots, env):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["environment"] = env
+    refused(doc, roots)
+
+
+def test_refusal_message_hides_environment_values(roots):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["environment"]["SONARR__AUTH__APIKEY"] = "s3cr3tvalue"
+    with pytest.raises(Refused) as exc:
+        validate_compose(doc, roots)
+    assert "s3cr3tvalue" not in str(exc.value)
+
+
+# ---------------------------------------------------------------- ports
+
+
+@pytest.mark.parametrize(
+    "ports",
+    [
+        ["0.0.0.0:8989:8989"],
+        ["8989:22"],
+        ["0:8989"],
+        ["70000:8989"],
+        ["8989:8989/udp"],
+        [8989],
+        "8989:8989",
+        ["8989"],
+        ["8989:8989", "2222:8989"],
+    ],
+)
+def test_refuses_bad_ports(roots, ports):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["ports"] = ports
+    refused(doc, roots)
+
+
+def test_refuses_ports_on_portless_service(roots):
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["ports"] = ["2222:22"]
+    refused(doc, roots)
+
+
+def test_gluetun_may_publish_qbittorrent_port(roots):
+    doc = good_doc(roots)
+    assert doc["services"]["gluetun"]["ports"] == [f"{PORTS['qbittorrent']}:8090"]
+    validate_compose(doc, roots)
+
+
+def test_refuses_ports_on_qbittorrent_behind_vpn(roots):
+    doc = good_doc(roots)
+    doc["services"]["qbittorrent"]["ports"] = ["8090:8090"]
+    refused(doc, roots)
+
+
+# ---------------------------------------------------------------- env files
+
+
+def test_env_files_accepts_builder_shape(roots):
+    validate_env_files(
+        {
+            "sonarr": {"SONARR__AUTH__APIKEY": "abc123"},
+            "gluetun": {"WIREGUARD_PRIVATE_KEY": "k+/="},
+        },
+        roots,
+    )
+
+
+def test_env_files_only_allowed_names(roots):
+    with pytest.raises(Refused):
+        validate_env_files({"sonarr": {"LD_PRELOAD": "/x.so"}}, roots)
+    with pytest.raises(Refused):
+        validate_env_files({"sonarr": {"RADARR__AUTH__APIKEY": "x"}}, roots)
+
+
+@pytest.mark.parametrize("app", ["bazarr", "evil", "orama-agent", "../sonarr"])
+def test_env_files_refuse_apps_without_secrets(roots, app):
+    with pytest.raises(Refused):
+        validate_env_files({app: {"SONARR__AUTH__APIKEY": "x"}}, roots)
+
+
+@pytest.mark.parametrize("value", ["", "a'b", "a\nb", "a\rb", "a\0b", 5, None])
+def test_env_files_refuse_bad_values(roots, value):
+    with pytest.raises(Refused) as exc:
+        validate_env_files({"sonarr": {"SONARR__AUTH__APIKEY": value}}, roots)
+    if isinstance(value, str) and value:
+        assert value not in str(exc.value)
+
+
+@pytest.mark.parametrize("env_files", [[], {"sonarr": ["x"]}, {"sonarr": None}])
+def test_env_files_refuse_bad_shapes(roots, env_files):
+    with pytest.raises(Refused):
+        validate_env_files(env_files, roots)
