@@ -10,6 +10,8 @@ import hashlib
 import sys
 
 PUBLIC_KEY_TAG = 6
+# Signature, public key, user id, public subkey: all an exported apt key holds.
+ALLOWED_TAGS = frozenset({2, PUBLIC_KEY_TAG, 13, 14})
 
 
 def _dearmor(text: str) -> bytes:
@@ -44,6 +46,10 @@ def _packets(data: bytes):
                 raise ValueError("indeterminate-length packets are not expected in a key")
             size = 1 << ltype
             length, i = int.from_bytes(data[i:i + size]), i + size
+        if tag not in ALLOWED_TAGS:
+            raise ValueError(f"unexpected packet tag {tag} in a key")
+        if i + length > len(data):
+            raise ValueError("truncated packet")
         yield tag, data[i:i + length]
         i += length
 
@@ -61,8 +67,12 @@ def primary_fingerprints(text: str) -> list[str]:
 
 def main() -> int:
     path, expected = sys.argv[1], sys.argv[2].replace(" ", "").upper()
-    with open(path, encoding="ascii") as f:
-        found = primary_fingerprints(f.read())
+    try:
+        with open(path, encoding="ascii") as f:
+            found = primary_fingerprints(f.read())
+    except (OSError, ValueError, IndexError) as e:
+        print(f"key refused: {e}", file=sys.stderr)
+        return 1
     if found != [expected]:
         print(f"key fingerprint mismatch: expected {expected}, found {found}", file=sys.stderr)
         return 1

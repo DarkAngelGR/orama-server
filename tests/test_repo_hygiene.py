@@ -7,10 +7,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Private IPv4: every branch needs a full 4-octet address, so version strings
-# (10.10.7) and section refs (§10.1.3) are not flagged.
+# (10.10.7) and section refs (§10.1.3) are not flagged. A full stop after the address
+# (end of a sentence) still counts; a dot followed by more of a word or number does not.
 PRIVATE_IPV4 = (
     r"(?<![\w.])(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
-    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?![.\w])"
+    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?!\.?\w)"
 )
 
 FORBIDDEN = [
@@ -58,6 +59,12 @@ def _ip(*octets):
 @pytest.mark.parametrize("text", [_ip(10, 0, 0, 5), _ip(192, 168, 1, 20), _ip(172, 16, 0, 1)])
 def test_private_ipv4_pattern_flags_addresses(text):
     assert re.search(PRIVATE_IPV4, f"host {text} up")
+
+
+@pytest.mark.parametrize("text", [_ip(10, 0, 0, 5), _ip(192, 168, 1, 20), _ip(172, 16, 0, 1)])
+def test_private_ipv4_pattern_flags_address_ending_a_sentence(text):
+    assert re.search(PRIVATE_IPV4, f"Open it at {text}.")
+    assert re.search(PRIVATE_IPV4, f"Open it at {text}.\n")
 
 
 @pytest.mark.parametrize(

@@ -112,17 +112,27 @@ def _collect_logs(host: Host) -> None:
     host.save_log("docker-ps.txt", run(["docker", "ps", "-a"]).stdout)
 
 
-@pytest.fixture(scope="session")
-def host() -> Host:
+def require_host() -> tuple[int, int]:
+    """The install ids, once this host may and can run the integration test.
+
+    Without the ORAMA_INTEGRATION=1 opt-in the test is skipped. With it, a missing
+    prerequisite fails the run, so CI can never pass by skipping it.
+    """
     if os.environ.get("ORAMA_INTEGRATION") != "1":
         pytest.skip("integration test: set ORAMA_INTEGRATION=1 (it changes this machine)")
     if os.geteuid() != 0:
-        pytest.skip("integration test: needs root (run it with sudo -E)")
+        pytest.fail("integration test: needs root (run it with sudo -E)")
     if not _docker_works():
-        pytest.skip("integration test: Docker and docker compose are not available")
+        pytest.fail("integration test: Docker and docker compose are not available")
     ids = _install_ids()
     if ids is None:
-        pytest.skip("integration test: set ORAMA_TEST_PUID/ORAMA_TEST_PGID to a non-root user")
+        pytest.fail("integration test: set ORAMA_TEST_PUID/ORAMA_TEST_PGID to a non-root user")
+    return ids
+
+
+@pytest.fixture(scope="session")
+def host() -> Host:
+    ids = require_host()
     _remove_everything()  # a run that was killed earlier
     return Host(puid=ids[0], pgid=ids[1])
 
