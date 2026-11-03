@@ -1,0 +1,7 @@
+# assumed — verify on device
+PRETTY_NAME="UGOS Pro"
+NAME="UGOS Pro"
+VERSION_ID="1.0"
+ID=debian
+ID_LIKE=debian
+VARIANT="UGOS"
