@@ -1,4 +1,4 @@
-"""Plan 1 on a real Docker host: install twice, deploy the stack, nothing leaks.
+"""Plans 1 and 2a on a real Docker host: install twice, deploy and wire the stack, nothing leaks.
 
 The tests run in file order and share module fixtures: ``installed`` runs install.sh once,
 ``applied`` writes a setup and applies it, ``rerun`` runs both again. See conftest.py
@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +44,9 @@ DATA_SUBFOLDERS = [
 ADDRESS = re.compile(r"Orama is ready\. Open http://\S+:(\d+) in your browser\.")
 DOCKER_SOCKETS = {"/var/run/docker.sock", "/run/docker.sock"}
 SHARED_NETWORK = "orama-net"
+NEWZNAB = "orama-test-newznab"
+FAKE_SERVER_HOST = "fake-nntp.invalid"
+SYNC_TIMEOUT = 120
 
 
 @dataclass
@@ -99,6 +104,16 @@ def http_get(port: int, path: str, headers: dict[str, str] | None = None) -> tup
         return 0, ""
 
 
+def http_json(url: str, headers: dict[str, str] | None = None):
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read())
+
+
+def failure_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line.startswith("✗")]
+
+
 def container_ids() -> dict[str, str]:
     out = run(["docker", "ps", "-a", "--no-trunc", "--format", "{{.Names}} {{.ID}}"])
     assert out.returncode == 0, out.stdout
@@ -141,10 +156,28 @@ def installed(clean_host: Host, outputs: Outputs) -> dict:
 
 
 @pytest.fixture(scope="module")
-def applied(clean_host: Host, installed: dict, outputs: Outputs) -> dict:
+def newznab(clean_host: Host, installed: dict):
+    """A fake Newznab indexer on the shared network, for Prowlarr to add."""
+    started = run(["docker", "run", "-d", "--name", NEWZNAB, "--network", SHARED_NETWORK,
+                   "--network-alias", "fake-newznab",
+                   "-v", f"{Path(__file__).with_name('fake_newznab.py')}:/fake.py:ro",
+                   "python:3.12-slim", "python", "/fake.py"], timeout=600)
+    assert started.returncode == 0, f"fake Newznab did not start:\n{started.stdout}"
+    yield
+    clean_host.save_log("container-newznab.log", run(["docker", "logs", NEWZNAB]).stdout)
+    run(["docker", "rm", "-f", NEWZNAB])
+
+
+@pytest.fixture(scope="module")
+def applied(clean_host: Host, installed: dict, newznab, outputs: Outputs) -> dict:
     setup = dict(installed["draft"])
-    setup.update(media_servers=["jellyfin", "plex"], download_methods=["torrent", "usenet"],
-                 vpn=None)
+    setup.update(
+        media_servers=["jellyfin", "plex"], download_methods=["torrent", "usenet"], vpn=None,
+        usenet_servers=[{"slug": "fake", "host": FAKE_SERVER_HOST}],
+        indexers=[{"slug": "fake", "definition": "newznab", "name": "Fake Newznab",
+                   "fields": {"baseUrl": "http://fake-newznab:8000"},
+                   "secret_fields": ["apiKey"]}],
+    )
     target = clean_host.state_dir / "setup.json"
     # Saved by Orama itself (validated, owned by PUID), like the setup page will.
     snippet = (
@@ -156,21 +189,28 @@ def applied(clean_host: Host, installed: dict, outputs: Outputs) -> dict:
                input=json.dumps(setup))
     assert save.returncode == 0, f"saving the setup failed:\n{save.stdout}"
 
+    # Secrets as the owner would enter them; values built here, never printed.
+    for name in ("usenet:fake:password", "indexer:fake:apiKey"):
+        saved = run(["docker", "exec", "-i", "orama-server", "python", "-m", "orama.cli",
+                     "set-secret", name, "--setup", str(target)], input=secrets.token_hex(16))
+        assert saved.returncode == 0, f"set-secret {name} failed:\n{saved.stdout}"
+
     status, output = apply(clean_host, outputs, "apply-1")
-    if status != 0:
+    if status not in (0, 1):
         diagnose_apps_up(clean_host)
-    assert status == 0, f"apply failed (exit {status}):\n{output}"
+    assert status == 1, f"apply should report only the fake Usenet server (exit {status}):\n{output}"
     wait_until_ready(APPS)
     return {"output": output, "setup": setup}
 
 
 @pytest.fixture(scope="module")
 def rerun(clean_host: Host, installed: dict, applied: dict, outputs: Outputs) -> dict:
+    first_apply = applied["output"]
     before = container_ids()
     install_status, install_output = install(clean_host, outputs, "install-2")
     apply_status, apply_output = apply(clean_host, outputs, "apply-2")
     return {
-        "before": before, "after": container_ids(),
+        "first_apply": first_apply, "before": before, "after": container_ids(),
         "install": (install_status, install_output), "apply": (apply_status, apply_output),
     }
 
@@ -250,6 +290,9 @@ def test_every_app_runs(applied: dict):
     assert "✓ Folders ready" in lines
     for app in APPS:
         assert f"✓ {app} started" in lines
+    # The fake Usenet server cannot log in; that is the one visible, non-blocking failure.
+    failures = failure_lines(applied["output"])
+    assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
     for app in ("gluetun", "recyclarr"):
         assert run(["docker", "inspect", f"orama-{app}"]).returncode != 0, app
 
@@ -322,6 +365,78 @@ def test_media_servers_answer(applied: dict):
     assert 0 < poll_http(ports["jellyfin"], "/health") < 500
 
 
+# ---------------------------------------------------------------- download wiring
+
+def app_get(applied: dict, secrets_: dict[str, str], app: str, path: str):
+    port = applied["setup"]["ports"][app]
+    return http_json(f"http://127.0.0.1:{port}{path}", {"X-Api-Key": secrets_[f"apikey:{app}"]})
+
+
+@pytest.mark.parametrize("app,root,category_field,category", [
+    ("sonarr", "/data/media/tv", "tvCategory", "tv"),
+    ("radarr", "/data/media/movies", "movieCategory", "movies"),
+])
+def test_arr_apps_are_wired_to_the_download_clients(
+    clean_host: Host, applied: dict, app: str, root: str, category_field: str, category: str,
+):
+    secrets_ = stored_secrets(clean_host)
+    folders = {r["path"].rstrip("/") for r in app_get(applied, secrets_, app, "/api/v3/rootfolder")}
+    assert root in folders
+    clients = {c["name"]: c for c in app_get(applied, secrets_, app, "/api/v3/downloadclient")}
+    assert {"SABnzbd (Orama)", "qBittorrent (Orama)"} <= set(clients)
+    for name, client in clients.items():
+        fields = {f["name"]: f.get("value") for f in client["fields"]}
+        assert fields.get(category_field) == category, name
+    config = app_get(applied, secrets_, app, "/api/v3/config/mediamanagement")
+    assert config["copyUsingHardlinks"] is True
+
+
+def test_prowlarr_has_its_apps_and_the_indexer(clean_host: Host, applied: dict):
+    secrets_ = stored_secrets(clean_host)
+    apps = {a["name"] for a in app_get(applied, secrets_, "prowlarr", "/api/v1/applications")}
+    assert {"Sonarr (Orama)", "Radarr (Orama)"} <= apps
+    indexers = {i["name"] for i in app_get(applied, secrets_, "prowlarr", "/api/v1/indexer")}
+    assert "Fake Newznab" in indexers
+
+
+@pytest.mark.parametrize("app", ["sonarr", "radarr"])
+def test_indexer_reaches_sonarr_and_radarr(clean_host: Host, applied: dict, app: str):
+    secrets_ = stored_secrets(clean_host)
+    deadline = time.monotonic() + SYNC_TIMEOUT
+    while True:
+        names = [i["name"] for i in app_get(applied, secrets_, app, "/api/v3/indexer")]
+        if any("Fake Newznab" in n for n in names) or time.monotonic() > deadline:
+            break
+        time.sleep(5)
+    assert any("Fake Newznab" in n for n in names), f"{app} indexers: {names}"
+
+
+def test_sabnzbd_is_wired(clean_host: Host, applied: dict):
+    secrets_ = stored_secrets(clean_host)
+    port = applied["setup"]["ports"]["sabnzbd"]
+    base = f"http://127.0.0.1:{port}/api?output=json&apikey={secrets_['apikey:sabnzbd']}&mode=get_config"
+    config = http_json(base)["config"]
+    assert config["misc"]["complete_dir"].rstrip("/") == "/data/downloads/usenet"
+    assert {c["name"] for c in config["categories"]} >= {"tv", "movies"}
+    assert "fake" in {s["name"] for s in config["servers"]}
+
+
+def test_qbittorrent_is_wired(clean_host: Host, applied: dict):
+    secrets_ = stored_secrets(clean_host)
+    port = applied["setup"]["ports"]["qbittorrent"]
+    form = urllib.parse.urlencode(
+        {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
+    with urllib.request.urlopen(
+        f"http://127.0.0.1:{port}/api/v2/auth/login", data=form, timeout=20
+    ) as response:
+        assert response.read().decode().strip() == "Ok."
+        cookie = response.headers["Set-Cookie"].split(";")[0]
+    categories = http_json(f"http://127.0.0.1:{port}/api/v2/torrents/categories",
+                           {"Cookie": cookie})
+    assert categories["tv"]["savePath"].rstrip("/") == "/data/downloads/torrents/tv"
+    assert categories["movies"]["savePath"].rstrip("/") == "/data/downloads/torrents/movies"
+
+
 # ---------------------------------------------------------------- run again (RF3)
 
 def test_second_install_and_apply_change_nothing(installed: dict, rerun: dict):
@@ -329,8 +444,12 @@ def test_second_install_and_apply_change_nothing(installed: dict, rerun: dict):
     assert status == 0, f"second install.sh failed (exit {status}):\n{output}"
     assert orama_port(output) == installed["port"]
     status, output = rerun["apply"]
-    assert status == 0, f"second apply failed (exit {status}):\n{output}"
-    assert "✓ Nothing to change" in output.splitlines()
+    assert status == 1, f"second apply: unexpected exit {status}:\n{output}"
+    # Deploy and wiring both report nothing: the only ✓ is the always-printed folders line.
+    assert [l for l in output.splitlines() if l.startswith(("✓", "…"))] == ["✓ Folders ready"], output
+    failures = failure_lines(output)
+    assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
+    assert failure_lines(output) == failure_lines(rerun["first_apply"])
     assert rerun["after"] == rerun["before"]
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
