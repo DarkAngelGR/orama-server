@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from . import media_contracts
 from .conftest import REPO_ROOT, Host, docker_inspect, run
 
 pytestmark = pytest.mark.integration
@@ -380,6 +381,34 @@ def test_media_servers_answer(applied: dict):
 def app_get(applied: dict, secrets_: dict[str, str], app: str, path: str):
     port = applied["setup"]["ports"][app]
     return http_json(f"http://127.0.0.1:{port}{path}", {"X-Api-Key": secrets_[f"apikey:{app}"]})
+
+
+def test_pinned_notification_contracts(clean_host, applied, capsys):
+    for app in ("sonarr", "radarr"):
+        schemas = app_get(applied, stored_secrets(clean_host), app, "/api/v3/notification/schema")
+        media = [s for s in schemas if any(n in s["name"].lower()
+                for n in ("plex", "emby", "jellyfin"))]
+        assert any("plex" in s["name"].lower() for s in media)
+        assert any(n in s["name"].lower() for s in media for n in ("emby", "jellyfin"))
+        with capsys.disabled():
+            for schema in media:
+                fields = sorted(f["name"] for f in schema["fields"])
+                print(f"Contract {app} {schema['implementation']}: {fields}")
+
+
+def test_pinned_bazarr_contract(applied, capsys):
+    with capsys.disabled():
+        media_contracts.bazarr(applied["setup"]["ports"]["bazarr"])
+
+
+def test_pinned_jellyfin_contract(applied, capsys):
+    with capsys.disabled():
+        media_contracts.jellyfin(applied["setup"]["ports"]["jellyfin"])
+
+
+def test_pinned_recyclarr_contract(clean_host, applied, tmp_path, capsys):
+    with capsys.disabled():
+        media_contracts.recyclarr(clean_host, tmp_path, stored_secrets(clean_host)["apikey:radarr"])
 
 
 @pytest.mark.parametrize("app,root,category_field,category", [
