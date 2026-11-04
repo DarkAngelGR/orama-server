@@ -7,13 +7,20 @@ from typing import Any
 
 import yaml
 
-from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND, ServiceSpec
+from orama.catalog import (
+    CATALOG,
+    CORE,
+    GLUETUN_PORT_FORWARD_UP_COMMAND,
+    GLUETUN_PROXY_USER,
+    ServiceSpec,
+)
 from orama.layout import app_config_dir, app_env_file, orama_state_dir
 from orama.setup_model import DesiredSetup, enabled_apps
 
 NETWORK = "orama"  # the network's key inside both compose files
 SHARED_NETWORK = "orama-net"  # its Docker name: created by the core compose, joined by the apps
 QBITTORRENT_WEBUI_PORT = 8090
+PORT_FORWARD_ONLY_PROVIDER = "protonvpn"
 
 
 def _bind(source: object, target: str) -> dict[str, str]:
@@ -42,9 +49,12 @@ def _environment(spec: ServiceSpec, setup: DesiredSetup) -> dict[str, str]:
         if setup.vpn.port_forwarding:
             env["VPN_PORT_FORWARDING"] = "on"
             env["VPN_PORT_FORWARDING_UP_COMMAND"] = GLUETUN_PORT_FORWARD_UP_COMMAND
-            env["PORT_FORWARD_ONLY"] = "on"
+            if setup.vpn.provider == PORT_FORWARD_ONLY_PROVIDER:  # Gluetun refuses it for others
+                env["PORT_FORWARD_ONLY"] = "on"
         if setup.vpn.route_prowlarr:
+            # The password goes in Gluetun's env file (HTTPPROXY_PASSWORD), never here.
             env["HTTPPROXY"] = "on"
+            env["HTTPPROXY_USER"] = GLUETUN_PROXY_USER
         return env
     return {}
 

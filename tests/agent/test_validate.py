@@ -4,7 +4,7 @@ import os
 import pytest
 from conftest import make_setup
 
-from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND
+from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND, GLUETUN_PROXY_USER
 from orama.compose import build_apps_compose
 from orama.layout import app_config_dir, app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
@@ -15,6 +15,7 @@ from orama_agent.validate import (
     safe_path,
     validate_compose,
     validate_env_files,
+    validate_secrets_present,
 )
 
 PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
@@ -68,7 +69,7 @@ def refused_with(doc, roots, match):
 
 @pytest.mark.parametrize(
     "kind",
-    ["minimal", "full", "torrent_no_vpn", "jellyfin_render_only"],
+    ["minimal", "full", "torrent_no_vpn", "jellyfin_render_only", "vpn_other_provider"],
 )
 def test_accepts_builder_output(roots, kind):
     setup = {
@@ -77,6 +78,11 @@ def test_accepts_builder_output(roots, kind):
         "torrent_no_vpn": lambda: setup_for(roots, download_methods={"torrent"}),
         "jellyfin_render_only": lambda: setup_for(
             roots, media_servers={"jellyfin"}, render_gid=44
+        ),
+        "vpn_other_provider": lambda: setup_for(
+            roots,
+            download_methods={"torrent"},
+            vpn={"provider": "mullvad", "port_forwarding": True, "route_prowlarr": True},
         ),
     }[kind]()
     validate_compose(build_apps_compose(setup), roots)
@@ -251,6 +257,7 @@ def test_full_setup_has_both_gluetun_options(roots):
     env = good_doc(roots)["services"]["gluetun"]["environment"]
     assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == GLUETUN_PORT_FORWARD_UP_COMMAND
     assert env["PORT_FORWARD_ONLY"] == "on" and env["HTTPPROXY"] == "on"
+    assert env["HTTPPROXY_USER"] == GLUETUN_PROXY_USER
 
 
 @pytest.mark.parametrize(
@@ -261,6 +268,10 @@ def test_full_setup_has_both_gluetun_options(roots):
         {"orama": {"name": "orama-net", "external": True, "driver": "host"}},
         {"orama": {"name": "orama-net", "external": True}, "other": {"driver": "bridge"}},
         {"orama": {"name": "orama-net", "external": False}},
+        {"orama": {"name": "orama-net", "external": 1}},
+        {"orama": {"name": "orama-net", "external": "true"}},
+        {"orama": {"name": ["orama-net"], "external": True}},
+        {"orama": ["orama-net"]},
         {"orama": {"name": "orama-net"}},
         {"orama": {"external": True}},
         {"orama": {"driver": "host"}},
@@ -702,6 +713,55 @@ def test_refuses_httpproxy_value_other_than_on(roots, value):
     refused(doc, roots)
 
 
+def gluetun_env(doc):
+    return doc["services"]["gluetun"]["environment"]
+
+
+def test_refuses_httpproxy_without_user(roots):
+    doc = good_doc(roots)
+    del gluetun_env(doc)["HTTPPROXY_USER"]
+    refused_with(doc, roots, "proxy")
+
+
+def test_refuses_proxy_user_without_httpproxy(roots):
+    doc = good_doc(roots)
+    del gluetun_env(doc)["HTTPPROXY"]
+    refused_with(doc, roots, "proxy")
+
+
+@pytest.mark.parametrize("user", ["admin", "Orama", "", "orama "])
+def test_refuses_other_proxy_user(roots, user):
+    doc = good_doc(roots)
+    gluetun_env(doc)["HTTPPROXY_USER"] = user
+    refused(doc, roots)
+
+
+def test_refuses_proxy_password_in_compose(roots):
+    doc = good_doc(roots)
+    gluetun_env(doc)["HTTPPROXY_PASSWORD"] = "x" * 12
+    refused_with(doc, roots, "secrets file")
+
+
+def mullvad_doc(roots):
+    return build_apps_compose(setup_for(
+        roots, download_methods={"torrent"}, vpn={"provider": "mullvad", "port_forwarding": True},
+    ))
+
+
+def test_refuses_port_forward_only_for_other_provider(roots):
+    doc = mullvad_doc(roots)
+    validate_compose(doc, roots)
+    gluetun_env(doc)["PORT_FORWARD_ONLY"] = "on"
+    refused_with(doc, roots, "ProtonVPN")
+
+
+@pytest.mark.parametrize("key", ["PORT_FORWARD_ONLY", "VPN_PORT_FORWARDING_UP_COMMAND"])
+def test_refuses_port_forward_options_without_port_forwarding(roots, key):
+    doc = good_doc(roots)
+    del gluetun_env(doc)["VPN_PORT_FORWARDING"]
+    refused_with(doc, roots, "port forwarding")
+
+
 @pytest.mark.parametrize("value", ["off", "yes", ""])
 def test_refuses_port_forward_only_value_other_than_on(roots, value):
     doc = good_doc(roots)
@@ -710,7 +770,7 @@ def test_refuses_port_forward_only_value_other_than_on(roots, value):
 
 
 @pytest.mark.parametrize(
-    "key", ["VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY", "HTTPPROXY"]
+    "key", ["VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY", "HTTPPROXY", "HTTPPROXY_USER"]
 )
 def test_gluetun_options_refused_on_other_apps(roots, key):
     doc = good_doc(roots)
@@ -841,6 +901,30 @@ def test_env_files_accepts_builder_shape(roots):
         },
         roots,
     )
+
+
+def test_env_files_accept_gluetun_proxy_password(roots):
+    validate_env_files(
+        {"gluetun": {"WIREGUARD_PRIVATE_KEY": "k+/=", "HTTPPROXY_PASSWORD": "a-b_c"}}, roots
+    )
+    with pytest.raises(Refused):
+        validate_env_files({"sonarr": {"HTTPPROXY_PASSWORD": "a-b_c"}}, roots)
+
+
+@pytest.mark.parametrize(
+    "gluetun_env_file",
+    [None, {"WIREGUARD_PRIVATE_KEY": "k"}, {"WIREGUARD_PRIVATE_KEY": "k", "HTTPPROXY_PASSWORD": ""}],
+)
+def test_proxy_user_requires_a_proxy_password(roots, gluetun_env_file):
+    env_files = {} if gluetun_env_file is None else {"gluetun": gluetun_env_file}
+    with pytest.raises(Refused, match="proxy"):
+        validate_secrets_present(good_doc(roots), env_files)
+
+
+def test_proxy_password_present_is_accepted(roots):
+    env_files = {"gluetun": {"WIREGUARD_PRIVATE_KEY": "k", "HTTPPROXY_PASSWORD": "p"}}
+    validate_secrets_present(good_doc(roots), env_files)
+    validate_secrets_present(build_apps_compose(setup_for(roots)), {})  # no proxy, no need
 
 
 def test_env_files_only_allowed_names(roots):

@@ -31,6 +31,7 @@ from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
+    VPN_KEY_NAME,
     MissingSecret,
     SecretStore,
     ensure_app_keys,
@@ -345,7 +346,9 @@ def apply(setup_path: Path) -> None:
         others = {p for a, p in setup.ports.items() if a not in apps}
         ports = assign_ports(apps, previous=setup.ports, taken=others)
         setup = setup.model_copy(update={"ports": {**setup.ports, **ports}})
-        ensure_app_keys(store, apps)
+        ensure_app_keys(
+            store, apps, gluetun_proxy=setup.vpn is not None and setup.vpn.route_prowlarr
+        )
         folders = [str(p) for p in data_folders(setup.data_root)]
         folders += [str(app_config_dir(setup.config_root, a)) for a in apps]
         client.ensure_folders(folders)
@@ -355,7 +358,7 @@ def apply(setup_path: Path) -> None:
     except AgentError as e:
         raise Failed(e.message) from None
     except MissingSecret as e:  # named in plain words, never shown
-        if e.app == "gluetun":
+        if e.secret_name == VPN_KEY_NAME:
             raise Failed(
                 "The VPN key has not been entered yet. VPN setup arrives with the setup "
                 "page; turn the VPN off for now."

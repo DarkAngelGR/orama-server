@@ -21,7 +21,8 @@ from orama.catalog import CATALOG
 from orama.setup_model import DesiredSetup, enabled_apps
 
 _KEYED_APPS = ("sonarr", "radarr", "prowlarr")
-_VPN_KEY_NAME = "vpn:wireguard_private_key"
+VPN_KEY_NAME = "vpn:wireguard_private_key"
+_PROXY_PASSWORD_NAME = "password:gluetun-proxy"
 _MIN_LITERAL_LEN = 4
 _PATTERN = re.compile(r"(?i)(api[_-]?key|token|password|private[_-]?key)[\"'=:\s]+\S+")
 
@@ -104,11 +105,17 @@ def generate_api_key() -> str:
     return secrets.token_hex(16)
 
 
-def ensure_app_keys(store: SecretStore, apps: list[str]) -> None:
-    """Create ``apikey:<app>`` for sonarr/radarr/prowlarr if missing; never overwrite."""
+def ensure_app_keys(store: SecretStore, apps: list[str], *, gluetun_proxy: bool = False) -> None:
+    """Create missing app secrets; never overwrite.
+
+    ``apikey:<app>`` for sonarr/radarr/prowlarr, and with ``gluetun_proxy`` (Prowlarr via
+    the VPN) the password for Gluetun's HTTP proxy when Gluetun runs.
+    """
     for app in apps:
         if app in _KEYED_APPS and store.get(f"apikey:{app}") is None:
             store.set(f"apikey:{app}", generate_api_key())
+    if gluetun_proxy and "gluetun" in apps and store.get(_PROXY_PASSWORD_NAME) is None:
+        store.set(_PROXY_PASSWORD_NAME, secrets.token_urlsafe(24))
 
 
 class MissingSecret(KeyError):
@@ -124,15 +131,25 @@ def env_files_for(setup: DesiredSetup, store: SecretStore) -> dict[str, dict[str
     """``{app: {ENV: value}}`` for enabled apps that have secret env vars."""
     result: dict[str, dict[str, str]] = {}
     for app in enabled_apps(setup):
-        spec = CATALOG[app]
-        if not spec.secret_env:
-            continue
-        secret_name = _VPN_KEY_NAME if app == "gluetun" else f"apikey:{app}"
-        value = store.get(secret_name)
-        if value is None:
-            raise MissingSecret(secret_name, app)
-        result[app] = {env: value for env in spec.secret_env}
+        values = {}
+        for env, secret_name in _secret_names(app, setup).items():
+            value = store.get(secret_name)
+            if value is None:
+                raise MissingSecret(secret_name, app)
+            values[env] = value
+        if values:
+            result[app] = values
     return result
+
+
+def _secret_names(app: str, setup: DesiredSetup) -> dict[str, str]:
+    """``{ENV: store name}`` for one app's env file."""
+    if app == "gluetun":
+        names = {"WIREGUARD_PRIVATE_KEY": VPN_KEY_NAME}
+        if setup.vpn is not None and setup.vpn.route_prowlarr:
+            names["HTTPPROXY_PASSWORD"] = _PROXY_PASSWORD_NAME
+        return names
+    return {env: f"apikey:{app}" for env in CATALOG[app].secret_env}
 
 
 class RedactingFilter(logging.Filter):

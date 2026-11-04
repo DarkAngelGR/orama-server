@@ -17,7 +17,7 @@ from orama import cli
 from orama.__main__ import make_server
 from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
-from orama.secrets import SecretStore
+from orama.secrets import SecretStore, ensure_app_keys
 from orama.setup_model import DesiredSetup, VpnConfig, enabled_apps
 from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
@@ -525,6 +525,41 @@ def test_apply_undecryptable_secret_store(capsys, caplog, roots, agent):
     assert "0123456789abcdef" not in out.err + out.out + caplog.text
 
 
+def test_apply_with_prowlarr_via_vpn_sends_proxy_password(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data, download_methods={"torrent"},
+                       vpn=VpnConfig(route_prowlarr=True))
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    store.set("vpn:wireguard_private_key", "k" * 8)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 0, out.err
+    password = store.get("password:gluetun-proxy")
+    assert password
+    assert f"HTTPPROXY_PASSWORD='{password}'" in (cfg / "app-env" / "gluetun.env").read_text()
+    compose_text = (cfg / "compose.yaml").read_text()
+    assert password not in compose_text and password not in out.out + out.err
+    env = yaml.safe_load(compose_text)["services"]["gluetun"]["environment"]
+    assert env["HTTPPROXY"] == "on" and env["HTTPPROXY_USER"] == "orama"
+
+
+def test_apply_missing_proxy_password_is_not_called_a_vpn_key(capsys, caplog, roots, agent,
+                                                              monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data, download_methods={"torrent"},
+                       vpn=VpnConfig(route_prowlarr=True))
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    ensure_app_keys(store, ["sonarr", "radarr", "prowlarr"])
+    store.set("vpn:wireguard_private_key", "k" * 8)
+    monkeypatch.setattr(cli, "ensure_app_keys", lambda store, apps, **kw: None)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert_clean_failure(out, caplog, cfg, "Orama could not find the key it keeps for ")
+    assert "VPN key" not in out.err and "password:" not in out.err
+    assert agent.up_calls == 0
+
+
 def test_apply_missing_vpn_key(capsys, caplog, roots, agent):
     data, cfg = roots
     path = write_setup(cfg, data, download_methods={"torrent"}, vpn=VpnConfig())
@@ -540,7 +575,7 @@ def test_apply_missing_vpn_key(capsys, caplog, roots, agent):
 def test_apply_missing_app_key_is_plain(capsys, caplog, roots, agent, monkeypatch):
     data, cfg = roots
     path = write_setup(cfg, data)
-    monkeypatch.setattr(cli, "ensure_app_keys", lambda store, apps: None)
+    monkeypatch.setattr(cli, "ensure_app_keys", lambda store, apps, **kw: None)
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr()
     assert code == 1

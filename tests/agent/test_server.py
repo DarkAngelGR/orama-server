@@ -624,3 +624,16 @@ def test_failed_restart_redacts_stored_env_values(real_agent, roots, caplog):
     )
     assert "restart failed: token=***" in caplog.text
     assert STORED not in caplog.text and STORED not in err.value.message
+
+
+def test_apply_refuses_proxy_without_password(agent, roots):
+    doc = build_apps_compose(setup_for(
+        roots, download_methods={"torrent"}, vpn={"route_prowlarr": True}))
+    env = {app: {name: SECRET for name in CATALOG[app].secret_env}
+           for app in doc["services"] if CATALOG[app].secret_env}
+    del env["gluetun"]["HTTPPROXY_PASSWORD"]
+    agent.client.ensure_folders(all_folders(roots, doc))
+    with pytest.raises(AgentError, match="proxy"):
+        agent.client.apply(doc, env)
+    env["gluetun"]["HTTPPROXY_PASSWORD"] = SECRET
+    agent.client.apply(doc, env)

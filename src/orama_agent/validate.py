@@ -21,13 +21,21 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
 
-from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND, ServiceSpec
-from orama.compose import NETWORK, QBITTORRENT_WEBUI_PORT, SHARED_NETWORK
+from orama.catalog import (
+    CATALOG,
+    GLUETUN_PORT_FORWARD_UP_COMMAND,
+    GLUETUN_PROXY_USER,
+    ServiceSpec,
+)
+from orama.compose import (
+    NETWORK,
+    PORT_FORWARD_ONLY_PROVIDER,
+    QBITTORRENT_WEBUI_PORT,
+    SHARED_NETWORK,
+)
 from orama.layout import app_config_dir, app_env_file
 
 PROJECT_NAME = "orama-apps"
-# The core compose creates the shared network; the apps may only join it, never define one.
-NETWORKS = {NETWORK: {"name": SHARED_NETWORK, "external": True}}
 RESTART = "unless-stopped"
 DOCKER_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
 MEDIA_SERVERS = frozenset({"plex", "jellyfin"})
@@ -151,7 +159,7 @@ def validate_compose(doc: dict, roots: Roots) -> None:
         raise Refused(f"The apps description has unsupported sections: {_names(extra)}.")
     if doc.get("name") != PROJECT_NAME:
         raise Refused(f"The apps project must be called {PROJECT_NAME}.")
-    if doc.get("networks") != NETWORKS:
+    if not _is_shared_network(doc.get("networks")):
         raise Refused(f"The apps may only join Orama's shared network '{SHARED_NETWORK}'.")
     services = doc.get("services")
     if not isinstance(services, dict):
@@ -164,6 +172,24 @@ def validate_compose(doc: dict, roots: Roots) -> None:
         _validate_service(name, CATALOG[name], svc, services, roots)
     # Folders may not exist before the first deploy; whatever exists must not be a link.
     _check_host_paths(doc, roots, must_exist=False)
+
+
+def _is_shared_network(networks: Any) -> bool:
+    """Exactly ``{orama: {name: orama-net, external: true}}``, compared by type too.
+
+    The core compose creates the shared network; the apps may only join it, never define
+    one. ``==`` alone would accept ``external: 1``.
+    """
+    if not isinstance(networks, dict) or list(networks) != [NETWORK]:
+        return False
+    net = networks[NETWORK]
+    return (
+        isinstance(net, dict)
+        and set(net) == {"name", "external"}
+        and type(net["name"]) is str
+        and net["name"] == SHARED_NETWORK
+        and net["external"] is True
+    )
 
 
 def _refuse_interpolation(node: Any, depth: int) -> None:
@@ -292,6 +318,7 @@ def _expected_environment(
             "VPN_PORT_FORWARDING_UP_COMMAND": GLUETUN_PORT_FORWARD_UP_COMMAND,
             "PORT_FORWARD_ONLY": "on",
             "HTTPPROXY": "on",
+            "HTTPPROXY_USER": GLUETUN_PROXY_USER,
         }
     return {}, {}
 
@@ -317,6 +344,25 @@ def _validate_environment(name: str, spec: ServiceSpec, svc: dict, roots: Roots)
     missing = set(required) - set(environment)
     if missing:
         raise Refused(f"{name} is missing required settings: {_names(missing)}.")
+    if spec.env_style == "gluetun":
+        _validate_gluetun_options(name, environment)
+
+
+def _validate_gluetun_options(name: str, environment: dict[str, str]) -> None:
+    """Only the combinations the builder emits; each value is already pinned."""
+    port_forwarding = "VPN_PORT_FORWARDING" in environment
+    for key in ("VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY"):
+        if key in environment and not port_forwarding:
+            raise Refused(f"{name} may only set {key} when port forwarding is on.")
+    if (
+        "PORT_FORWARD_ONLY" in environment
+        and environment["VPN_SERVICE_PROVIDER"] != PORT_FORWARD_ONLY_PROVIDER
+    ):
+        raise Refused(f"{name} may only limit itself to port-forwarding servers with ProtonVPN.")
+    # The proxy must ask for a password: without one any app could use it to reach
+    # qBittorrent's web page as "localhost".
+    if ("HTTPPROXY" in environment) != ("HTTPPROXY_USER" in environment):
+        raise Refused(f"{name} may only turn on its web proxy with Orama's proxy user.")
 
 
 def _validate_hardware(name: str, spec: ServiceSpec, svc: dict) -> None:
@@ -422,6 +468,18 @@ def _check_env_file(name: str, path: Path) -> None:
 
 
 # ---------------------------------------------------------------- env files
+
+
+def validate_secrets_present(doc: dict, env_files: dict[str, dict[str, str]]) -> None:
+    """Refuse an apply whose compose needs a secret its env files leave out.
+
+    Call after ``validate_compose`` and ``validate_env_files``. Gluetun's proxy user without
+    a password would leave the proxy open to every app.
+    """
+    gluetun = doc["services"].get("gluetun") or {}
+    proxy_on = "HTTPPROXY_USER" in gluetun.get("environment", {})
+    if proxy_on and not env_files.get("gluetun", {}).get("HTTPPROXY_PASSWORD"):
+        raise Refused("The VPN's web proxy is on, but its password was not sent.")
 
 
 def validate_env_files(env_files: dict[str, dict[str, str]], roots: Roots) -> None:
