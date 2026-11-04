@@ -23,8 +23,8 @@ Read `AGENTS.md` first.
 | 3 | HTTP client and step engine | ✅ done | c657bc2 |
 | 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | ba80dfe |
 | 5 | SABnzbd and qBittorrent wiring | ✅ done | cba82cc |
-| 6 | Sonarr and Radarr wiring | in progress (Claude) | |
-| 7 | Prowlarr wiring | todo | |
+| 6 | Sonarr and Radarr wiring | ✅ done | 9455d71 |
+| 7 | Prowlarr wiring | in progress (Claude) | |
 | 8 | Step plan; `apply` runs the wiring | todo | |
 | 9 | Integration test: real apps wired, second run changes nothing | todo | |
 | — | Claude Security scan of the Plan 2a changes | todo (Claude only) | |
