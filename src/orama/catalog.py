@@ -84,6 +84,15 @@ CORE: dict[str, ServiceSpec] = {
     )
 }
 
+# Gluetun runs this whenever the VPN forwards a new port, telling qBittorrent (in Gluetun's
+# network, WebUI port 8090, localhost auth off) to listen on it. Gluetun v3.41.3 substitutes
+# {{PORTS}} and splits the line itself; no '$', which the Agent refuses in any compose value.
+# Shared by the compose builder and the Agent's pin so the two cannot drift apart.
+GLUETUN_PORT_FORWARD_UP_COMMAND = (
+    r"""/bin/sh -c 'wget -O- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" """
+    r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
+)
+
 # UGOS Pro web UI ports (HTTP / HTTPS) plus common system ports.
 # verify on device
 UGOS_RESERVED_PORTS: frozenset[int] = frozenset({22, 80, 443, 9999, 9443})

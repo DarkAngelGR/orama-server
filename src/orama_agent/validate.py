@@ -21,13 +21,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
 
-from orama.catalog import CATALOG, ServiceSpec
-from orama.compose import QBITTORRENT_WEBUI_PORT
+from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND, ServiceSpec
+from orama.compose import NETWORK, QBITTORRENT_WEBUI_PORT, SHARED_NETWORK
 from orama.layout import app_config_dir, app_env_file
 
 PROJECT_NAME = "orama-apps"
-NETWORK = "orama"
-NETWORKS = {NETWORK: {"driver": "bridge"}}
+# The core compose creates the shared network; the apps may only join it, never define one.
+NETWORKS = {NETWORK: {"name": SHARED_NETWORK, "external": True}}
 RESTART = "unless-stopped"
 DOCKER_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
 MEDIA_SERVERS = frozenset({"plex", "jellyfin"})
@@ -151,8 +151,8 @@ def validate_compose(doc: dict, roots: Roots) -> None:
         raise Refused(f"The apps description has unsupported sections: {_names(extra)}.")
     if doc.get("name") != PROJECT_NAME:
         raise Refused(f"The apps project must be called {PROJECT_NAME}.")
-    if "networks" in doc and doc["networks"] != NETWORKS:
-        raise Refused(f"Only the '{NETWORK}' bridge network may be defined.")
+    if doc.get("networks") != NETWORKS:
+        raise Refused(f"The apps may only join Orama's shared network '{SHARED_NETWORK}'.")
     services = doc.get("services")
     if not isinstance(services, dict):
         raise Refused("The apps description has no services.")
@@ -287,7 +287,12 @@ def _expected_environment(
         return {"TZ": _WORD}, {}
     if spec.env_style == "gluetun":
         required = {"VPN_SERVICE_PROVIDER": _WORD, "VPN_TYPE": "wireguard", "TZ": _WORD}
-        return required, {"VPN_PORT_FORWARDING": "on"}
+        return required, {
+            "VPN_PORT_FORWARDING": "on",
+            "VPN_PORT_FORWARDING_UP_COMMAND": GLUETUN_PORT_FORWARD_UP_COMMAND,
+            "PORT_FORWARD_ONLY": "on",
+            "HTTPPROXY": "on",
+        }
     return {}, {}
 
 
