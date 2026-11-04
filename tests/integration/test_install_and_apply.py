@@ -198,9 +198,9 @@ def applied(
         assert saved.returncode == 0, f"set-secret {name} failed:\n{saved.stdout}"
 
     status, output = apply(clean_host, outputs, "apply-1")
-    if status not in (0, 1):
-        diagnose_apps_up(clean_host)
-    if len(failure_lines(output)) != 1:
+    failures = failure_lines(output)
+    if len(failures) != 1 or FAKE_SERVER_HOST not in failures[0]:
+        diagnose_apps_up(clean_host, request)
         diagnose_wiring(clean_host, request)
     assert status == 1, f"apply should report only the fake Usenet server (exit {status}):\n{output}"
     wait_until_ready(APPS)
@@ -270,13 +270,15 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
     say("prowlarr schema newznab", f"{st} {found}")
 
 
-def diagnose_apps_up(host: Host) -> None:
+def diagnose_apps_up(host: Host, request: pytest.FixtureRequest) -> None:
     """The Agent hides compose's stderr; rerun its ``up`` here so the CI logs show why."""
     cfg = host.config_root
     out = run(["docker", "compose", "--project-directory", str(cfg),
                "--env-file", str(cfg / "app-env" / "compose.env"), "-p", "orama-apps",
                "-f", str(cfg / "compose.yaml"), "up", "-d", "--wait"], timeout=APPLY_TIMEOUT)
     host.save_log("apply-1-compose-up.log", out.stdout)
+    reporter = request.config.pluginmanager.getplugin("terminalreporter")
+    reporter.write_line(f"--- DIAG compose up (exit {out.returncode}):\n{out.stdout[-3000:]}")
 
 
 def wait_until_ready(apps: list[str]) -> None:
