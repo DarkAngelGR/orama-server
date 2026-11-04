@@ -11,11 +11,15 @@ Read `AGENTS.md` first.
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ▶ in progress — `docs/superpowers/plans/2026-11-03-orama-r1-plan-2a-download-wiring.md` |
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Task 1 in progress by Codex. Linux CI supplies the disposable host. |
 
-## Resume here — Plan 2b
+## Resume here (updated by Claude, 2026-11-04 ~21:00 UTC)
 
-The owner authorized proceeding with Plan 2b while deferring the Plan 2a Claude Security scan. Plan 2a stays open through the scan and subsequent final review. Its reviewed code range is `2c599c9..fc4e513`. Use that end revision when scanning Plan 2a separately from later work.
+Codex is paused; Claude is working. Order of work, first unfinished step first:
 
-Starting point for Claude: the supplemental fixes and connection-limit test are on main. All four [CI jobs](https://github.com/DarkAngelGR/orama-server/actions/runs/41899904626) passed at `fc4e513`. Read AGENTS.md, the Release 1 spec and Plan 1 carry-forward notes. Open [Plan 2b](superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md) and resume Task 1, the pinned-image contract experiments. Local Docker is offline. Run the probes on the disposable Linux CI host and record observed contracts before implementing an adapter.
+1. **Fix the 2 verified Claude Security findings (Plan 2a)** ← NEXT. Both are confirmed 3/3 by the verification panel (scan of `2c599c9..f82dd43`, high effort):
+   - **F3 (MEDIUM)** `src/orama_agent/server.py:125` `_env_file_text` + `src/orama_agent/validate.py:61/516` (`FORBIDDEN_ENV_CHARS`): env-file values are written `KEY='value'` unescaped and only `' \n \r \0` are refused. Compose's dotenv parser treats `\'` as an escaped quote, so a value ending in `\` swallows the next line and the next value becomes a new unpinned `KEY=VALUE` (e.g. `VPN_PORT_FORWARDING_UP_COMMAND` or the kill-switch off) in Gluetun. Fix: allowlist env-file value characters `[A-Za-z0-9_+/=-]` (what generated secrets use; WireGuard keys are base64), refuse everything else; defence in depth: after writing, parse the file the way Compose does and check the parsed keys equal the requested keys. Agent code → most capable model.
+   - **F4 (LOW)** `src/orama/catalog.py:104` `GLUETUN_PORT_FORWARD_UP_COMMAND`: the hook puts the qBittorrent password in wget's argv (`--post-data`), readable via /proc by host users. Fix: write the login form to a private temp file with a shell builtin (umask 077) and use `wget --post-file`, then delete it; update the Agent's pinned string to match.
+2. **Plan 2a final whole-plan review + one fix round** over `2c599c9..HEAD` (includes Codex's supplemental fixes). Then a smaller follow-up Claude Security scan of `f82dd43..HEAD` (Claude only) to cover Codex's Agent edits and the research the usage limit cut short.
+3. **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — resume Task 1, the pinned-image contract experiments (Codex had started; probes run on the disposable Linux CI host).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
@@ -35,7 +39,7 @@ At every task boundary record the latest tested commit, CI result, open decision
 | 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
-| — | Claude Security scan of the Plan 2a changes | ⛔ blocked — needs "Dynamic workflows" on in Claude Code `/config`; the owner starts `/claude-security:claude-security` → scan changes, base `2c599c9` | |
+| — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan of `f82dd43..HEAD` pending | |
 | — | Final whole-plan review + one fix round | ▶ in progress — ChatGPT/Codex hardening; Claude Security scan remains blocked | |
 | — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
 
