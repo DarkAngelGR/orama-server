@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -108,13 +109,17 @@ def test_no_port_forwarding_env_when_disabled():
     assert "VPN_PORT_FORWARDING" not in env
 
 
-# The plan's "Fixed values" hook, changed in the Task 2 fix round: qBittorrent keeps
-# localhost auth on, so the hook logs in first. '$$' is Compose's escape for a literal '$';
-# the password comes from Gluetun's env file.
+# The plan's "Fixed values" hook, changed in the Task 2 fix round (qBittorrent keeps
+# localhost auth on, so the hook logs in first) and again in the Plan 2a security fix
+# (the password goes in a private temp file, never on wget's command line). '$$' is
+# Compose's escape for a literal '$'; the password comes from Gluetun's env file.
 PORT_FORWARD_COMMAND = (
-    r"""/bin/sh -c 'wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies """
-    r"""--keep-session-cookies --post-data "username=orama&password=$$QBT_WEBUI_PASSWORD" """
-    r"""http://127.0.0.1:8090/api/v2/auth/login && wget -qO- --load-cookies /tmp/qbt.cookies """
+    r"""/bin/sh -c 'umask 077; """
+    r"""printf "username=orama&password=%s" "$$QBT_WEBUI_PASSWORD" > /tmp/qbt.login && """
+    r"""wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies --keep-session-cookies """
+    r"""--post-file=/tmp/qbt.login http://127.0.0.1:8090/api/v2/auth/login; """
+    r"""rc=$$?; rm -f /tmp/qbt.login; """
+    r"""[ $$rc -eq 0 ] && wget -qO- --load-cookies /tmp/qbt.cookies """
     r"""--post-data "json={\"listen_port\":{{PORTS}}}" """
     r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
 )
@@ -123,10 +128,133 @@ PORT_FORWARD_COMMAND = (
 def test_port_forward_command_is_the_fixed_value():
     assert GLUETUN_PORT_FORWARD_UP_COMMAND == PORT_FORWARD_COMMAND
     assert f"http://127.0.0.1:{QBITTORRENT_WEBUI_PORT}/" in GLUETUN_PORT_FORWARD_UP_COMMAND
-    # One '$' only, escaped for Compose: the Agent refuses every other '$' in the document.
-    assert GLUETUN_PORT_FORWARD_UP_COMMAND.count("$") == 2
-    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND.replace("$$QBT_WEBUI_PASSWORD", "")
+    # Every '$' is escaped for Compose ('$$'): the Agent refuses every other '$'.
+    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND.replace("$$", "")
     assert f"username={QBITTORRENT_WEBUI_USER}&" in GLUETUN_PORT_FORWARD_UP_COMMAND
+    # The password is only ever a printf argument (a shell builtin), never wget's.
+    assert GLUETUN_PORT_FORWARD_UP_COMMAND.count("QBT_WEBUI_PASSWORD") == 1
+    assert '"username=orama&password=%s" "$$QBT_WEBUI_PASSWORD"' in GLUETUN_PORT_FORWARD_UP_COMMAND
+
+
+def _fake_wget(bin_dir: Path, log: Path, login_rc: int) -> None:
+    """A wget that records its argv, and the post file's mode and body, then exits."""
+    bin_dir.mkdir()
+    script = bin_dir / "wget"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'log="{log}"\n'
+        'printf "%s\\n" "$@" >> "$log"; echo ---- >> "$log"\n'
+        'for a in "$@"; do case "$a" in --post-file=*)\n'
+        '  f="${a#--post-file=}"; stat -c %a "$f" > "$log.mode"; cat "$f" > "$log.body";;\n'
+        "esac; done\n"
+        f'case "$*" in *auth/login*) exit {login_rc};; esac\n'
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+
+
+def _run_hook(tmp_path: Path, password: str, login_rc: int) -> Path:
+    """Run the hook the way Gluetun does: Compose turns '$$' into '$', Gluetun fills
+    {{PORTS}} and splits the line (quotes, no expansion), and the shell runs it."""
+    import shlex
+
+    line = (
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("$$", "$")
+        .replace("{{PORTS}}", "6881")
+        .replace("/tmp/qbt.", f"{tmp_path}/qbt.")
+    )
+    argv = shlex.split(line)
+    assert argv[:2] == ["/bin/sh", "-c"] and len(argv) == 3
+    log = tmp_path / "wget.log"
+    _fake_wget(tmp_path / "bin", log, login_rc)
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "QBT_WEBUI_PASSWORD": password}
+    subprocess.run(argv, env=env, check=False, capture_output=True, timeout=30)
+    return log
+
+
+@pytest.mark.parametrize("login_rc", [0, 4])
+def test_port_forward_hook_keeps_the_password_out_of_argv(tmp_path, login_rc):
+    import secrets
+
+    password = secrets.token_urlsafe(24)
+    log = _run_hook(tmp_path, password, login_rc)
+    calls = [c for c in log.read_text().split("----\n") if c]
+    assert password not in log.read_text()  # no wget argv held it
+    assert (tmp_path / "wget.log.body").read_text() == f"username=orama&password={password}"
+    assert (tmp_path / "wget.log.mode").read_text().strip() == "600"
+    assert not (tmp_path / "qbt.login").exists()  # removed, even when login failed
+    assert "http://127.0.0.1:8090/api/v2/auth/login" in calls[0]
+    if login_rc == 0:
+        assert len(calls) == 2
+        assert '--post-data\njson={"listen_port":6881}\n' in calls[1]
+    else:
+        assert len(calls) == 1  # no setPreferences after a failed login
+
+
+def _compose_config(tmp_path: Path, doc: dict) -> dict:
+    path = tmp_path / "compose.yaml"
+    path.write_text(dump_yaml(doc), encoding="utf-8")
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(path), "config", "--format", "json"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    import json
+
+    return json.loads(result.stdout)
+
+
+def _gluetun_only(tmp_path: Path, env_text: str) -> dict:
+    s = full(vpn={"provider": "protonvpn", "port_forwarding": True, "route_prowlarr": True})
+    doc = build_apps_compose(s)
+    env_file = tmp_path / "gluetun.env"
+    env_file.write_text(env_text)
+    gluetun = {**doc["services"]["gluetun"], "env_file": [str(env_file)]}
+    return {**doc, "services": {"gluetun": gluetun}}
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
+def test_real_compose_renders_the_hook_with_single_dollars_and_reads_env_values(tmp_path):
+    import base64
+    import secrets
+
+    from orama_agent.server import _env_file_text
+
+    values = {
+        "WIREGUARD_PRIVATE_KEY": base64.b64encode(os.urandom(32)).decode(),
+        "HTTPPROXY_PASSWORD": secrets.token_urlsafe(24),
+        "QBT_WEBUI_PASSWORD": secrets.token_urlsafe(24),
+    }
+    rendered = _compose_config(tmp_path, _gluetun_only(tmp_path, _env_file_text(values).decode()))
+    env = rendered["services"]["gluetun"]["environment"]
+    # `config` prints a canonical compose file, so each literal '$' comes back as '$$'.
+    # Unchanged output means every '$$' became a literal '$' for the shell; a bare '$'
+    # would have been interpolated away (shown below).
+    assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == GLUETUN_PORT_FORWARD_UP_COMMAND
+    for key, value in values.items():  # Compose reads back exactly what the Agent wrote
+        assert env[key] == value
+
+    unescaped = _gluetun_only(tmp_path, _env_file_text(values).decode())
+    unescaped["services"]["gluetun"]["environment"]["VPN_PORT_FORWARDING_UP_COMMAND"] = (
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("$$", "$")
+    )
+    env = _compose_config(tmp_path, unescaped)["services"]["gluetun"]["environment"]
+    assert "QBT_WEBUI_PASSWORD" not in env["VPN_PORT_FORWARDING_UP_COMMAND"]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
+def test_real_compose_shows_why_a_trailing_backslash_is_refused(tmp_path):
+    # Documents the attack the Agent refuses: Compose reads "\'" as an escaped quote, so
+    # the next line's value becomes a setting of its own. The Agent's parser refuses it.
+    from orama_agent.server import _parse_env_file
+
+    injected = "FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT"
+    text = f"WIREGUARD_PRIVATE_KEY='x\\'\nHTTPPROXY_PASSWORD='{injected}=off #'\n"
+    env = _compose_config(tmp_path, _gluetun_only(tmp_path, text))["services"]["gluetun"][
+        "environment"
+    ]
+    assert env[injected] == "off"
+    assert _parse_env_file(text) is None
 
 
 @pytest.mark.parametrize("enabled", [True, False])

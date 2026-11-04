@@ -18,6 +18,7 @@ import errno
 import json
 import logging
 import os
+import re
 import secrets
 import socketserver
 import stat
@@ -54,6 +55,7 @@ AGENT_DIR_MODE = 0o755  # <config>/config, root-owned
 ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -122,8 +124,60 @@ def _write_atomic(
 
 
 def _env_file_text(values: dict[str, str]) -> bytes:
-    # Single-quoted: compose takes the value literally (validate_env_files refuses quotes).
-    return "".join(f"{key}='{value}'\n" for key, value in values.items()).encode()
+    """One ``KEY='value'`` line per secret, checked to read back exactly as sent.
+
+    ``validate_env_files`` only lets through values Compose takes literally inside single
+    quotes. As a second guard against a future edit, the text is parsed back the way
+    Compose reads it; if that does not give exactly ``values`` (same keys, same values),
+    nothing is written.
+    """
+    text = "".join(f"{key}='{value}'\n" for key, value in values.items())
+    if _parse_env_file(text) != values:
+        raise Refused("A secrets file would not be read back exactly as sent; nothing was written.")
+    return text.encode()
+
+
+def _parse_env_file(text: str) -> dict[str, str] | None:
+    """``{KEY: value}`` as Compose's env-file parser reads ``KEY='value'`` lines.
+
+    Inside single quotes Compose treats a backslash before a quote as an escaped quote (the
+    value then runs on, across lines, to the next unescaped quote) and keeps any other
+    backslash. Only the strict form ``_env_file_text`` writes is accepted: each statement is
+    ``KEY='...'`` followed directly by a line break. Anything else, or a repeated key,
+    gives None.
+    """
+    result: dict[str, str] = {}
+    i, end = 0, len(text)
+    while i < end:
+        eq = text.find("=", i)
+        if eq < 0 or not _ENV_KEY.fullmatch(text[i:eq]) or text[eq + 1 : eq + 2] != "'":
+            return None
+        key = text[i:eq]
+        chars: list[str] = []
+        escaped = False
+        j = eq + 2
+        while True:
+            if j >= end:
+                return None  # no closing quote
+            char = text[j]
+            if char == "'":
+                if not escaped:
+                    break  # the closing quote
+                chars.append(char)  # an escaped quote: part of the value
+                escaped = False
+            elif escaped:
+                chars += ["\\", char]  # a backslash Compose keeps, then this character
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            else:
+                chars.append(char)
+            j += 1
+        if text[j + 1 : j + 2] != "\n" or key in result:
+            return None
+        result[key] = "".join(chars)
+        i = j + 2
+    return result
 
 
 def _env_file_values(text: str) -> list[str]:
@@ -224,14 +278,15 @@ class Agent:
         validate_compose(doc, self.roots)
         validate_env_files(env_files, self.roots)
         validate_secrets_present(doc, env_files)
+        env_texts = {app: _env_file_text(values) for app, values in env_files.items()}
 
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
         try:
             env_fd = self._open_env_dir(config_fd)
             try:
                 _write_atomic(env_fd, AGENT_ENV_FILE, b"", 0o600)
-                for app, values in env_files.items():
-                    _write_atomic(env_fd, f"{app}.env", _env_file_text(values), 0o600)
+                for app, text in env_texts.items():
+                    _write_atomic(env_fd, f"{app}.env", text, 0o600)
             finally:
                 os.close(env_fd)
             _write_atomic(config_fd, COMPOSE_FILE, dump_yaml(doc).encode(), 0o644)
