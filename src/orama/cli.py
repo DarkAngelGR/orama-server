@@ -56,6 +56,7 @@ CORE_COMPOSE_FILE = "core.compose.yaml"
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
 SECRETS_FILE = "secrets.bin"
+RESTART_PENDING = "restart:gluetun-qbittorrent"
 QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
 SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
@@ -399,10 +400,15 @@ def apply(setup_path: Path) -> int:
         seeded = _seed_logins(client, store, apps)
         for app in seeded:
             print(f"✓ {display_name(app)}: login details set", flush=True)
-        if "qbittorrent" in seeded and setup.vpn is not None and setup.vpn.port_forwarding:
+        forwarding = setup.vpn is not None and setup.vpn.port_forwarding
+        if "qbittorrent" in seeded and forwarding:
+            # Remembered until both restarts worked, so a failed one is tried again next apply.
+            store.set(RESTART_PENDING, "1")
+        if "qbittorrent" in apps and forwarding and store.get(RESTART_PENDING) == "1":
             # Gluetun's port-forward hook logs in to qBittorrent; run it again with the new login.
             client.restart("gluetun")
             client.restart("qbittorrent")
+            store.set(RESTART_PENDING, "")
     except AgentError as e:
         raise Failed(e.message) from None
     except MissingSecret as e:  # named in plain words, never shown
