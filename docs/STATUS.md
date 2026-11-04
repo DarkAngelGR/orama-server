@@ -18,8 +18,8 @@ Read `AGENTS.md` first.
 
 | # | Task | State | Commit |
 |---|---|---|---|
-| 1 | Shared network and Gluetun options (compose + Agent pins) | in progress (Claude) | |
-| 2 | Agent `seed-config` for SABnzbd and qBittorrent | todo | |
+| 1 | Shared network and Gluetun options (compose + Agent pins) | ✅ done | 77088f8, f530272 |
+| 2 | Agent `seed-config` for SABnzbd and qBittorrent | in progress (Claude) | |
 | 3 | HTTP client and step engine | todo | |
 | 4 | Indexers and Usenet servers in the setup; `set-secret` | todo | |
 | 5 | SABnzbd and qBittorrent wiring | todo | |
@@ -35,3 +35,9 @@ Read `AGENTS.md` first.
 - Task 5 also updates the integration test's data-folder list (now 11 folders, with `downloads/usenet/incomplete`).
 - "Nothing changed on the second run" means: no wiring `✓ <App>:` lines, no `✗` lines except expected
   failures, and the deploy part reports nothing to change. An always-printed `✓ Folders ready` is fine.
+- Gluetun's web proxy (the "send Prowlarr through the VPN" option) needs a login: user `orama` (in the compose file) and a
+  generated password (`password:gluetun-proxy`, only in Gluetun's env file). Reason: with qBittorrent's localhost login
+  turned off for the port-forward hook, an open proxy would let any app take over qBittorrent. Task 7 must send these
+  credentials to Prowlarr.
+- `PORT_FORWARD_ONLY=on` is set only for ProtonVPN (Gluetun rejects it for other providers).
+- Hosts set up before Task 1 need `install.sh` run again, so it creates the shared network `orama-net`.
