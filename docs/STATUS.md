@@ -22,8 +22,8 @@ Read `AGENTS.md` first.
 | 2 | Agent `seed-config` for SABnzbd and qBittorrent | ✅ done | be74c0f, 1c82c35 |
 | 3 | HTTP client and step engine | ✅ done | c657bc2 |
 | 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | ba80dfe |
-| 5 | SABnzbd and qBittorrent wiring | in progress (Claude) | |
-| 6 | Sonarr and Radarr wiring | todo | |
+| 5 | SABnzbd and qBittorrent wiring | ✅ done | cba82cc |
+| 6 | Sonarr and Radarr wiring | in progress (Claude) | |
 | 7 | Prowlarr wiring | todo | |
 | 8 | Step plan; `apply` runs the wiring | todo | |
 | 9 | Integration test: real apps wired, second run changes nothing | todo | |
