@@ -22,13 +22,13 @@ class FakeSab:
         self.passwords = {}
         self.login_ok = login_ok
         self.http = FakeHttp()
-        self.http.route("GET", "/api", self.handle)
+        self.http.route("POST", "/api", self.handle)
 
     def writes(self):
-        return [c for c in self.http.calls if c.params["mode"] == "set_config"]
+        return [c for c in self.http.calls if c.form["mode"] == "set_config"]
 
     def handle(self, call):
-        p = call.params
+        p = call.form
         assert p["apikey"] == KEY and p["output"] == "json"
         mode = p["mode"]
         if mode == "version":
@@ -129,12 +129,14 @@ def test_awkward_password_arrives_intact(tmp_path):
     sab = FakeSab()
     setup, store = make(tmp_path)
     run_steps(sabnzbd_steps(setup, store, sab.http))
-    [write] = [c for c in sab.writes() if c.params["section"] == "servers"]
-    assert write.params["password"] == AWKWARD
-    wire = parse_qs(urlencode(write.params))  # what the real client puts on the wire
+    [write] = [c for c in sab.writes() if c.form["section"] == "servers"]
+    assert write.form["password"] == AWKWARD
+    assert write.params is None  # API key and server password are never put in the URL.
+    assert all(AWKWARD not in c.url for c in sab.http.calls)
+    wire = parse_qs(urlencode(write.form))  # what the real client puts on the wire
     assert wire["password"] == [AWKWARD]
     test_call = next(c for c in sab.http.calls if c.params["mode"] == "config")
-    assert test_call.params["password"] == AWKWARD
+    assert test_call.form["password"] == AWKWARD
 
 
 def test_failed_server_test_is_plain_and_blocks_nothing(tmp_path):
@@ -164,8 +166,8 @@ def test_missing_server_password_is_reported_without_secrets(tmp_path):
 
 def test_wrong_api_key_is_plain(tmp_path):
     sab = FakeSab()
-    sab.http.route("GET", "/api", lambda c: (
-        Response(200, {}, b'{"version": "5"}') if c.params["mode"] == "version"
+    sab.http.route("POST", "/api", lambda c: (
+        Response(200, {}, b'{"version": "5"}') if c.form["mode"] == "version"
         else Response(200, {}, b'{"status": false, "error": "API Key Incorrect"}')))
     setup, store = make(tmp_path)
     by = {r.name: r for r in run_steps(sabnzbd_steps(setup, store, sab.http))}

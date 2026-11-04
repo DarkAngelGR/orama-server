@@ -7,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -868,3 +869,33 @@ def test_compose_runner_stop_and_start(roots):
             runner.stop(bad)
         with pytest.raises(Refused):
             runner.start(bad)
+
+
+
+def test_agent_bounds_concurrent_connections_and_recovers(agent):
+    # A single slot makes the limit deterministic while the first client idles.
+    agent.server._connection_slots = threading.BoundedSemaphore(1)
+    held = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    held.settimeout(2)
+    held.connect(agent.socket_path)
+    try:
+        for _ in range(100):
+            if not agent.server._connection_slots.acquire(blocking=False):
+                break
+            agent.server._connection_slots.release()
+            time.sleep(0.01)
+        else:
+            pytest.fail("the Agent did not accept the first connection")
+
+        rejected = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        rejected.settimeout(2)
+        try:
+            rejected.connect(agent.socket_path)
+            assert rejected.recv(1) == b""  # excess connection is closed immediately
+        finally:
+            rejected.close()
+    finally:
+        held.close()
+
+    # Releasing an idle slot must restore normal service.
+    assert agent.client.status() == {}

@@ -13,11 +13,43 @@ from typing import Any
 
 
 class Unreachable(Exception):
-    """The app could not be reached at all (refused, DNS failure, timeout)."""
+    """The app could not be reached or returned an unsafe response."""
 
     def __init__(self, app_url: str):
         super().__init__(app_url)
         self.app_url = app_url
+
+
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+
+
+class UnsafeRedirect(Unreachable):
+    """The app attempted to redirect an authenticated API request."""
+
+
+class ResponseTooLarge(Unreachable):
+    """The app returned a response larger than Orama is willing to buffer."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """API requests must never follow redirects, especially across origins."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _read_response(resp: Any, url: str) -> Response:
+    length = resp.headers.get("Content-Length")
+    if length is not None:
+        try:
+            if int(length) > MAX_RESPONSE_BYTES:
+                raise ResponseTooLarge(_origin(url))
+        except ValueError:
+            pass
+    body = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise ResponseTooLarge(_origin(url))
+    return Response(resp.status, dict(resp.headers.items()), body)
 
 
 @dataclass
@@ -45,6 +77,7 @@ class Http:
         self._cookies = CookieJar()
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
+            _NoRedirect(),
             urllib.request.HTTPCookieProcessor(self._cookies),
         )
 
@@ -73,10 +106,12 @@ class Http:
         req = urllib.request.Request(url, data=data, headers=send_headers, method=method.upper())
         try:
             with self._opener.open(req, timeout=timeout) as resp:
-                return Response(resp.status, dict(resp.headers.items()), resp.read())
+                return _read_response(resp, url)
         except urllib.error.HTTPError as err:
             with err:
-                return Response(err.code, dict(err.headers.items()), err.read())
+                if 300 <= err.code < 400:
+                    raise UnsafeRedirect(_origin(url)) from None
+                return _read_response(err, url)
         except (urllib.error.URLError, OSError) as err:
             raise Unreachable(_origin(url)) from err
 
