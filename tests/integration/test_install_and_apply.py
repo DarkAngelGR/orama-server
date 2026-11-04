@@ -198,6 +198,7 @@ def applied(
         saved = run(["docker", "exec", "-i", "orama-server", "python", "-m", "orama.cli",
                      "set-secret", name, "--setup", str(target)], input=secrets.token_hex(16))
         assert saved.returncode == 0, f"set-secret {name} failed:\n{saved.stdout}"
+        outputs.add(clean_host, "set-secret-" + name.replace(":", "-"), saved.stdout)
 
     status, output = apply(clean_host, outputs, "apply-1")
     assert status == 1, f"apply should report only the fake Usenet server (exit {status}):\n{output}"
@@ -460,7 +461,8 @@ def test_sabnzbd_is_wired(clean_host: Host, applied: dict):
     base = f"http://127.0.0.1:{port}/api?output=json&apikey={secrets_['apikey:sabnzbd']}&mode=get_config"
     config = http_json(base)["config"]
     assert config["misc"]["complete_dir"].rstrip("/") == "/data/downloads/usenet"
-    assert {c["name"] for c in config["categories"]} >= {"tv", "movies"}
+    folders = {c["name"]: str(c.get("dir") or "").rstrip("/") for c in config["categories"]}
+    assert folders.get("tv") == "tv" and folders.get("movies") == "movies", folders
     assert "fake" in {s["name"] for s in config["servers"]}
 
 
@@ -478,6 +480,129 @@ def test_qbittorrent_is_wired(clean_host: Host, applied: dict):
                            {"Cookie": cookie})
     assert categories["tv"]["savePath"].rstrip("/") == "/data/downloads/torrents/tv"
     assert categories["movies"]["savePath"].rstrip("/") == "/data/downloads/torrents/movies"
+
+
+PROXY_WIRING = """
+import json, sys
+from pathlib import Path
+from orama.secrets import GLUETUN_PROXY_PASSWORD_NAME, SecretStore
+from orama.setup_model import DesiredSetup
+from orama.wiring.engine import run_steps
+from orama.wiring.http import Http
+from orama.wiring.prowlarr import prowlarr_steps
+
+
+class Memory:  # stands in for the secret store, so the real one is not touched
+    def __init__(self):
+        self.values = {}
+
+    def get(self, name):
+        return self.values.get(name)
+
+    def set(self, name, value):
+        self.values[name] = value
+
+
+real, wanted = sys.argv[1], sys.argv[2]
+request = json.load(sys.stdin)
+store = Memory()
+store.set("apikey:prowlarr", SecretStore(Path(real)).get("apikey:prowlarr"))
+store.set(GLUETUN_PROXY_PASSWORD_NAME, request["password"])
+setup = DesiredSetup.model_validate(request["setup"])
+steps = [s for s in prowlarr_steps(setup, store, Http()) if s.name == wanted]
+print(json.dumps([[r.name, r.status, r.message] for r in run_steps(steps)]))
+"""
+
+
+def prowlarr_api(applied: dict, secrets_: dict[str, str], method: str, path: str,
+                 body=None, params: str = ""):
+    """Prowlarr's own API from the host; returns (status, parsed body or None)."""
+    port = applied["setup"]["ports"]["prowlarr"]
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/v1{path}{params}", data=data, method=method,
+        headers={"X-Api-Key": secrets_["apikey:prowlarr"], "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read()
+            return response.status, (json.loads(raw) if raw.strip() else None)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+
+
+def run_proxy_wiring(setup: dict, step: str, password: str, clean_host: Host) -> list:
+    """The real Prowlarr proxy steps, run inside Orama against the real Prowlarr."""
+    done = run(["docker", "exec", "-i", "orama-server", "python", "-c", PROXY_WIRING,
+                str(clean_host.state_dir / "secrets.bin"), step],
+               input=json.dumps({"setup": setup, "password": password}), timeout=300)
+    assert done.returncode == 0, f"{step} did not run (output withheld)"
+    return json.loads(done.stdout)
+
+
+def test_prowlarr_vpn_proxy_and_masked_secrets(clean_host: Host, applied: dict):
+    """The Http proxy shapes and the proxy-off path against the pinned Prowlarr (no VPN needed)."""
+    from orama.catalog import GLUETUN_PROXY_USER
+
+    secrets_ = stored_secrets(clean_host)
+
+    def api(method, path, body=None, params=""):
+        return prowlarr_api(applied, secrets_, method, path, body, params)
+
+    def listed(kind, name):
+        status, items = api("GET", f"/{kind}")
+        assert status == 200
+        return next((i for i in items if i["name"] == name), None)
+
+    status, schema = api("GET", "/indexerProxy/schema")
+    assert status == 200
+    http_proxy = next((s for s in schema if s.get("implementation") == "Http"), None)
+    assert http_proxy is not None, [s.get("implementation") for s in schema]
+    assert {"host", "port", "username", "password"} <= {f["name"] for f in http_proxy["fields"]}
+
+    on = {**applied["setup"], "vpn": {"route_prowlarr": True}}
+    first_password, second_password = secrets.token_hex(12), secrets.token_hex(12)
+    try:
+        # Create, then update (the password changed), through the real wiring code.
+        assert run_proxy_wiring(on, "prowlarr:proxy", first_password, clean_host) == [
+            ["prowlarr:proxy", "changed", "added the VPN proxy"]]
+        proxy = listed("indexerProxy", "Gluetun (Orama)")
+        assert proxy is not None
+        fields = {f["name"]: f.get("value") for f in proxy["fields"]}
+        assert (fields["host"], fields["port"], fields["username"]) == (
+            "gluetun", 8888, GLUETUN_PROXY_USER)
+        masked = first_password not in json.dumps(proxy)  # Prowlarr masks it when read back
+        assert masked, "Prowlarr showed the proxy password (value withheld)"
+        vpn_tags = [t["id"] for t in api("GET", "/tag")[1] if str(t["label"]).lower() == "vpn"]
+        assert len(vpn_tags) == 1 and vpn_tags[0] in proxy["tags"]
+        assert run_proxy_wiring(on, "prowlarr:proxy", second_password, clean_host) == [
+            ["prowlarr:proxy", "changed", "restored the VPN proxy"]]
+        assert len([p for p in api("GET", "/indexerProxy")[1] if p["name"] == "Gluetun (Orama)"]) == 1
+
+        # Route the indexer through the proxy, then switch the proxy off again: Orama sends
+        # the indexer back with its secret masked and forceSave; Prowlarr must keep the stored one.
+        indexer = listed("indexer", "Fake Newznab")
+        tagged = {**indexer, "tags": sorted({*indexer["tags"], vpn_tags[0]})}
+        assert api("PUT", f"/indexer/{indexer['id']}", tagged, "?forceSave=true")[0] in (200, 202)
+        off = run_proxy_wiring(applied["setup"], "prowlarr:proxy-off", second_password, clean_host)
+        assert off[0][:2] == ["prowlarr:proxy-off", "changed"], off
+        assert "removed the VPN proxy" in off[0][2]
+        assert listed("indexerProxy", "Gluetun (Orama)") is None
+        after = listed("indexer", "Fake Newznab")
+        assert vpn_tags[0] not in after["tags"]
+        assert api("POST", "/indexer/test", after)[0] in (200, 204)
+        # What Prowlarr sent to the indexer is the real key, not the mask.
+        seen = run(["docker", "exec", NEWZNAB, "python", "-c",
+                    ("import urllib.request; print(urllib.request.urlopen("
+                     "'http://127.0.0.1:8000/?t=lastkey').read().decode())")])
+        kept = seen.stdout.strip() == secrets_["indexer:fake:apiKey"]  # never shown on failure
+        assert kept, "Prowlarr did not keep the indexer's stored key (values withheld)"
+    finally:  # leave Prowlarr as the wiring left it, whatever happened above
+        proxy = listed("indexerProxy", "Gluetun (Orama)")
+        if proxy is not None:
+            api("DELETE", f"/indexerProxy/{proxy['id']}")
+        for tag in api("GET", "/tag")[1] or []:
+            if str(tag["label"]).lower() == "vpn":
+                api("DELETE", f"/tag/{tag['id']}")
 
 
 # ---------------------------------------------------------------- run again (RF3)
