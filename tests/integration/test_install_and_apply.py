@@ -47,6 +47,7 @@ SHARED_NETWORK = "orama-net"
 NEWZNAB = "orama-test-newznab"
 FAKE_SERVER_HOST = "fake-nntp.invalid"
 SYNC_TIMEOUT = 120
+WIRED_APPS = ["prowlarr", "sonarr", "radarr", "sabnzbd", "qbittorrent"]
 
 
 @dataclass
@@ -170,7 +171,7 @@ def newznab(clean_host: Host, installed: dict):
 
 @pytest.fixture(scope="module")
 def applied(
-    request: pytest.FixtureRequest, clean_host: Host, installed: dict, newznab, outputs: Outputs,
+    clean_host: Host, installed: dict, newznab, outputs: Outputs,
 ) -> dict:
     setup = dict(installed["draft"])
     setup.update(
@@ -198,10 +199,6 @@ def applied(
         assert saved.returncode == 0, f"set-secret {name} failed:\n{saved.stdout}"
 
     status, output = apply(clean_host, outputs, "apply-1")
-    failures = failure_lines(output)
-    if len(failures) != 1 or FAKE_SERVER_HOST not in failures[0]:
-        diagnose_apps_up(clean_host, request)
-        diagnose_wiring(clean_host, request)
     assert status == 1, f"apply should report only the fake Usenet server (exit {status}):\n{output}"
     wait_until_ready(APPS)
     return {"output": output, "setup": setup}
@@ -219,92 +216,21 @@ def rerun(clean_host: Host, installed: dict, applied: dict, outputs: Outputs) ->
     }
 
 
-def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
-    """Print what the wiring met, secrets scrubbed, so a CI log shows why a step failed."""
-    values = [v for v in stored_secrets(host).values() if len(v) >= 8]
+def app_warnings(host: Host, apps: list[str], lines: int = 30) -> str:
+    """The apps' last warning and error log lines, every stored secret scrubbed out.
 
-    def scrub(text: str) -> str:
+    Shown only when an assertion fails, so a CI log says why an app refused something.
+    """
+    values = [v for v in stored_secrets(host).values() if len(v) >= 8]
+    parts = []
+    for app in apps:
+        log = run(["docker", "logs", "--tail", "2000", f"orama-{app}"]).stdout.splitlines()
+        found = [l for l in log if re.search(r"\b(warn|error|fatal)\b", l, re.IGNORECASE)]
+        text = "\n".join(found[-lines:])
         for v in values:
             text = text.replace(v, "***")
-        return text
-
-    reporter = request.config.pluginmanager.getplugin("terminalreporter")
-    secrets_ = stored_secrets(host)
-    ports = request.getfixturevalue("installed")["draft"]["ports"]  # same ports as applied
-
-    def say(title: str, text: str) -> None:
-        reporter.write_line(f"--- DIAG {title}: {scrub(text)[:1500]}")
-
-    def fetch(url: str, headers=None, data=None):
-        req = urllib.request.Request(url, headers=headers or {}, data=data)
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return r.status, dict(r.headers), r.read().decode(errors="replace")
-        except urllib.error.HTTPError as e:
-            return e.code, dict(e.headers), e.read().decode(errors="replace")
-        except OSError as e:
-            return 0, {}, repr(e)
-
-    sab = f"http://127.0.0.1:{ports['sabnzbd']}/api?output=json&apikey={secrets_['apikey:sabnzbd']}"
-    st, _, body = fetch(sab + "&mode=get_config")
-    try:
-        whole = json.loads(body)["config"]
-        say("sab get_config keys", f"{st} { {k: type(v).__name__ for k, v in whole.items()} }")
-    except (ValueError, KeyError):
-        say("sab get_config keys", f"{st} {body[:300]}")
-    for extra in ("&mode=get_config&section=categories", "&mode=get_config&section=misc&keyword=complete_dir",
-                  "&mode=get_config&section=servers", "&mode=get_config&section=categories&keyword=tv",
-                  "&mode=get_config&section=servers&keyword=fake", "&mode=get_config&section=rss",
-                  "&mode=version"):
-        st, _, body = fetch(sab + extra)
-        say(f"sab {extra}", f"{st} {body[:400]}")
-    ini = run(["docker", "exec", "orama-sabnzbd", "sh", "-c",
-               ("f=$(find /config -name sabnzbd.ini | head -1); "
-                "awk '/^\\[\\[/{p=1} /^\\[[a-z]/{p=0} p || /^\\[(categories|servers)\\]/' \"$f\" | head -60")])
-    say("sab ini categories/servers", ini.stdout)
-    form = urllib.parse.urlencode(
-        {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
-    st, headers, body = fetch(f"http://127.0.0.1:{ports['qbittorrent']}/api/v2/auth/login", data=form)
-    say("qbt login", f"{st} {sorted(headers)} body={body!r}")
-    key = {"X-Api-Key": secrets_["apikey:prowlarr"]}
-    st, _, body = fetch(f"http://127.0.0.1:{ports['prowlarr']}/api/v1/indexer/schema", key)
-    try:
-        found = [(i.get("implementation"), i.get("definitionName"), i.get("name"))
-                 for i in json.loads(body) if "newznab" in json.dumps(i)[:400].lower()]
-    except ValueError:
-        found = body[:300]
-    say("prowlarr schema newznab", f"{st} {found}")
-    try:
-        generic = next(i for i in json.loads(body) if i.get("name") == "Generic Newznab")
-        say("generic newznab template",
-            json.dumps({k: v for k, v in generic.items() if k != "fields"})
-            + " FIELDS " + json.dumps([(f.get("name"), f.get("type"), f.get("value"))
-                                         for f in generic["fields"]]))
-        generic["name"] = "Fake Newznab"
-        generic["enable"] = True
-        generic["appProfileId"] = generic.get("appProfileId") or 1
-        for f in generic["fields"]:
-            if f["name"] == "baseUrl":
-                f["value"] = "http://fake-newznab:8000"
-            if f["name"].lower() == "apikey":
-                f["value"] = secrets_["indexer:fake:apiKey"]
-        st, _, resp = fetch(f"http://127.0.0.1:{ports['prowlarr']}/api/v1/indexer?forceSave=true",
-                            {**key, "Content-Type": "application/json"},
-                            json.dumps(generic).encode())
-        say("prowlarr POST indexer (diagnostic, appProfileId guessed)", f"{st} {resp}")
-    except StopIteration:
-        pass
-
-
-def diagnose_apps_up(host: Host, request: pytest.FixtureRequest) -> None:
-    """The Agent hides compose's stderr; rerun its ``up`` here so the CI logs show why."""
-    cfg = host.config_root
-    out = run(["docker", "compose", "--project-directory", str(cfg),
-               "--env-file", str(cfg / "app-env" / "compose.env"), "-p", "orama-apps",
-               "-f", str(cfg / "compose.yaml"), "up", "-d", "--wait"], timeout=APPLY_TIMEOUT)
-    host.save_log("apply-1-compose-up.log", out.stdout)
-    reporter = request.config.pluginmanager.getplugin("terminalreporter")
-    reporter.write_line(f"--- DIAG compose up (exit {out.returncode}):\n{out.stdout[-3000:]}")
+        parts.append(f"--- {app} warnings and errors:\n{text}")
+    return "\n".join(parts)
 
 
 def wait_until_ready(apps: list[str]) -> None:
@@ -368,14 +294,15 @@ def test_draft_avoids_the_taken_port(installed, blocked_port: int):
 
 # ---------------------------------------------------------------- apply
 
-def test_every_app_runs(applied: dict):
+def test_every_app_runs(clean_host: Host, applied: dict):
     lines = applied["output"].splitlines()
     assert "✓ Folders ready" in lines
     for app in APPS:
         assert f"✓ {app} started" in lines
     # The fake Usenet server cannot log in; that is the one visible, non-blocking failure.
     failures = failure_lines(applied["output"])
-    assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
+    assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], (
+        f"{failures}\n{app_warnings(clean_host, WIRED_APPS)}")
     for app in ("gluetun", "recyclarr"):
         assert run(["docker", "inspect", f"orama-{app}"]).returncode != 0, app
 
@@ -491,7 +418,8 @@ def test_indexer_reaches_sonarr_and_radarr(clean_host: Host, applied: dict, app:
         if any("Fake Newznab" in n for n in names) or time.monotonic() > deadline:
             break
         time.sleep(5)
-    assert any("Fake Newznab" in n for n in names), f"{app} indexers: {names}"
+    assert any("Fake Newznab" in n for n in names), (
+        f"{app} indexers: {names}\n{app_warnings(clean_host, ['prowlarr', app])}")
 
 
 def test_sabnzbd_is_wired(clean_host: Host, applied: dict):
@@ -522,14 +450,15 @@ def test_qbittorrent_is_wired(clean_host: Host, applied: dict):
 
 # ---------------------------------------------------------------- run again (RF3)
 
-def test_second_install_and_apply_change_nothing(installed: dict, rerun: dict):
+def test_second_install_and_apply_change_nothing(clean_host: Host, installed: dict, rerun: dict):
     status, output = rerun["install"]
     assert status == 0, f"second install.sh failed (exit {status}):\n{output}"
     assert orama_port(output) == installed["port"]
     status, output = rerun["apply"]
     assert status == 1, f"second apply: unexpected exit {status}:\n{output}"
     # Deploy and wiring both report nothing: the only ✓ is the always-printed folders line.
-    assert [l for l in output.splitlines() if l.startswith(("✓", "…"))] == ["✓ Folders ready"], output
+    assert [l for l in output.splitlines() if l.startswith(("✓", "…"))] == ["✓ Folders ready"], (
+        f"{output}\n{app_warnings(clean_host, WIRED_APPS)}")
     failures = failure_lines(output)
     assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
     assert failure_lines(output) == failure_lines(rerun["first_apply"])
