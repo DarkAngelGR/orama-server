@@ -9,13 +9,13 @@ Read `AGENTS.md` first.
 |---|---|---|
 | 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ▶ in progress — `docs/superpowers/plans/2026-11-03-orama-r1-plan-2a-download-wiring.md` |
-| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Planning started by Codex at the owner's request. See handoff below. |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Plan written by Codex. Implementation starts at Task 1. |
 
 ## Resume here — Plan 2b
 
 The owner authorized proceeding with Plan 2b while deferring the Plan 2a Claude Security scan. Plan 2a stays open through the scan and subsequent final review. Its reviewed code range is `2c599c9..fc4e513`. Use that end revision when scanning Plan 2a separately from later work.
 
-Starting point for Claude: the supplemental fixes and connection-limit test are on main. All four [CI jobs](https://github.com/DarkAngelGR/orama-server/actions/runs/41899904626) passed at `fc4e513`. Read AGENTS.md, the Release 1 spec and Plan 1 carry-forward notes. The next deliverable is the Plan 2b implementation plan. No Plan 2b product code has been started.
+Starting point for Claude: the supplemental fixes and connection-limit test are on main. All four [CI jobs](https://github.com/DarkAngelGR/orama-server/actions/runs/41899904626) passed at `fc4e513`. Read AGENTS.md, the Release 1 spec and Plan 1 carry-forward notes. Open [Plan 2b](superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md) and claim Task 1, the disposable pinned-image contract checks. All nine implementation tasks are open. The plan and this handoff are documentation only.
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
