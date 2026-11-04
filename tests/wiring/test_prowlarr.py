@@ -65,6 +65,7 @@ class FakeProwlarr:
         self.writes = []
         self.commands = []
         self.test_status = 200
+        self.tested = []
         self.http = FakeHttp()
         r = self.http.route
         r("GET", f"{API}/system/status", self.guard(lambda c: self.ok({"version": "2"})))
@@ -109,6 +110,11 @@ class FakeProwlarr:
         return self.ok({"id": 1}, 201)
 
     def post_test(self, call):
+        self.tested.append(copy.deepcopy(call.json))
+        # Prowlarr 2.7 fails the test of a Newznab indexer sent as it was before saving
+        # (no id, capabilities not read yet); the saved one, as listed, passes.
+        if "id" not in call.json:
+            return Response(400, {}, b"[]")
         return Response(self.test_status, {}, b"[]")
 
     def post(self, call, kind, store):
@@ -287,6 +293,17 @@ def test_failed_test_fails_with_exact_message_and_retests_next_run(tmp_path):
     assert statuses(third)["prowlarr:indexer:geek"] == "unchanged"
     assert statuses(third)["prowlarr:sync"] == "changed"  # the pending sync still happens
     assert len(pw.commands) == 1
+
+
+def test_new_indexer_is_tested_as_prowlarr_saved_it(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "changed"
+    assert by["prowlarr:sync"].status == "changed"
+    saved = pw.by_name(pw.indexers, "NZBGeek")
+    assert [t["id"] for t in pw.tested] == [saved["id"]]
+    assert TRICKY not in json.dumps(pw.tested)  # the listed copy, secrets masked
 
 
 def test_proxy_on_creates_tag_proxy_and_tags_indexer(tmp_path):

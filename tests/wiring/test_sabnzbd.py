@@ -17,8 +17,7 @@ class FakeSab:
 
     def __init__(self, login_ok=True):
         self.misc = {"complete_dir": "Downloads/complete", "download_dir": "Downloads/incomplete"}
-        self.cats = {"*": {"name": "*", "dir": ""}}
-        self.cats_touched = False
+        self.cats = None  # SABnzbd 5 has no categories section until it lists them once
         self.servers = {}
         self.passwords = {}
         self.login_ok = login_ok
@@ -37,14 +36,14 @@ class FakeSab:
         if mode == "get_config":
             section = p["section"]
             # SABnzbd 5.1: a list section is absent until something was added to it.
-            if (section == "categories" and not self.cats_touched) or (
+            if (section == "categories" and self.cats is None) or (
                 section == "servers" and not self.servers
             ):
                 return self.ok({"config": {}})
             if section == "misc":
                 data = dict(self.misc)
             elif section == "categories":
-                data = list(self.cats.values())
+                data = self.listed_cats()
             else:
                 data = [dict(s, password="*" * 8) for s in self.servers.values()]
             return self.ok({"config": {section: data}})
@@ -52,16 +51,27 @@ class FakeSab:
             if p["section"] == "misc":
                 self.misc[p["keyword"]] = p["value"]
             elif p["section"] == "categories":
-                self.cats_touched = True
+                self.cats = self.cats or {}
                 self.cats[p["name"]] = {"name": p["name"], "dir": p["dir"]}
             else:
                 row = {k: v for k, v in p.items() if k not in ("mode", "section", "apikey", "output", "password")}
                 self.servers[p["name"]] = row
                 self.passwords[p["name"]] = p["password"]
             return self.ok({"config": {}})
+        if mode == "get_cats":
+            return self.ok({"categories": [c["name"] for c in self.listed_cats()]})
         if mode == "config" and p["name"] == "test_server":
             return self.ok({"value": {"result": self.login_ok, "message": "x"}})
         raise AssertionError(mode)
+
+    def listed_cats(self):
+        """Like SABnzbd 5's get_categories(): once the list is read without its "*" entry,
+        the default categories are (re)created, replacing any tv/movies set before."""
+        self.cats = self.cats or {}
+        if "*" not in self.cats:
+            for name in ("*", "movies", "tv", "audio", "software"):
+                self.cats[name] = {"name": name, "dir": ""}
+        return list(self.cats.values())
 
     @staticmethod
     def ok(data):
