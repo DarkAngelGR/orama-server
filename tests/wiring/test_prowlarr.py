@@ -182,7 +182,9 @@ def test_step_names_and_dependencies(tmp_path):
     assert steps["prowlarr:app:radarr"].needs == ("wait:prowlarr", "wait:radarr")
     assert steps["prowlarr:indexer:geek"].needs == (
         "wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:app:radarr", "prowlarr:proxy-off")
-    assert steps["prowlarr:sync"].needs[-1] == "prowlarr:indexer:geek"
+    # sync waits for the apps and the proxy step, never for an indexer
+    assert steps["prowlarr:sync"].needs == (
+        "wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:app:radarr", "prowlarr:proxy-off")
 
 
 def test_removed_app_is_not_waited_for_and_its_connection_is_deleted(tmp_path):
@@ -277,7 +279,7 @@ def test_missing_secret_fails_with_exact_message(tmp_path):
     assert by["prowlarr:indexer:geek"].status == "failed"
     assert by["prowlarr:indexer:geek"].message == (
         "The NZBGeek indexer has no API key or password yet — enter it, then run apply again.")
-    assert by["prowlarr:sync"].status == "skipped"
+    assert by["prowlarr:sync"].status == "changed"  # the app connections were added
     assert pw.by_name(pw.indexers, "NZBGeek") is None
 
 
@@ -289,13 +291,13 @@ def test_failed_test_fails_with_exact_message_and_retests_next_run(tmp_path):
     assert by["prowlarr:indexer:geek"].status == "failed"
     assert by["prowlarr:indexer:geek"].message == (
         "NZBGeek did not pass Prowlarr's test — check its address and API key.")
-    assert by["prowlarr:sync"].status == "skipped"
+    assert by["prowlarr:sync"].status == "changed"  # a failing indexer does not block the sync
     again = {r.name: r for r in run(setup, store, pw)}  # still failing: not silently passed
     assert again["prowlarr:indexer:geek"].status == "failed"
+    assert again["prowlarr:sync"].status == "unchanged"
     pw.test_status = 200
     third = run(setup, store, pw)
     assert statuses(third)["prowlarr:indexer:geek"] == "unchanged"
-    assert statuses(third)["prowlarr:sync"] == "changed"  # the pending sync still happens
     assert len(pw.commands) == 1
 
 
@@ -448,7 +450,7 @@ def test_changed_indexer_definition_fails_without_modifying_existing_indexer(tmp
     by = {r.name: r for r in run(setup, store, pw)}
     assert by["prowlarr:indexer:geek"].status == "failed"
     assert "different type" in by["prowlarr:indexer:geek"].message
-    assert by["prowlarr:sync"].status == "skipped"
+    assert by["prowlarr:sync"].status == "unchanged"  # nothing pending, and not blocked
     assert pw.indexers == before
     assert pw.writes == []
 
@@ -549,3 +551,27 @@ def test_proxy_switched_off_removes_proxy_and_tag_from_orama_indexers_only(tmp_p
     again = run(off, store, pw)
     assert all(s == "unchanged" for s in statuses(again).values())
     assert pw.writes == []
+
+
+def test_one_failing_indexer_does_not_block_the_sync_of_the_others(tmp_path):
+    pw = FakeProwlarr()
+    other = IndexerChoice(slug="other", definition="geek", name="Other",
+                          fields={"baseUrl": "https://other.example"}, secret_fields=("apikey",))
+    setup, store = make(tmp_path, indexers=(GEEK, other))  # "other" has no stored key
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:other"].status == "failed"
+    assert by["prowlarr:indexer:geek"].status == "changed"
+    assert by["prowlarr:sync"].status == "changed"
+    assert len(pw.commands) == 1
+
+
+def test_sync_is_skipped_when_an_app_step_fails(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    other = SecretStore(tmp_path / "other.bin")  # no Sonarr key: the Sonarr connection fails
+    for k in ("apikey:prowlarr", "apikey:radarr", "indexer:geek:apikey"):
+        other.set(k, store.get(k))
+    by = {r.name: r for r in run(setup, other, pw)}
+    assert by["prowlarr:app:sonarr"].status == "failed"
+    assert by["prowlarr:sync"].status == "skipped"
+    assert by["prowlarr:sync"].message == "waiting for Prowlarr"

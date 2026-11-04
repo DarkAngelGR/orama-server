@@ -44,21 +44,21 @@ class Step:
 
 def run_steps(steps: list[Step]) -> list[StepResult]:
     results: list[StepResult] = []
-    bad: set[str] = set()  # names of failed or skipped steps
+    # failed or skipped step name -> app of the step that failed first (the root cause)
+    bad: dict[str, str] = {}
     for step in steps:
         blocker = next((n for n in step.needs if n in bad), None)
         if blocker is not None:
-            blocking_app = next((s.app for s in steps if s.name == blocker), step.app)
             results.append(
-                StepResult(step.name, step.app, "skipped", f"waiting for {display_name(blocking_app)}")
+                StepResult(step.name, step.app, "skipped", f"waiting for {display_name(bad[blocker])}")
             )
-            bad.add(step.name)
+            bad[step.name] = bad[blocker]
             continue
         try:
             message = step.run()
         except StepError as err:
             results.append(StepResult(step.name, step.app, "failed", str(err)))
-            bad.add(step.name)
+            bad[step.name] = step.app
         except Exception as err:  # noqa: BLE001  never include err text: may carry secrets
             results.append(
                 StepResult(
@@ -68,7 +68,7 @@ def run_steps(steps: list[Step]) -> list[StepResult]:
                     f"unexpected error in {display_name(step.app)} ({type(err).__name__})",
                 )
             )
-            bad.add(step.name)
+            bad[step.name] = step.app
         else:
             if message is None:
                 results.append(StepResult(step.name, step.app, "unchanged", ""))

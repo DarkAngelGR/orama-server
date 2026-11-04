@@ -313,8 +313,9 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     else:
         steps.append(Step("prowlarr:proxy-off", "prowlarr", proxy_remove, needs=("wait:prowlarr",)))
         indexer_needs += ("prowlarr:proxy-off",)
-    indexer_steps = [indexer_step(c, indexer_needs, proxy_on) for c in setup.indexers]
-    steps += indexer_steps
+    # Sync waits for the apps and the proxy, not for the indexers: one indexer failing
+    # its test must not stop the others from being sent to Sonarr and Radarr.
     sync_needs = ("wait:prowlarr", *(s.name for s in steps[1:]))
+    steps += [indexer_step(c, indexer_needs, proxy_on) for c in setup.indexers]
     steps.append(Step("prowlarr:sync", "prowlarr", sync, needs=sync_needs))
     return steps
