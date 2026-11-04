@@ -9,7 +9,7 @@ def test_data_folders_exact_list():
     root = P("/srv/data")
     assert data_folders(root) == [root / s for s in (
         "media", "media/movies", "media/tv", "downloads", "downloads/usenet",
-        "downloads/usenet/movies", "downloads/usenet/tv", "downloads/torrents",
+        "downloads/usenet/incomplete", "downloads/usenet/movies", "downloads/usenet/tv", "downloads/torrents",
         "downloads/torrents/movies", "downloads/torrents/tv")]
 
 
