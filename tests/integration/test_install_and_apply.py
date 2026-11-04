@@ -253,9 +253,15 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
     except (ValueError, KeyError):
         say("sab get_config keys", f"{st} {body[:300]}")
     for extra in ("&mode=get_config&section=categories", "&mode=get_config&section=misc&keyword=complete_dir",
-                  "&mode=get_config&section=servers", "&mode=get_cats", "&mode=version"):
+                  "&mode=get_config&section=servers", "&mode=get_config&section=categories&keyword=tv",
+                  "&mode=get_config&section=servers&keyword=fake", "&mode=get_config&section=rss",
+                  "&mode=version"):
         st, _, body = fetch(sab + extra)
         say(f"sab {extra}", f"{st} {body[:400]}")
+    ini = run(["docker", "exec", "orama-sabnzbd", "sh", "-c",
+               "f=$(find /config -name sabnzbd.ini | head -1); "
+               "awk '/^\\[\\[/{p=1} /^\\[[a-z]/{p=0} p || /^\\[(categories|servers)\\]/' \"$f\" | head -60"])
+    say("sab ini categories/servers", ini.stdout)
     form = urllib.parse.urlencode(
         {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
     st, headers, body = fetch(f"http://127.0.0.1:{ports['qbittorrent']}/api/v2/auth/login", data=form)
@@ -268,6 +274,26 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
     except ValueError:
         found = body[:300]
     say("prowlarr schema newznab", f"{st} {found}")
+    try:
+        generic = next(i for i in json.loads(body) if i.get("name") == "Generic Newznab")
+        say("generic newznab template",
+            json.dumps({k: v for k, v in generic.items() if k != "fields"})
+            + " FIELDS " + json.dumps([(f.get("name"), f.get("type"), f.get("value"))
+                                         for f in generic["fields"]]))
+        generic["name"] = "Fake Newznab"
+        generic["enable"] = True
+        generic["appProfileId"] = generic.get("appProfileId") or 1
+        for f in generic["fields"]:
+            if f["name"] == "baseUrl":
+                f["value"] = "http://fake-newznab:8000"
+            if f["name"].lower() == "apikey":
+                f["value"] = secrets_["indexer:fake:apiKey"]
+        st, _, resp = fetch(f"http://127.0.0.1:{ports['prowlarr']}/api/v1/indexer?forceSave=true",
+                            {**key, "Content-Type": "application/json"},
+                            json.dumps(generic).encode())
+        say("prowlarr POST indexer (diagnostic, appProfileId guessed)", f"{st} {resp}")
+    except StopIteration:
+        pass
 
 
 def diagnose_apps_up(host: Host, request: pytest.FixtureRequest) -> None:
