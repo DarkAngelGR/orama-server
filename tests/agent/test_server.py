@@ -335,7 +335,7 @@ def test_parse_env_file_follows_composes_single_quote_rules():
     hook_name = "VPN_PORT_FORWARDING_UP_COMMAND"
     text = f"A='x\\'\nB='{hook_name}=id #'\n"
     parsed = _parse_env_file(text)
-    assert parsed is None or set(parsed) != {"A", "B"}
+    assert parsed is None
     assert _parse_env_file("A='x'\nB='y'\n") == {"A": "x", "B": "y"}
     assert _parse_env_file("A='x'\nA='y'\n") is None  # duplicate key
     assert _parse_env_file("A='x' B='y'\n") is None  # trailing text after the quote

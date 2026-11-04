@@ -191,6 +191,21 @@ def test_port_forward_hook_keeps_the_password_out_of_argv(tmp_path, login_rc):
         assert len(calls) == 1  # no setPreferences after a failed login
 
 
+def _compose_available() -> bool:
+    """The docker CLI is there and its `compose` plugin answers (a bare CLI is not enough)."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        done = subprocess.run(["docker", "compose", "version"], capture_output=True, timeout=30,
+                              check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+needs_compose = pytest.mark.skipif(not _compose_available(), reason="docker compose not available")
+
+
 def _compose_config(tmp_path: Path, doc: dict) -> dict:
     path = tmp_path / "compose.yaml"
     path.write_text(dump_yaml(doc), encoding="utf-8")
@@ -213,7 +228,7 @@ def _gluetun_only(tmp_path: Path, env_text: str) -> dict:
     return {**doc, "services": {"gluetun": gluetun}}
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
+@needs_compose
 def test_real_compose_renders_the_hook_with_single_dollars_and_reads_env_values(tmp_path):
     import base64
     import secrets
@@ -242,7 +257,7 @@ def test_real_compose_renders_the_hook_with_single_dollars_and_reads_env_values(
     assert "QBT_WEBUI_PASSWORD" not in env["VPN_PORT_FORWARDING_UP_COMMAND"]
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
+@needs_compose
 def test_real_compose_shows_why_a_trailing_backslash_is_refused(tmp_path):
     # Documents the attack the Agent refuses: Compose reads "\'" as an escaped quote, so
     # the next line's value becomes a setting of its own. The Agent's parser refuses it.
@@ -420,7 +435,7 @@ def test_core_image_overrides():
     assert c["services"]["orama-agent"]["image"] == "a:1"
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")
+@needs_compose
 @pytest.mark.parametrize("kind", ["full", "awkward", "core"])
 def test_real_compose_accepts_generated_yaml(tmp_path, kind):
     if kind == "core":
