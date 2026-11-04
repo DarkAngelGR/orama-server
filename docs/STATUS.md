@@ -28,7 +28,7 @@ Read `AGENTS.md` first.
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
 | — | Claude Security scan of the Plan 2a changes | ⛔ blocked — needs "Dynamic workflows" on in Claude Code `/config`; the owner starts `/claude-security:claude-security` → scan changes, base `2c599c9` | |
-| — | Final whole-plan review + one fix round | todo | |
+| — | Final whole-plan review + one fix round | ▶ in progress — ChatGPT/Codex hardening; Claude Security scan remains blocked | |
 
 ### Decisions made while executing Plan 2a
 
