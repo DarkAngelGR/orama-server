@@ -18,7 +18,7 @@ Read `AGENTS.md` first.
 ## Resume here (updated by Claude, 2026-11-04)
 
 1. **Plan 2a:** code complete — final review + fix wave done, all CI green at `90f04d8` (run 41918698706). Remaining gate: a follow-up Claude Security scan of `f82dd43..HEAD` (Codex's Agent edits + research the first scan's usage limit cut). Claude only; the owner starts it with `/claude-security:claude-security` → Scan changes, base `f82dd43`, right after a usage reset.
-2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — needs the owner's go-ahead. Then resume Task 1, the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
+2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — plan rewritten by Claude (11 tasks, built on Codex's draft and probes); waiting for the owner's review/OK. Then start Task 1, the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
