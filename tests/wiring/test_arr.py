@@ -281,6 +281,42 @@ def test_usenet_switched_off_removes_sabnzbd_client(tmp_path, app):
     assert arr.by_name("qBittorrent (Orama)") is not None
 
 
+@pytest.mark.parametrize("removed,label,kept", [
+    ("sabnzbd", "SABnzbd (Orama)", "qBittorrent (Orama)"),
+    ("qbittorrent", "qBittorrent (Orama)", "SABnzbd (Orama)"),
+])
+def test_removed_downloader_removes_only_its_managed_client(tmp_path, app, removed, label, kept):
+    arr = FakeArr(app)
+    setup, store = make(tmp_path, app)
+    run_steps(arr_steps(app, setup, store, arr.http))
+    mine = arr.add_user_client()
+    before = copy.deepcopy(mine)
+    setup = setup.model_copy(update={"removed_apps": frozenset({removed})})
+    steps = arr_steps(app, setup, store, arr.http)
+    results = run_steps(steps)
+    assert statuses(results)[f"{app}:client:{removed}"] == "changed"
+    assert arr.by_name(label) is None
+    assert arr.by_name(kept) is not None
+    assert arr.clients[mine["id"]] == before
+    assert next(s for s in steps if s.name == f"{app}:client:{removed}").needs == (f"wait:{app}",)
+    arr.writes.clear()
+    again = run_steps(arr_steps(app, setup, store, arr.http))
+    assert all(r.status == "unchanged" for r in again)
+    assert arr.writes == []
+
+
+@pytest.mark.parametrize("removed,label", [
+    ("sabnzbd", "SABnzbd (Orama)"), ("qbittorrent", "qBittorrent (Orama)"),
+])
+def test_removed_downloader_client_is_not_created_on_first_apply(tmp_path, app, removed, label):
+    arr = FakeArr(app)
+    setup, store = make(tmp_path, app)
+    setup = setup.model_copy(update={"removed_apps": frozenset({removed})})
+    results = run_steps(arr_steps(app, setup, store, arr.http))
+    assert statuses(results)[f"{app}:client:{removed}"] == "unchanged"
+    assert arr.by_name(label) is None
+
+
 def test_hardlinks_already_true_means_no_put(tmp_path, app):
     arr = FakeArr(app)
     arr.media["copyUsingHardlinks"] = True

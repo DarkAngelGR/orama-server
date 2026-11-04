@@ -41,3 +41,29 @@ Where these notes differ from the Plan 1 text, these notes describe what was bui
   - Four atomic-writer implementations → one safe-IO module.
   - The Agent doesn't yet check host-port rules.
   - `/dev/dri` is passed whole (spec names `renderD128`).
+
+## Plan 2a carry-forward notes (Codex supplemental review)
+
+Plan 2a is not complete: the dedicated Claude Security scan and the final review after
+that scan remain outstanding. Independent Codex hardening and review do not replace them.
+See `docs/STATUS.md` for task commits and the detailed execution decisions.
+
+- Download wiring uses `orama-net` and container ports. Seed-config runs after the first
+  deploy so SABnzbd and qBittorrent can write defaults. qBittorrent keeps localhost
+  authentication enabled; Gluetun's exact pinned hook logs in using its env-file password.
+- API redirects are refused and response bodies capped. SABnzbd uses POST form bodies
+  and disabled API-parameter logging. The Agent bounds concurrent socket handlers.
+- Indexer display names must be unique because Prowlarr entries are matched by name.
+  Existing setups with duplicate names must be corrected before apply. This refuses an
+  ambiguous setup rather than overwriting one indexer with another.
+- Removing a downloader removes only its Orama-managed Sonarr/Radarr clients, even when
+  the corresponding download method remains selected. User-created clients are kept.
+- Changing an existing indexer's definition under the same name fails clearly without
+  replacing the entry. Restore its original type or use a new name. Automatic replacement
+  is deferred to avoid deleting configuration; the cost is that the old indexer remains
+  and must be managed explicitly. Indexers removed from setup are still not deleted.
+- Plan 2b must add Bazarr subtitle settings and API-key seeding, Recyclarr/TRaSH quality
+  and device profiles, Plex PIN sign-in/claim/libraries, Jellyfin first-run setup/libraries,
+  and the Sonarr/Radarr media-server refresh connections. Preserve the bridge-network
+  discovery and NVIDIA environment follow-ups above. Request webhooks and post-import
+  playback inspection belong to Plan 4.

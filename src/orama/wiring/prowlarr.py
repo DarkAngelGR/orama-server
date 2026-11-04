@@ -115,7 +115,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def upsert(
         *, resource: str, label: str, name: str, pick: Any, want: dict[str, Any],
         secret: str, secret_names: frozenset[str], marker: str, top: dict[str, Any],
-        tag: int | None, base_item: Any = None,
+        tag: int | None, base_item: Any = None, definition: str | None = None,
     ) -> tuple[dict[str, Any], str | None, bool]:
         """Create or fix one item. Returns (item as sent, change message or None, existing)."""
         items = read(resource)
@@ -138,6 +138,15 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             call("POST", resource, json=item, params={"forceSave": "true"})
             store.set(marker, _digest(secret))
             return item, f"added {label}", False
+        if (
+            definition is not None
+            and str(have.get("definitionName", "")).lower() != definition.lower()
+        ):
+            raise StepError(
+                f"{_NAME} already has {label} with a different type — "
+                "restore its original type in the setup, or use a different indexer name. "
+                "The existing indexer was left unchanged."
+            )
         current = {f.get("name"): f.get("value") for f in have.get("fields", [])}
         stale = store.get(marker) != _digest(secret)
         stale = stale or any(have.get(k) != v for k, v in top.items())
@@ -261,6 +270,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 secret_names=frozenset(choice.secret_fields),
                 marker=sent_marker_name(f"indexer:{choice.slug}"), top={"enable": True},
                 tag=vpn_tag_id() if proxy_on else None, base_item=fill_profile,
+                definition=choice.definition,
             )
             if message is not None:
                 # Test the indexer as Prowlarr saved it (with its id and the capabilities it

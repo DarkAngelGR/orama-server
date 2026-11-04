@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from orama.catalog import QBITTORRENT_WEBUI_USER
-from orama.setup_model import DesiredSetup
+from orama.setup_model import DesiredSetup, enabled_apps
 from orama.wiring.engine import Step, StepError, display_name, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
@@ -208,8 +208,9 @@ def arr_steps(
         )
 
     wait_name = f"wait:{app}"
-    usenet = "usenet" in setup.download_methods
-    torrent = "torrent" in setup.download_methods
+    apps = enabled_apps(setup)
+    usenet = "sabnzbd" in apps
+    torrent = "qbittorrent" in apps
     return [
         Step(wait_name, app, wait),
         Step(f"{app}:root-folder", app, root_folder, needs=(wait_name,)),

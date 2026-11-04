@@ -174,6 +174,11 @@ def test_duplicate_indexer_slug_is_refused():
         make_setup(indexers=(_indexer(), _indexer(name="Other")))
 
 
+def test_duplicate_indexer_name_with_distinct_slugs_is_refused():
+    with pytest.raises(ValidationError, match="unique"):
+        make_setup(indexers=(_indexer(), _indexer(slug="other")))
+
+
 def test_duplicate_server_slug_is_refused():
     servers = (UsenetServer(slug="a", host="x.test"), UsenetServer(slug="a", host="y.test"))
     with pytest.raises(ValidationError, match="unique"):
