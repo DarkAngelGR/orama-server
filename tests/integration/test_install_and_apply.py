@@ -35,7 +35,8 @@ ARR_STATUS = {
 }
 DATA_SUBFOLDERS = [
     "media", "media/movies", "media/tv",
-    "downloads", "downloads/usenet", "downloads/usenet/movies", "downloads/usenet/tv",
+    "downloads", "downloads/usenet", "downloads/usenet/incomplete",
+    "downloads/usenet/movies", "downloads/usenet/tv",
     "downloads/torrents", "downloads/torrents/movies", "downloads/torrents/tv",
 ]
 ADDRESS = re.compile(r"Orama is ready\. Open http://\S+:(\d+) in your browser\.")

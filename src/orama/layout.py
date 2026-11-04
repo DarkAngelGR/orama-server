@@ -12,6 +12,7 @@ _DATA_SUBFOLDERS = (
     "media/tv",
     "downloads",
     "downloads/usenet",
+    "downloads/usenet/incomplete",
     "downloads/usenet/movies",
     "downloads/usenet/tv",
     "downloads/torrents",
