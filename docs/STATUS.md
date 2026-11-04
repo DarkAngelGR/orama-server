@@ -8,24 +8,20 @@ Read `AGENTS.md` first.
 | Plan | Contents | State |
 |---|---|---|
 | 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
-| 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ▶ in progress — `docs/superpowers/plans/2026-11-03-orama-r1-plan-2a-download-wiring.md` |
-| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Task 1 in progress by Codex. Linux CI supplies the disposable host. |
+| 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ code done, reviewed, CI green at `90f04d8`; one gate left: follow-up Claude Security scan of `f82dd43..HEAD` (Claude only) — summary in plan-1-notes "Plan 2a — done" |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Plan written by Codex; Task 1 started by Codex, now paused. Waiting for the owner's go-ahead to execute. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
 | 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
 
-## Resume here (updated by Claude, 2026-11-04 ~21:00 UTC)
+## Resume here (updated by Claude, 2026-11-04)
 
-Codex is paused; Claude is working. Order of work, first unfinished step first:
-
-1. **Fix the 2 verified Claude Security findings (Plan 2a)** — DONE in `fa5007b` (tested against real Gluetun v3.41.3); security review of the fix in progress (Claude). If Claude stops before the review reports, re-review `63a9a71..fa5007b` before closing Plan 2a. Both are confirmed 3/3 by the verification panel (scan of `2c599c9..f82dd43`, high effort):
-   - **F3 (MEDIUM)** `src/orama_agent/server.py:125` `_env_file_text` + `src/orama_agent/validate.py:61/516` (`FORBIDDEN_ENV_CHARS`): env-file values are written `KEY='value'` unescaped and only `' \n \r \0` are refused. Compose's dotenv parser treats `\'` as an escaped quote, so a value ending in `\` swallows the next line and the next value becomes a new unpinned `KEY=VALUE` (e.g. `VPN_PORT_FORWARDING_UP_COMMAND` or the kill-switch off) in Gluetun. Fix: allowlist env-file value characters `[A-Za-z0-9_+/=-]` (what generated secrets use; WireGuard keys are base64), refuse everything else; defence in depth: after writing, parse the file the way Compose does and check the parsed keys equal the requested keys. Agent code → most capable model.
-   - **F4 (LOW)** `src/orama/catalog.py:104` `GLUETUN_PORT_FORWARD_UP_COMMAND`: the hook puts the qBittorrent password in wget's argv (`--post-data`), readable via /proc by host users. Fix: write the login form to a private temp file with a shell builtin (umask 077) and use `wget --post-file`, then delete it; update the Agent's pinned string to match.
-2. **Plan 2a final whole-plan review** — DONE (opus, over `2c599c9..eca8998`, CI green there): no critical issues. ← NEXT: one fix wave for its findings I1 (skipped steps name the wrong app; one failed indexer test blocks Prowlarr sync), I2 (Gluetun/qBittorrent restart never retried), I3 (CI check of Prowlarr's Http proxy create/update/delete + masked-secret PUT), I4 (replace literal fake secrets in tests with runtime values), plus minors M1 ("run install again" → "run apply again"; SABnzbd server message covers connection errors), M2 (http.client.HTTPException → Unreachable), M3 (plain errors for an invalid saved setup), M4 (set-secret uses the same store path as apply), M5 (qbittorrent removed while port forwarding on), M9 (integration checks SABnzbd category dirs; leak-scan set-secret output). Then Then a smaller follow-up Claude Security scan of `f82dd43..HEAD` (Claude only) to cover Codex's Agent edits and the research the usage limit cut short.
-3. **Plan 2b** (CI note: the Task 1 probe `test_pinned_notification_contracts` read `name`, which Sonarr/Radarr templates leave empty; fixed to read `implementationName` in the commit after `fa5007b` — check CI is green there) (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — resume Task 1, the pinned-image contract experiments (Codex had started; probes run on the disposable Linux CI host).
+1. **Plan 2a:** code complete — final review + fix wave done, all CI green at `90f04d8` (run 41918698706). Remaining gate: a follow-up Claude Security scan of `f82dd43..HEAD` (Codex's Agent edits + research the first scan's usage limit cut). Claude only; the owner starts it with `/claude-security:claude-security` → Scan changes, base `f82dd43`, right after a usage reset.
+2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — needs the owner's go-ahead. Then resume Task 1, the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
+
 ## Plan 2a — tasks
 
 | # | Task | State | Commit |
@@ -40,7 +36,7 @@ At every task boundary record the latest tested commit, CI result, open decision
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
 | — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan of `f82dd43..HEAD` pending | |
-| — | Final whole-plan review + one fix round | review done (Claude, opus); fix wave next — see Resume here | |
+| — | Final whole-plan review + one fix round | ✅ done — review (opus), fix wave `538750a..90f04d8`, re-review clean, CI green | 90f04d8 |
 | — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
 
 ### Supplemental review fixes (Codex)
