@@ -26,7 +26,13 @@ from orama_agent.runner import (
     FakeRunner,
     RunnerError,
 )
-from orama_agent.server import MAX_REQUEST, AgentServer, _write_atomic
+from orama_agent.server import (
+    MAX_REQUEST,
+    AgentServer,
+    _env_file_text,
+    _parse_env_file,
+    _write_atomic,
+)
 from orama_agent.validate import Refused, Roots
 
 PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
@@ -315,6 +321,40 @@ def test_apply_writes_env_files_0600_and_compose(agent, roots):
     assert stat.S_IMODE(os.lstat(empty_env).st_mode) == 0o600
     assert agent.runner.up_files == [str(compose)]
     assert [p for p in env_dir.iterdir() if p.name.endswith(".tmp")] == []
+
+def test_env_file_text_round_trips_through_composes_parser():
+    values = {"WIREGUARD_PRIVATE_KEY": "ab+/=", "HTTPPROXY_PASSWORD": "c-d_e"}
+    text = _env_file_text(values).decode()
+    assert text == "WIREGUARD_PRIVATE_KEY='ab+/='\nHTTPPROXY_PASSWORD='c-d_e'\n"
+    assert _parse_env_file(text) == values
+
+
+def test_parse_env_file_follows_composes_single_quote_rules():
+    # A backslash before the closing quote escapes it, so the value runs on into the next
+    # line, and what follows the next quote is read as a new setting.
+    hook_name = "VPN_PORT_FORWARDING_UP_COMMAND"
+    text = f"A='x\\'\nB='{hook_name}=id #'\n"
+    parsed = _parse_env_file(text)
+    assert parsed is None or set(parsed) != {"A", "B"}
+    assert _parse_env_file("A='x'\nB='y'\n") == {"A": "x", "B": "y"}
+    assert _parse_env_file("A='x'\nA='y'\n") is None  # duplicate key
+    assert _parse_env_file("A='x' B='y'\n") is None  # trailing text after the quote
+    assert _parse_env_file("A='x") is None  # unterminated
+    assert _parse_env_file("A=x\n") is None  # unquoted
+
+
+@pytest.mark.parametrize(
+    "value", ["x\\", "x'", "a'b", "x\\'y", "a\nB='c'"]
+)
+def test_env_file_text_refuses_values_that_do_not_round_trip(value):
+    # Defence in depth: validate_env_files already refuses these; the renderer checks again.
+    hook_name = "VPN_PORT_FORWARDING_UP_COMMAND"
+    values = {"WIREGUARD_PRIVATE_KEY": value, "HTTPPROXY_PASSWORD": f"{hook_name}=id #"}
+    with pytest.raises(Refused) as exc:
+        _env_file_text(values)
+    assert hook_name not in str(exc.value)
+    assert value not in str(exc.value)
+
 
 def test_apply_refuses_planted_symlink_at_env_file(agent, roots, tmp_path):
     doc, env = prepared(agent, roots)

@@ -1029,6 +1029,68 @@ def test_env_files_refuse_bad_values(roots, value):
         assert value not in str(exc.value)
 
 
+def _marker() -> str:
+    # Built at runtime: no key-shaped literal in the repo.
+    return os.urandom(6).hex()
+
+
+# One of each character class Compose's env-file parser could read as something other
+# than plain text: escape, interpolation, comment, separator, quotes, line breaks, and
+# anything outside ASCII.
+FORBIDDEN_CLASSES = ["\\", "$", "#", " ", '"', "'", "`", "\n", "\r", "\t", "\0", "é", "Ω", "\u00a0"]
+
+
+@pytest.mark.parametrize("bad", FORBIDDEN_CLASSES)
+@pytest.mark.parametrize("where", ["start", "middle", "end"])
+def test_env_files_refuse_every_unsafe_character(roots, bad, where):
+    marker = _marker()
+    value = {"start": bad + marker, "middle": marker + bad + marker, "end": marker + bad}[where]
+    with pytest.raises(Refused) as exc:
+        validate_env_files({"gluetun": {"WIREGUARD_PRIVATE_KEY": value}}, roots)
+    assert marker not in str(exc.value)
+    assert "letters, digits" in str(exc.value)
+
+
+def test_env_files_refuse_the_line_swallowing_exploit(roots):
+    # The scan's shape: a value ending in a backslash makes Compose read the closing quote
+    # as escaped, so the next value would become a new, unpinned setting for Gluetun.
+    hook_name = "VPN_PORT_FORWARDING_UP_COMMAND"
+    marker = _marker()
+    payload = f"{hook_name}=/bin/sh -c {marker} #"
+    with pytest.raises(Refused) as exc:
+        validate_env_files(
+            {"gluetun": {"WIREGUARD_PRIVATE_KEY": marker + "\\", "HTTPPROXY_PASSWORD": payload}},
+            roots,
+        )
+    assert marker not in str(exc.value)
+    assert hook_name not in str(exc.value)
+
+
+def test_env_files_refuse_values_over_512_characters(roots):
+    validate_env_files({"sonarr": {"SONARR__AUTH__APIKEY": "a" * 512}}, roots)
+    with pytest.raises(Refused) as exc:
+        validate_env_files({"sonarr": {"SONARR__AUTH__APIKEY": "a" * 513}}, roots)
+    assert "a" * 20 not in str(exc.value)
+
+
+def test_env_files_accept_real_generated_values(roots):
+    import base64
+    import secrets
+
+    for _ in range(200):
+        validate_env_files(
+            {
+                "gluetun": {
+                    "WIREGUARD_PRIVATE_KEY": base64.b64encode(os.urandom(32)).decode(),
+                    "HTTPPROXY_PASSWORD": secrets.token_urlsafe(24),
+                    "QBT_WEBUI_PASSWORD": secrets.token_urlsafe(24),
+                },
+                "sonarr": {"SONARR__AUTH__APIKEY": secrets.token_hex(16)},
+            },
+            roots,
+        )
+
+
 @pytest.mark.parametrize("env_files", [[], {"sonarr": ["x"]}, {"sonarr": None}])
 def test_env_files_refuse_bad_shapes(roots, env_files):
     with pytest.raises(Refused):

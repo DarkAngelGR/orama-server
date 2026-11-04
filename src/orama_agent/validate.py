@@ -23,6 +23,7 @@ from typing import Any, Self
 
 from orama.catalog import (
     CATALOG,
+    ENV_FILE_VALUE,
     GLUETUN_PORT_FORWARD_UP_COMMAND,
     GLUETUN_PROXY_USER,
     ServiceSpec,
@@ -58,7 +59,6 @@ SERVICE_KEYS = frozenset({
 DANGEROUS_KEYS = frozenset({
     "privileged", "pid", "ipc", "security_opt", "userns_mode", "volumes_from",
 })
-FORBIDDEN_ENV_CHARS = ("'", "\n", "\r", "\0")
 SECRET_ENV_NAMES = frozenset(name for spec in CATALOG.values() for name in spec.secret_env)
 
 _DIGITS = re.compile(r"[0-9]+")
@@ -497,8 +497,10 @@ def validate_env_files(env_files: dict[str, dict[str, str]], roots: Roots) -> No
     """Refuse env files for unknown apps, unexpected names, or unsafe values.
 
     Paths are never taken from the request: the Agent derives each file's location from
-    its own ``roots``. Values are written single-quoted, so quotes and line breaks are
-    refused.
+    its own ``roots``. Values are an allowlist (``ENV_FILE_VALUE``: letters, digits and
+    ``_ + / = -``), never a list of bad characters: Compose's env-file parser gives
+    meaning to backslashes, quotes, '$', '#' and line breaks, and one of those could turn
+    the next value into a new, unchecked setting.
     """
     if not isinstance(env_files, dict):
         raise Refused("The secrets files are not a mapping.")
@@ -513,8 +515,8 @@ def validate_env_files(env_files: dict[str, dict[str, str]], roots: Roots) -> No
                 raise Refused(f"{app} does not accept the secret {_show(key)}.")
             if not isinstance(value, str) or not value:
                 raise Refused(f"The secret {key} for {app} is empty or not text.")
-            if any(c in value for c in FORBIDDEN_ENV_CHARS):
+            if not ENV_FILE_VALUE.fullmatch(value):
                 raise Refused(
-                    f"The secret {key} for {app} contains quotes, line breaks or hidden "
-                    "characters."
+                    f"The secret {key} for {app} may only use letters, digits and _ + / = - "
+                    "(at most 512 characters)."
                 )

@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from orama.agent_client import DEFAULT_SOCKET, AgentClient, AgentError
-from orama.catalog import CATALOG, UGOS_RESERVED_PORTS
+from orama.catalog import CATALOG, ENV_FILE_VALUE, UGOS_RESERVED_PORTS
 from orama.compose import build_apps_compose, build_core_compose, dump_yaml
 from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
@@ -486,6 +486,13 @@ def set_secret(name: str, setup_path: Path) -> None:
     store = SecretStore(setup_path.parent / SECRETS_FILE)
     install_redaction(store)
     value = _read_secret()
+    # The only secret typed by the user that goes into an Agent env file; the Agent accepts
+    # only ENV_FILE_VALUE there, so refuse anything else now rather than at apply.
+    if name == VPN_KEY_NAME and not ENV_FILE_VALUE.fullmatch(value):
+        raise Failed(
+            "The VPN key should look like the one your VPN provider gave you: letters, "
+            "digits, + / =. Nothing was saved."
+        )
     try:
         store.set(name, value)
     except ValueError as e:  # e.g. the store cannot be decrypted; messages hold no values

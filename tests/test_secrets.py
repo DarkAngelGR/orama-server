@@ -378,3 +378,13 @@ def test_env_files_for_missing_qbittorrent_password(tmp_path):
     with pytest.raises(MissingSecret) as ei:
         env_files_for(setup, st)
     assert (ei.value.secret_name, ei.value.app) == ("password:qbittorrent", "gluetun")
+
+
+def test_generated_secrets_fit_the_env_file_allowlist():
+    # Every generated secret may end up in an Agent env file, which accepts only these.
+    from orama.catalog import ENV_FILE_VALUE
+    from orama.secrets import _new_password as new_password
+
+    for _ in range(500):
+        assert ENV_FILE_VALUE.fullmatch(generate_api_key())
+        assert ENV_FILE_VALUE.fullmatch(new_password())

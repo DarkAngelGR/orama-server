@@ -808,7 +808,6 @@ def run_set_secret(capsys, monkeypatch, cfg, argv, stdin):
 @pytest.mark.parametrize(
     "name",
     [
-        "vpn:wireguard_private_key",
         "usenet:main-1:password",
         "indexer:geek:apiKey",
         "indexer:own:extra.field_2",
@@ -835,6 +834,34 @@ def test_set_secret_uses_the_vpn_name_apply_reads(capsys, monkeypatch, roots):
     code, _ = run_set_secret(capsys, monkeypatch, cfg, [VPN_KEY_NAME], FakeStdin("k" * 44))
     assert code == 0
     assert SecretStore(cfg / "orama" / "secrets.bin").get(VPN_KEY_NAME) == "k" * 44
+
+
+def test_set_secret_accepts_a_real_vpn_key(capsys, monkeypatch, roots):
+    import base64
+
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    key = base64.b64encode(os.urandom(32)).decode()  # a WireGuard key's shape
+    code, out = run_set_secret(capsys, monkeypatch, cfg, [VPN_KEY_NAME], FakeStdin(key + "\n"))
+    assert code == 0, out.err
+    assert SecretStore(cfg / "orama" / "secrets.bin").get(VPN_KEY_NAME) == key
+
+
+@pytest.mark.parametrize("bad", ["\\", "$", "#", " ", '"', "'", "`", "\t", "é", "Ω"])
+def test_set_secret_refuses_a_vpn_key_outside_the_allowlist(capsys, caplog, monkeypatch, roots,
+                                                            bad):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    marker = os.urandom(6).hex()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, [VPN_KEY_NAME],
+                               FakeStdin(marker + bad + marker + "\n"))
+    assert code == 1
+    assert out.err.startswith("✗ ") and len(out.err.strip().splitlines()) == 1
+    assert "The VPN key should look like the one your VPN provider gave you" in out.err
+    assert marker not in out.err + out.out + caplog.text
+    assert not (cfg / "orama" / "secrets.bin").exists()
 
 
 def test_set_secret_replaces_and_keeps_others(capsys, monkeypatch, roots):

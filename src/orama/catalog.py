@@ -8,6 +8,7 @@ registry whose tags were actually verified (lscr.io is an alias of it).
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from importlib import metadata
@@ -94,18 +95,31 @@ QBITTORRENT_WEBUI_USER = "orama"
 # - Gluetun v3.41.3 substitutes {{PORTS}}, splits the line itself (quotes, no expansion)
 #   and runs it with its own environment, which holds QBT_WEBUI_PASSWORD from its env
 #   file; the shell expands it. The password is never in compose.yaml.
+# - The password never appears in any command line (readable by every host user through
+#   /proc): the shell's builtin printf writes the login form to a temp file created 0600
+#   (umask 077), wget sends it with --post-file, and the file is removed whether or not
+#   the login worked.
 # - '$$' is Compose's escape for a literal '$'. This exact string is the only '$' the
-#   Agent accepts anywhere in a compose document.
+#   Agent accepts anywhere in a compose document, and every '$' in it is escaped.
 # - qBittorrent accepts a login with no Origin/Referer (not cross-site); the password is
 #   token_urlsafe, so it needs no form encoding.
 # Shared by the compose builder and the Agent's pin so the two cannot drift apart.
 GLUETUN_PORT_FORWARD_UP_COMMAND = (
-    r"""/bin/sh -c 'wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies """
-    r"""--keep-session-cookies --post-data "username=orama&password=$$QBT_WEBUI_PASSWORD" """
-    r"""http://127.0.0.1:8090/api/v2/auth/login && wget -qO- --load-cookies /tmp/qbt.cookies """
+    r"""/bin/sh -c 'umask 077; """
+    r"""printf "username=orama&password=%s" "$$QBT_WEBUI_PASSWORD" > /tmp/qbt.login && """
+    r"""wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies --keep-session-cookies """
+    r"""--post-file=/tmp/qbt.login http://127.0.0.1:8090/api/v2/auth/login; """
+    r"""rc=$$?; rm -f /tmp/qbt.login; """
+    r"""[ $$rc -eq 0 ] && wget -qO- --load-cookies /tmp/qbt.cookies """
     r"""--post-data "json={\"listen_port\":{{PORTS}}}" """
     r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
 )
+
+# Every value in an app's secrets (env) file must match this, checked by the Agent and by
+# `set-secret` for values bound for an env file. Orama's generated secrets (token_hex,
+# token_urlsafe) and WireGuard keys (standard base64) fit. Nothing Compose's env-file
+# parser treats specially can: no quotes, backslash, '$', '#', spaces or line breaks.
+ENV_FILE_VALUE = re.compile(r"[A-Za-z0-9_+/=-]{1,512}")
 
 # User name for Gluetun's HTTP proxy (Prowlarr via the VPN). Its password is a secret in
 # Gluetun's env file. Without auth any container on orama-net could use the proxy to reach
