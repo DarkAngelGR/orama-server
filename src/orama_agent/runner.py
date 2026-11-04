@@ -27,7 +27,7 @@ AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
 # leaves a 60 s margin under the client's default of 4500 s
 # (orama.agent_client.DEFAULT_TIMEOUT).
 PULL_TIMEOUT = 3600  # a first install downloads every app image
-UP_TIMEOUT = 720  # up and restart
+UP_TIMEOUT = 720  # up, restart, stop and start
 CALL_TIMEOUT = 60  # ps
 STDERR_TAIL_LINES = 40
 LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
@@ -36,6 +36,8 @@ _WHAT = {
     "up": "Starting the apps",
     "ps": "Checking the apps",
     "restart": "Restarting the app",
+    "stop": "Stopping the app",
+    "start": "Starting the app",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -159,13 +161,22 @@ class ComposeRunner:
         }
 
     def restart(self, app: str) -> None:
-        self._compose(
-            str(project_file(self._roots)), ["restart", _checked_app(app)], UP_TIMEOUT
-        )
+        self._one_app("restart", app)
+
+    def stop(self, app: str) -> None:
+        self._one_app("stop", app)
+
+    def start(self, app: str) -> None:
+        self._one_app("start", app)
+
+    def _one_app(self, action: str, app: str) -> None:
+        self._compose(str(project_file(self._roots)), [action, _checked_app(app)], UP_TIMEOUT)
 
 
 class FakeRunner:
     """Test double: same methods, records calls, no Docker.
+
+    ``stop`` and ``start`` flip the service's state in ``ps`` between exited and running.
 
     ``up`` returns every service the first time and ``[]`` while the compose file is
     unchanged since the last successful ``up``. ``fail_next_up`` makes the next ``up``
@@ -176,6 +187,9 @@ class FakeRunner:
         self.up_calls = 0
         self.up_files: list[str] = []
         self.restarts: list[str] = []
+        self.stops: list[str] = []
+        self.starts: list[str] = []
+        self._stopped: set[str] = set()
         self.fail_next_up = False
         self._last: str | None = None
         self._services: list[str] = []
@@ -194,7 +208,15 @@ class FakeRunner:
         return list(self._services)
 
     def ps(self) -> dict[str, str]:
-        return {s: "running" for s in self._services}
+        return {s: "exited" if s in self._stopped else "running" for s in self._services}
 
     def restart(self, app: str) -> None:
         self.restarts.append(_checked_app(app))
+
+    def stop(self, app: str) -> None:
+        self.stops.append(_checked_app(app))
+        self._stopped.add(app)
+
+    def start(self, app: str) -> None:
+        self.starts.append(_checked_app(app))
+        self._stopped.discard(app)
