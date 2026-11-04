@@ -1,8 +1,9 @@
 """A tiny Newznab server for the integration test (stdlib only; runs in python:3.12-slim).
 
 ``?t=caps`` answers a minimal valid capabilities document (TV 5000, Movies 2000); every
-other request answers an RSS channel with one release: Prowlarr refuses to save an indexer
-whose test search returns nothing ("Query successful, but no results were returned").
+other request answers an RSS channel with one TV and one movie release. The apps refuse an
+indexer whose test search finds nothing in their categories ("Query successful, but no
+results ... were returned"): Prowlarr, Sonarr (TV) and Radarr (movies) each need one.
 """
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,9 @@ CAPS = b"""<?xml version="1.0" encoding="UTF-8"?>
     <movie-search available="yes" supportedParams="q,imdbid" />
   </searching>
   <categories>
-    <category id="2000" name="Movies" />
+    <category id="2000" name="Movies">
+      <subcat id="2040" name="HD" />
+    </category>
     <category id="5000" name="TV">
       <subcat id="5040" name="HD" />
     </category>
@@ -27,11 +30,11 @@ CAPS = b"""<?xml version="1.0" encoding="UTF-8"?>
 </caps>
 """
 
-EMPTY = b"""<?xml version="1.0" encoding="UTF-8"?>
+RESULTS = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
   <channel>
     <title>Fake Newznab</title>
-    <newznab:response offset="0" total="1" />
+    <newznab:response offset="0" total="2" />
     <item>
       <title>Fake.Show.S01E01.1080p.WEB-DL</title>
       <guid isPermaLink="true">http://fake-newznab:8000/details/1</guid>
@@ -43,6 +46,17 @@ EMPTY = b"""<?xml version="1.0" encoding="UTF-8"?>
       <newznab:attr name="category" value="5040" />
       <newznab:attr name="size" value="1048576" />
     </item>
+    <item>
+      <title>Fake.Movie.2025.1080p.WEB-DL</title>
+      <guid isPermaLink="true">http://fake-newznab:8000/details/2</guid>
+      <link>http://fake-newznab:8000/getnzb/2.nzb</link>
+      <pubDate>Mon, 03 Nov 2025 12:00:00 +0000</pubDate>
+      <category>Movies &gt; HD</category>
+      <enclosure url="http://fake-newznab:8000/getnzb/2.nzb" length="1048576" type="application/x-nzb" />
+      <newznab:attr name="category" value="2000" />
+      <newznab:attr name="category" value="2040" />
+      <newznab:attr name="size" value="1048576" />
+    </item>
   </channel>
 </rss>
 """
@@ -51,7 +65,7 @@ EMPTY = b"""<?xml version="1.0" encoding="UTF-8"?>
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         kind = parse_qs(urlparse(self.path).query).get("t", [""])[0]
-        body = CAPS if kind == "caps" else EMPTY
+        body = CAPS if kind == "caps" else RESULTS
         self.send_response(200)
         self.send_header("Content-Type", "application/xml; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
