@@ -64,7 +64,7 @@ CATALOG: dict[str, ServiceSpec] = {
         _lsio("sabnzbd", "5.1.3-ls279", 8080),
         # No host port of its own; with VPN on it publishes qbittorrent's port.
         ServiceSpec("gluetun", "qmcgaw/gluetun:v3.41.3", 0, 0, "/gluetun", False,
-                    "gluetun", ("WIREGUARD_PRIVATE_KEY",),
+                    "gluetun", ("WIREGUARD_PRIVATE_KEY", "HTTPPROXY_PASSWORD"),
                     cap_add=("NET_ADMIN",), devices=("/dev/net/tun",)),
         _lsio("qbittorrent", "5.3.0_v2.1.2-ls486", 8090),
         ServiceSpec("recyclarr", "recyclarr/recyclarr:8.8.1", 0, 0, "/config", False,
@@ -92,6 +92,11 @@ GLUETUN_PORT_FORWARD_UP_COMMAND = (
     r"""/bin/sh -c 'wget -O- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" """
     r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
 )
+
+# User name for Gluetun's HTTP proxy (Prowlarr via the VPN). Its password is a secret in
+# Gluetun's env file. Without auth any container on orama-net could use the proxy to reach
+# qBittorrent's WebUI as "localhost", where it asks for no password.
+GLUETUN_PROXY_USER = "orama"
 
 # UGOS Pro web UI ports (HTTP / HTTPS) plus common system ports.
 # verify on device

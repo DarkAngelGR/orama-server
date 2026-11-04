@@ -36,6 +36,7 @@ from orama_agent.validate import (
     check_host_paths,
     validate_compose,
     validate_env_files,
+    validate_secrets_present,
 )
 
 log = logging.getLogger("orama_agent")
@@ -202,6 +203,7 @@ class Agent:
         doc, env_files = args["compose"], args["env_files"]
         validate_compose(doc, self.roots)
         validate_env_files(env_files, self.roots)
+        validate_secrets_present(doc, env_files)
 
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
         try:

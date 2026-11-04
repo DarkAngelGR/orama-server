@@ -7,7 +7,7 @@ import pytest
 import yaml
 from conftest import make_setup
 
-from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND
+from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND, GLUETUN_PROXY_USER
 from orama.compose import (
     QBITTORRENT_WEBUI_PORT,
     SHARED_NETWORK,
@@ -16,6 +16,7 @@ from orama.compose import (
     dump_yaml,
 )
 from orama.layout import app_env_dir, app_env_file
+from orama.secrets import SecretStore, ensure_app_keys, env_files_for
 from orama.setup_model import enabled_apps
 
 AWKWARD = '/volume1/Ταινίες & TV #1 "x"'
@@ -134,14 +135,36 @@ def test_port_forward_command_survives_yaml():
     assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
 
 
+def test_port_forward_only_only_for_protonvpn():
+    s = full(vpn={"provider": "mullvad", "port_forwarding": True})
+    env = build_apps_compose(s)["services"]["gluetun"]["environment"]
+    assert env["VPN_PORT_FORWARDING"] == "on"
+    assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
+    assert "PORT_FORWARD_ONLY" not in env
+
+
 @pytest.mark.parametrize("route", [True, False])
 def test_gluetun_httpproxy_only_when_route_prowlarr(route):
     s = full(vpn={"provider": "protonvpn", "port_forwarding": False, "route_prowlarr": route})
     env = build_apps_compose(s)["services"]["gluetun"]["environment"]
+    assert "HTTPPROXY_PASSWORD" not in env
     if route:
         assert env["HTTPPROXY"] == "on"
+        assert env["HTTPPROXY_USER"] == GLUETUN_PROXY_USER == "orama"
     else:
-        assert "HTTPPROXY" not in env
+        assert "HTTPPROXY" not in env and "HTTPPROXY_USER" not in env
+
+
+def test_proxy_password_never_in_compose_yaml(tmp_path):
+    s = full(vpn={"provider": "protonvpn", "route_prowlarr": True})
+    store = SecretStore(tmp_path / "s.bin")
+    store.set("vpn:wireguard_private_key", "k" * 8)
+    ensure_app_keys(store, enabled_apps(s), gluetun_proxy=True)
+    password = env_files_for(s, store)["gluetun"]["HTTPPROXY_PASSWORD"]
+    text = dump_yaml(build_apps_compose(s))
+    assert password not in text and "HTTPPROXY_PASSWORD" not in text
+    gluetun = yaml.safe_load(text)["services"]["gluetun"]
+    assert gluetun["env_file"] == [str(app_env_file(s.config_root, "gluetun"))]
 
 
 def test_apps_compose_uses_external_shared_network():
