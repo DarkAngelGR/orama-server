@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json as jsonlib
 import urllib.error
 import urllib.parse
@@ -112,7 +113,7 @@ class Http:
                 if 300 <= err.code < 400:
                     raise UnsafeRedirect(_origin(url)) from None
                 return _read_response(err, url)
-        except (urllib.error.URLError, OSError) as err:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as err:
             raise Unreachable(_origin(url)) from err
 
 

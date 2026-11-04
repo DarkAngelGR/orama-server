@@ -37,7 +37,7 @@ def qbittorrent_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]
     def wait() -> str | None:
         password = store.get("password:qbittorrent")
         if password is None:
-            raise StepError("qBittorrent's password is missing — run install again.")
+            raise StepError("The password is missing — run apply again.")
 
         def login() -> bool:
             resp = http.request(

@@ -74,7 +74,7 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def api() -> _Api:
         key = store.get("apikey:sabnzbd")
         if key is None:
-            raise StepError("SABnzbd's API key is missing — run install again.")
+            raise StepError("The API key is missing — run apply again.")
         return _Api(http, key)
 
     def wait() -> str | None:
@@ -157,7 +157,8 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             value = result.get("value") if isinstance(result, dict) else None
             if not isinstance(value, dict) or value.get("result") is not True:
                 raise StepError(
-                    f"SABnzbd could not log in to {server.host} — check the username and password."
+                    f"SABnzbd could not connect or log in to {server.host} — check the server "
+                    "address, port, username and password."
                 )
             return None
 
