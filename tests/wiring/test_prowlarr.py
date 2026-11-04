@@ -1,5 +1,6 @@
 import copy
 import json
+import sys
 from hashlib import sha256
 
 from conftest import make_setup
@@ -228,6 +229,23 @@ def test_create_then_unchanged_on_second_run(tmp_path):
     second = run(setup, store, pw)
     assert all(s == "unchanged" for s in statuses(second).values())
     assert len(pw.writes) == before and len(pw.commands) == 1
+
+
+def test_generic_newznab_is_picked_from_prowlarr_2_schema(tmp_path, monkeypatch):
+    # Prowlarr 2.7: definitionName "Newznab" (capital N) for the generic entry AND for
+    # every named Newznab site listed before it.
+    named = {"definitionName": "Newznab", "implementation": "Newznab", "name": "abNZB",
+             "enable": False, "appProfileId": 1, "tags": [], "fields": [f("baseUrl"), f("apiKey")]}
+    generic = {**named, "name": "Generic Newznab"}
+    monkeypatch.setattr(sys.modules[__name__], "indexer_schema", lambda: [named, generic])
+    choice = IndexerChoice(slug="fake", definition="newznab", name="Fake Newznab",
+                           fields={"baseUrl": "http://fake-newznab:8000"}, secret_fields=("apiKey",))
+    setup, store = make(tmp_path, indexers=(choice,))
+    store.set("indexer:fake:apiKey", TRICKY)
+    pw = FakeProwlarr()
+    assert statuses(run(setup, store, pw))["prowlarr:indexer:fake"] == "changed"
+    item = pw.by_name(pw.indexers, "Fake Newznab")
+    assert item["definitionName"] == "Newznab" and pw.value(item, "baseUrl") == "http://fake-newznab:8000"
 
 
 def test_secret_with_special_characters_is_sent_unchanged(tmp_path):
