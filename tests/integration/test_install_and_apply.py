@@ -229,11 +229,39 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
         return text
 
     reporter = request.config.pluginmanager.getplugin("terminalreporter")
-    for app in ("sabnzbd", "qbittorrent", "prowlarr", "sonarr"):
-        logs = run(["docker", "logs", "--tail", "60", f"orama-{app}"]).stdout
-        reporter.write_line(f"--- diagnostics: orama-{app} log tail\n{scrub(logs)}")
-    reporter.write_line(f"--- diagnostics: orama-server log tail\n"
-                        f"{scrub(run(['docker', 'logs', '--tail', '60', 'orama-server']).stdout)}")
+    secrets_ = stored_secrets(host)
+    ports = request.getfixturevalue("installed")["draft"]["ports"]  # same ports as applied
+
+    def say(title: str, text: str) -> None:
+        reporter.write_line(f"--- DIAG {title}: {scrub(text)[:1500]}")
+
+    def fetch(url: str, headers=None, data=None):
+        req = urllib.request.Request(url, headers=headers or {}, data=data)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.status, dict(r.headers), r.read().decode(errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read().decode(errors="replace")
+        except OSError as e:
+            return 0, {}, repr(e)
+
+    sab = f"http://127.0.0.1:{ports['sabnzbd']}/api?output=json&apikey={secrets_['apikey:sabnzbd']}"
+    st, _, body = fetch(sab + "&mode=get_config")
+    say("sab get_config keys", f"{st} {body[:300]}")
+    st, _, body = fetch(sab + "&mode=get_config&section=categories")
+    say("sab categories", f"{st} {body}")
+    form = urllib.parse.urlencode(
+        {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
+    st, headers, body = fetch(f"http://127.0.0.1:{ports['qbittorrent']}/api/v2/auth/login", data=form)
+    say("qbt login", f"{st} {sorted(headers)} body={body!r}")
+    key = {"X-Api-Key": secrets_["apikey:prowlarr"]}
+    st, _, body = fetch(f"http://127.0.0.1:{ports['prowlarr']}/api/v1/indexer/schema", key)
+    try:
+        found = [(i.get("implementation"), i.get("definitionName"), i.get("name"))
+                 for i in json.loads(body) if "newznab" in json.dumps(i)[:400].lower()]
+    except ValueError:
+        found = body[:300]
+    say("prowlarr schema newznab", f"{st} {found}")
 
 
 def diagnose_apps_up(host: Host) -> None:
