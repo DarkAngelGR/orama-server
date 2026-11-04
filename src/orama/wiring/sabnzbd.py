@@ -99,6 +99,10 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
 
     def categories() -> str | None:
         client = api()
+        # A fresh SABnzbd 5 creates its default categories (tv and movies among them, with
+        # no folder) the first time the list is read, replacing any set before. List them
+        # once first, so the folders set below stay.
+        client.call(mode="get_cats")
         have = {c["name"]: c for c in client.config("categories")}
         added = []
         for name, directory in CATEGORIES.items():

@@ -262,6 +262,12 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 marker=sent_marker_name(f"indexer:{choice.slug}"), top={"enable": True},
                 tag=vpn_tag_id() if proxy_on else None, base_item=fill_profile,
             )
+            if message is not None:
+                # Test the indexer as Prowlarr saved it (with its id and the capabilities it
+                # read from the indexer); the copy sent before saving fails Prowlarr's test.
+                item = next(
+                    (i for i in read("indexer") if i.get("name") == choice.name), item
+                )
             resp = call("POST", "indexer/test", json=item, accept_failure=True)
             if resp.status >= 300:
                 raise StepError(
