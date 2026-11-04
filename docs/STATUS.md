@@ -30,6 +30,11 @@ Read `AGENTS.md` first.
 | — | Claude Security scan of the Plan 2a changes | ⛔ blocked — needs "Dynamic workflows" on in Claude Code `/config`; the owner starts `/claude-security:claude-security` → scan changes, base `2c599c9` | |
 | — | Final whole-plan review + one fix round | ▶ in progress — ChatGPT/Codex hardening; Claude Security scan remains blocked | |
 
+### Supplemental review fixes (Codex)
+
+- In progress by Codex: reject duplicate indexer names, remove connections to removed downloaders, and report unsupported indexer definition changes safely.
+- The dedicated Claude Security scan and final whole-plan review remain outstanding. This fix round does not close either gate.
+
 ### Decisions made while executing Plan 2a
 
 - Task 5 also updates the integration test's data-folder list (now 11 folders, with `downloads/usenet/incomplete`).
