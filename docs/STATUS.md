@@ -26,8 +26,8 @@ Read `AGENTS.md` first.
 | 6 | Sonarr and Radarr wiring | ✅ done | 9455d71 |
 | 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
-| 9 | Integration test: real apps wired, second run changes nothing | in progress (Claude) | |
-| — | Claude Security scan of the Plan 2a changes | todo (Claude only) | |
+| 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
+| — | Claude Security scan of the Plan 2a changes | in progress (Claude) | |
 | — | Final whole-plan review + one fix round | todo | |
 
 ### Decisions made while executing Plan 2a
@@ -50,3 +50,6 @@ Read `AGENTS.md` first.
 - SABnzbd's `host_whitelist` is set to `sabnzbd, gluetun, localhost` and replaces any hostnames the user added.
 - Turning the "Prowlarr through the VPN" option off removes the proxy and its tag from Orama's indexers. Turning
   Sonarr or Radarr off removes its Prowlarr connection. Indexers removed from the setup are NOT deleted from Prowlarr.
+- Real-app findings (Task 9): qBittorrent 5 answers a good login with 204; Prowlarr 2.x names the generic template
+  "Newznab"; SABnzbd 5 omits empty sections and creates default categories on first read; Prowlarr tests the indexer
+  as saved. The test's fake Newznab returns one TV and one movie release (an empty feed can't pass the apps' tests).
