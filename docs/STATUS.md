@@ -21,8 +21,8 @@ Read `AGENTS.md` first.
 | 1 | Shared network and Gluetun options (compose + Agent pins) | ✅ done | 77088f8, f530272 |
 | 2 | Agent `seed-config` for SABnzbd and qBittorrent | ✅ done | be74c0f, 1c82c35 |
 | 3 | HTTP client and step engine | ✅ done | c657bc2 |
-| 4 | Indexers and Usenet servers in the setup; `set-secret` | in progress (Claude) | |
-| 5 | SABnzbd and qBittorrent wiring | todo | |
+| 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | ba80dfe |
+| 5 | SABnzbd and qBittorrent wiring | in progress (Claude) | |
 | 6 | Sonarr and Radarr wiring | todo | |
 | 7 | Prowlarr wiring | todo | |
 | 8 | Step plan; `apply` runs the wiring | todo | |
