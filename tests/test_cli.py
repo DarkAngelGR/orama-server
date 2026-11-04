@@ -733,6 +733,52 @@ def test_apply_seeds_qbittorrent_and_restarts_gluetun_for_port_forwarding(
     assert store.get("password:qbittorrent") not in conf
 
 
+def test_apply_retries_the_gluetun_restart_after_it_failed(capsys, roots, agent, monkeypatch):
+    from orama.agent_client import AgentClient, AgentError
+
+    data, cfg = roots
+    path = torrent_vpn_setup(cfg, data)
+    real = AgentClient.restart
+    broken = {"on": True}
+
+    def flaky(self, app):
+        if broken["on"]:
+            raise AgentError("The Agent could not restart the app.")
+        real(self, app)
+
+    monkeypatch.setattr(AgentClient, "restart", flaky)
+    assert cli.main(["apply", "--setup", str(path)]) == 1  # the restart failed
+    assert "could not restart" in capsys.readouterr().err
+    assert agent.restarts == []
+    broken["on"] = False
+    assert cli.main(["apply", "--setup", str(path)]) == 0  # seed unchanged: still retried
+    assert agent.restarts == ["gluetun", "qbittorrent"]
+    capsys.readouterr()
+    assert cli.main(["apply", "--setup", str(path)]) == 0  # flag cleared: not again
+    assert agent.restarts == ["gluetun", "qbittorrent"]
+
+
+def test_apply_redoes_both_restarts_when_the_second_one_failed(
+    capsys, roots, agent, monkeypatch
+):
+    from orama.agent_client import AgentClient, AgentError
+
+    data, cfg = roots
+    path = torrent_vpn_setup(cfg, data)
+    real = AgentClient.restart
+
+    def second_fails(self, app):
+        if app == "qbittorrent":
+            raise AgentError("The Agent could not restart the app.")
+        real(self, app)
+
+    monkeypatch.setattr(AgentClient, "restart", second_fails)
+    assert cli.main(["apply", "--setup", str(path)]) == 1
+    monkeypatch.setattr(AgentClient, "restart", real)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert agent.restarts == ["gluetun", "gluetun", "qbittorrent"]
+
+
 def test_apply_without_port_forwarding_does_not_restart(capsys, roots, agent):
     data, cfg = roots
     path = torrent_vpn_setup(cfg, data, port_forwarding=False)
