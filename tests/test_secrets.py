@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import logging
 import re
 import stat
@@ -13,6 +15,7 @@ from orama.secrets import (
     env_files_for,
     generate_api_key,
     install_redaction,
+    qbittorrent_pbkdf2,
 )
 
 
@@ -289,3 +292,53 @@ def test_exc_info_cleared_and_exc_text_redacted(tmp_path):
     RedactingFilter(st).filter(rec)
     assert rec.exc_info is None
     assert "tracebacksecret" not in rec.exc_text and "RuntimeError" in rec.exc_text
+
+
+DOWNLOAD_APPS = ["sonarr", "sabnzbd", "qbittorrent", "gluetun"]
+
+
+def test_ensure_app_keys_creates_download_client_secrets(tmp_path):
+    st = SecretStore(tmp_path / "s.bin")
+    ensure_app_keys(st, ["sonarr"])
+    assert st.names() == ["apikey:sonarr"]
+    ensure_app_keys(st, DOWNLOAD_APPS)
+    assert sorted(st.names()) == [
+        "apikey:sabnzbd", "apikey:sonarr", "nzbkey:sabnzbd", "password:qbittorrent",
+    ]
+    assert re.fullmatch(r"[0-9a-f]{32}", st.get("apikey:sabnzbd"))
+    assert re.fullmatch(r"[0-9a-f]{32}", st.get("nzbkey:sabnzbd"))
+    assert st.get("apikey:sabnzbd") != st.get("nzbkey:sabnzbd")
+    assert re.fullmatch(r"[A-Za-z0-9_-]{32}", st.get("password:qbittorrent"))
+    before = {n: st.get(n) for n in st.names()}
+    ensure_app_keys(st, DOWNLOAD_APPS)
+    assert {n: st.get(n) for n in st.names()} == before
+
+
+def test_ensure_app_keys_keeps_existing_download_client_secrets(tmp_path):
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("password:qbittorrent", "existing-password")
+    st.set("nzbkey:sabnzbd", "existing-nzb-key")
+    ensure_app_keys(st, DOWNLOAD_APPS)
+    assert st.get("password:qbittorrent") == "existing-password"
+    assert st.get("nzbkey:sabnzbd") == "existing-nzb-key"
+    assert st.get("apikey:sabnzbd") is not None
+
+
+def test_qbittorrent_pbkdf2_known_answer():
+    salt = bytes(range(16))
+    password = "pa ss&w=rd+%#\u03b1"
+    key = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 100000, dklen=64)
+    expected = f"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(key).decode()})"
+    assert qbittorrent_pbkdf2(password, salt) == expected
+
+
+def test_qbittorrent_pbkdf2_random_salt_and_shape():
+    first, second = qbittorrent_pbkdf2("pw"), qbittorrent_pbkdf2("pw")
+    assert first != second
+    shape = r"@ByteArray\([A-Za-z0-9+/]{22}==:[A-Za-z0-9+/]{86}==\)"
+    assert re.fullmatch(shape, first) and re.fullmatch(shape, second)
+
+
+def test_qbittorrent_pbkdf2_refuses_wrong_salt_size():
+    with pytest.raises(ValueError):
+        qbittorrent_pbkdf2("pw", b"short")

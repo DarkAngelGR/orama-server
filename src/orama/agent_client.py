@@ -41,6 +41,13 @@ class AgentClient:
     def restart(self, app: str) -> None:
         self._call("restart", {"app": app})
 
+    def seed_config(self, app: str, values: dict[str, str]) -> bool:
+        """Write fixed credential keys into SABnzbd's or qBittorrent's config file.
+
+        True if the file changed (the app was stopped and started again if it was running).
+        """
+        return self._call("seed-config", {"app": app, "values": dict(values)})["changed"]
+
     def _call(self, cmd: str, args: dict[str, Any]) -> Any:
         rid = uuid.uuid4().hex
         request = json.dumps({"id": rid, "cmd": cmd, "args": args}).encode() + b"\n"

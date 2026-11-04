@@ -637,3 +637,233 @@ def test_apply_refuses_proxy_without_password(agent, roots):
         agent.client.apply(doc, env)
     env["gluetun"]["HTTPPROXY_PASSWORD"] = SECRET
     agent.client.apply(doc, env)
+
+
+# ---------------------------------------------------------------- seed-config
+
+def sab_values():
+    # Built at runtime so no key-shaped string lands in tracked files.
+    return {"api_key": "5eed" * 8, "nzb_key": "beef" * 8}
+
+
+def qbt_values():
+    import base64
+
+    salt = base64.b64encode(b"\x07" * 16).decode()
+    key = base64.b64encode(b"\x09" * 64).decode()
+    return {"password_pbkdf2": f"@ByteArray({salt}:{key})"}
+
+
+def sab_ini(roots):
+    return roots.config / "config/sabnzbd/sabnzbd.ini"
+
+
+def qbt_conf(roots):
+    return roots.config / "config/qbittorrent/qBittorrent/qBittorrent.conf"
+
+
+def torrent_doc(agent, roots):
+    """Apply a setup with SABnzbd and qBittorrent, so FakeRunner reports them running."""
+    doc = build_apps_compose(setup_for(roots, download_methods={"usenet", "torrent"}))
+    env = {app: {name: SECRET for name in CATALOG[app].secret_env}
+           for app in doc["services"] if CATALOG[app].secret_env}
+    agent.client.ensure_folders(all_folders(roots, doc))
+    agent.client.apply(doc, env)
+    return doc
+
+
+def test_seed_config_writes_private_file_owned_by_app_user(agent, roots):
+    assert agent.client.seed_config("sabnzbd", sab_values()) is True
+    path = sab_ini(roots)
+    text = path.read_text()
+    assert f"api_key = {sab_values()['api_key']}\n" in text
+    assert f"nzb_key = {sab_values()['nzb_key']}\n" in text
+    assert "host_whitelist = sabnzbd, gluetun, localhost\n" in text
+    assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+    written = [(Path(p), uid, gid) for p, uid, gid in agent.chowns.calls
+               if Path(p).name.startswith(".sabnzbd.ini.")]
+    assert written == [(Path(written[0][0]), roots.puid, roots.pgid)]
+    assert written[0][0].parent == path.parent
+    assert (str(path.parent), roots.puid, roots.pgid) in agent.chowns.calls
+    assert sorted(p.name for p in path.parent.iterdir()) == ["sabnzbd.ini"]  # no temp files
+
+
+def test_seed_config_creates_qbittorrent_subfolder_owned_by_app_user(agent, roots):
+    assert agent.client.seed_config("qbittorrent", qbt_values()) is True
+    path = qbt_conf(roots)
+    assert f'WebUI\\Password_PBKDF2="{qbt_values()["password_pbkdf2"]}"' in path.read_text()
+    assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+    sub = path.parent
+    assert (str(sub), roots.puid, roots.pgid) in agent.chowns.calls
+    assert stat.S_IMODE(os.lstat(sub).st_mode) == 0o2775
+
+
+def test_seed_config_keeps_the_apps_own_lines(agent, roots):
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    original = "__version__ = 19\n[misc]\nport = 8080\n\n[servers]\n"
+    sab_ini(roots).write_text(original)
+    agent.client.seed_config("sabnzbd", sab_values())
+    text = sab_ini(roots).read_text()
+    assert text.startswith("__version__ = 19\n[misc]\nport = 8080\n")
+    assert text.endswith("\n\n[servers]\n")
+
+
+def test_seed_config_second_call_changes_nothing(agent, roots):  # [RF 3]
+    torrent_doc(agent, roots)
+    for app, values, path in [("sabnzbd", sab_values(), sab_ini(roots)),
+                              ("qbittorrent", qbt_values(), qbt_conf(roots))]:
+        assert agent.client.seed_config(app, values) is True
+        inode = os.lstat(path).st_ino
+        agent.runner.ps = lambda: pytest.fail("runner used for an unchanged file")
+        assert agent.client.seed_config(app, values) is False
+        assert os.lstat(path).st_ino == inode
+        del agent.runner.ps
+    assert agent.runner.stops == ["sabnzbd", "qbittorrent"]
+    assert agent.runner.starts == ["sabnzbd", "qbittorrent"]
+
+
+class OrderRunner(FakeRunner):
+    """Records what the config file held when the app was stopped and started."""
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+        self.seen = []
+
+    def _text(self):
+        return self.path.read_text() if self.path.exists() else None
+
+    def stop(self, app):
+        self.seen.append(("stop", self._text()))
+        super().stop(app)
+
+    def start(self, app):
+        self.seen.append(("start", self._text()))
+        super().start(app)
+
+
+def test_seed_config_stops_running_app_writes_then_starts_it(agent, roots):
+    torrent_doc(agent, roots)
+    runner = OrderRunner(sab_ini(roots))
+    runner.up(agent.runner.up_files[-1])
+    agent.server.agent.runner = runner
+    assert agent.client.seed_config("sabnzbd", sab_values()) is True
+    assert [what for what, _ in runner.seen] == ["stop", "start"]
+    assert runner.seen[0][1] is None and sab_values()["api_key"] in runner.seen[1][1]
+    assert runner.ps()["sabnzbd"] == "running"
+
+
+def test_seed_config_leaves_a_stopped_app_stopped(agent, roots):
+    torrent_doc(agent, roots)
+    agent.runner.stop("sabnzbd")
+    agent.runner.stops.clear()
+    assert agent.client.seed_config("sabnzbd", sab_values()) is True
+    assert agent.runner.stops == [] and agent.runner.starts == []
+    assert agent.runner.ps()["sabnzbd"] != "running"
+
+
+def test_seed_config_without_compose_file_writes_without_runner(agent, roots):
+    agent.runner.ps = lambda: pytest.fail("ps called with no compose file")
+    assert agent.client.seed_config("sabnzbd", sab_values()) is True
+    assert agent.runner.stops == [] and agent.runner.starts == []
+
+
+def test_seed_config_starts_the_app_again_when_the_write_fails(agent, roots, monkeypatch):
+    import orama_agent.server as server_mod
+
+    torrent_doc(agent, roots)
+
+    def boom(*_a, **_kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(server_mod, "_write_atomic", boom)
+    with pytest.raises(AgentError):
+        agent.client.seed_config("sabnzbd", sab_values())
+    assert agent.runner.stops == ["sabnzbd"] and agent.runner.starts == ["sabnzbd"]
+
+
+def test_seed_config_refuses_symlink_at_config_file(agent, roots, tmp_path):
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    target = tmp_path / "victim"
+    target.write_text("keep me\n")
+    sab_ini(roots).symlink_to(target)
+    with pytest.raises(AgentError, match="link|regular"):
+        agent.client.seed_config("sabnzbd", sab_values())
+    assert target.read_text() == "keep me\n"
+    assert os.path.islink(sab_ini(roots))
+
+
+def test_seed_config_refuses_symlink_at_qbittorrent_folder(agent, roots, tmp_path):
+    agent.client.ensure_folders(
+        [str(app_config_dir(PurePosixPath(roots.config), "qbittorrent"))])
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    qbt_conf(roots).parent.symlink_to(target)
+    with pytest.raises(AgentError, match="link"):
+        agent.client.seed_config("qbittorrent", qbt_values())
+    assert list(target.iterdir()) == []
+    assert not any(p.startswith(str(target)) for p in agent.chowns.paths())
+
+
+@pytest.mark.parametrize("kind", ["fifo", "folder", "too_big"])
+def test_seed_config_refuses_non_regular_or_huge_file(agent, roots, kind):
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    path = sab_ini(roots)
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "folder":
+        path.mkdir()
+    else:
+        path.write_bytes(b"#" * (MAX_REQUEST + 1))
+    with pytest.raises(AgentError):
+        agent.client.seed_config("sabnzbd", sab_values())  # 10 s client timeout: no hang
+    if kind == "too_big":
+        assert path.stat().st_size == MAX_REQUEST + 1
+    assert stat.S_ISFIFO(os.lstat(path).st_mode) == (kind == "fifo")
+
+
+@pytest.mark.parametrize("args", [
+    {"app": "sonarr", "values": {}},
+    {"app": "sabnzbd", "values": {"api_key": "5eed" * 8}},
+    {"app": "sabnzbd", "values": dict(sab_values(), host_whitelist="*")},
+    {"app": "sabnzbd", "values": dict(sab_values(), api_key="5eed" * 7 + "\n]x=")},
+    {"app": "qbittorrent", "values": {"password_pbkdf2": "plain-password"}},
+    {"app": "qbittorrent", "values": qbt_values(), "path": "/etc/passwd"},
+    {"app": "sabnzbd"},
+])
+def test_seed_config_refuses_bad_requests_and_writes_nothing(agent, roots, args):
+    resp = agent.call("seed-config", args)
+    assert resp["ok"] is False and resp["error"]
+    assert not (roots.config / "config").exists()
+    assert agent.runner.stops == []
+
+
+def test_seed_config_values_never_logged(agent, roots, caplog):
+    torrent_doc(agent, roots)
+    secret_values = [*sab_values().values(), *qbt_values().values()]
+    with caplog.at_level(logging.DEBUG):
+        agent.client.seed_config("sabnzbd", sab_values())
+        agent.client.seed_config("qbittorrent", qbt_values())
+        bad = dict(sab_values(), api_key=sab_values()["api_key"] + "x")
+        with pytest.raises(AgentError) as err:
+            agent.client.seed_config("sabnzbd", bad)
+    assert "seed-config" in caplog.text
+    for value in [*secret_values, bad["api_key"]]:
+        assert value not in caplog.text
+        assert value not in str(err.value)
+
+
+def test_compose_runner_stop_and_start(roots):
+    run = FakeRun(["", ""])
+    runner = ComposeRunner(roots, run=run)
+    runner.stop("sabnzbd")
+    runner.start("sabnzbd")
+    project = ["-f", str(roots.config / "compose.yaml")]
+    assert run.calls[0][0] == _prefix(roots) + project + ["stop", "sabnzbd"]
+    assert run.calls[1][0] == _prefix(roots) + project + ["start", "sabnzbd"]
+    assert run.calls[0][1]["timeout"] == run.calls[1][1]["timeout"] == UP_TIMEOUT
+    for bad in ("--help", "evil"):
+        with pytest.raises(Refused):
+            runner.stop(bad)
+        with pytest.raises(Refused):
+            runner.start(bad)

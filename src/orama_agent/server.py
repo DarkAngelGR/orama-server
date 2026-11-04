@@ -29,6 +29,7 @@ from typing import Any
 from orama.catalog import CATALOG
 from orama.compose import dump_yaml
 from orama.layout import app_config_dir, app_env_dir, data_folders
+from orama_agent import seed
 from orama_agent.runner import AGENT_ENV_FILE, COMPOSE_FILE, RunnerError, project_file
 from orama_agent.validate import (
     Refused,
@@ -46,6 +47,7 @@ MAX_REQUEST = 1024 * 1024  # bytes per request line
 MAX_PATHS = 64
 READ_TIMEOUT = 30.0
 SOCKET_MODE = 0o660
+SEED_FILE_MODE = 0o600  # app config files written by seed-config, PUID:PGID
 SHARED_DIR_MODE = 0o2775  # data folders and app config folders, PUID:PGID
 AGENT_DIR_MODE = 0o755  # <config>/config, root-owned
 ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
@@ -88,13 +90,20 @@ def _open_child_dir(parent_fd: int, name: str, shown: Path) -> int:
         raise Refused(f"{_show(str(shown))} is not a folder.") from None
 
 
-def _write_atomic(dir_fd: int, name: str, data: bytes, mode: int) -> None:
-    """Replace ``name`` in ``dir_fd`` atomically. A link at ``name`` is replaced, not followed."""
+def _write_atomic(
+    dir_fd: int, name: str, data: bytes, mode: int, chown: Callable[[int], None] | None = None
+) -> None:
+    """Replace ``name`` in ``dir_fd`` atomically. A link at ``name`` is replaced, not followed.
+
+    ``chown`` is called with the new file's descriptor before it takes ``name``'s place.
+    """
     tmp = f".{name}.{secrets.token_hex(8)}.tmp"
     fd = os.open(tmp, _NEW_FILE_FLAGS, mode, dir_fd=dir_fd)
     try:
         try:
             os.fchmod(fd, mode)  # mode from creation is reduced by umask
+            if chown is not None:
+                chown(fd)
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view):]
@@ -151,6 +160,7 @@ class Agent:
             "apply": self.apply,
             "status": self.status,
             "restart": self.restart,
+            "seed-config": self.seed_config,
         }[cmd]
         with self._lock:
             return handler(args)
@@ -171,6 +181,14 @@ class Agent:
         return created
 
     def _make_dirs(self, target: Path) -> list[str]:
+        fd, created = self._open_dirs(target, self._shared)
+        os.close(fd)
+        return created
+
+    def _open_dirs(self, target: Path, shared: set[str]) -> tuple[int, list[str]]:
+        """Open ``target`` (creating missing folders, never following a link) and return
+        its descriptor and the folders created. New folders in ``shared`` belong to
+        PUID:PGID; other new folders to root."""
         root = self.roots.data if target.is_relative_to(self.roots.data) else self.roots.config
         created = []
         fd = os.open(root, _DIR_FLAGS)
@@ -178,7 +196,7 @@ class Agent:
             current = root
             for part in target.relative_to(root).parts:
                 current = current / part
-                shared = str(current) in self._shared
+                is_shared = str(current) in shared
                 try:
                     os.mkdir(part, 0o700, dir_fd=fd)
                     made = True
@@ -188,13 +206,14 @@ class Agent:
                 os.close(fd)
                 fd = child
                 if made:
-                    if shared:
+                    if is_shared:
                         self._chown(fd, self.roots.puid, self.roots.pgid)
-                    os.fchmod(fd, SHARED_DIR_MODE if shared else AGENT_DIR_MODE)
+                    os.fchmod(fd, SHARED_DIR_MODE if is_shared else AGENT_DIR_MODE)
                     created.append(str(current))
-        finally:
+        except BaseException:
             os.close(fd)
-        return created
+            raise
+        return fd, created
 
     # ------------------------------------------------------------ apply
 
@@ -260,8 +279,12 @@ class Agent:
         return fd
 
     def secret_values(self, cmd: str, args: dict[str, Any]) -> list[str]:
-        """Every env-file value this request carried or the Agent has stored, for redaction."""
+        """Every env-file or seed-config value this request carried, and every env-file
+        value the Agent has stored, for redaction."""
         values: list[str] = []
+        seeded = args.get("values") if cmd == "seed-config" else None
+        if isinstance(seeded, dict):
+            values += [v for v in seeded.values() if isinstance(v, str)]
         env_files = args.get("env_files") if cmd == "apply" else None
         if isinstance(env_files, dict):
             for app_values in env_files.values():
@@ -307,6 +330,46 @@ class Agent:
         self._ensure_agent_env_file()
         self.runner.restart(app)
 
+    # ------------------------------------------------------------ seed-config
+
+    def seed_config(self, args: dict[str, Any]) -> dict[str, bool]:
+        """Write SABnzbd's or qBittorrent's credentials into its own config file.
+
+        Only the keys and value shapes in ``orama_agent.seed`` are accepted. The file is
+        read and replaced without following links. When it would change, a running app
+        is stopped first (both apps save their config on exit), the file is read again,
+        written PUID:PGID 0600, and the app is started again.
+        """
+        _expect_keys(args, {"app", "values"})
+        app, values = args["app"], args["values"]
+        seed.check(app, values)
+        *folders, name = seed.config_file(app)
+        app_dir = Path(app_config_dir(PurePosixPath(self.roots.config), app))
+        folder = app_dir.joinpath(*folders)
+        shared = self._shared | {str(app_dir.joinpath(*folders[: i + 1]))
+                                 for i in range(len(folders))}
+        dir_fd, _ = self._open_dirs(folder, shared)
+        try:
+            shown = folder / name
+            if seed.render(app, _read_regular(dir_fd, name, shown), values) is None:
+                return {"changed": False}
+            running = self._ensure_agent_env_file() and self.runner.ps().get(app) == "running"
+            if running:
+                self.runner.stop(app)
+            try:
+                text = seed.render(app, _read_regular(dir_fd, name, shown), values)
+                if text is not None:
+                    _write_atomic(
+                        dir_fd, name, text.encode("utf-8", "surrogateescape"), SEED_FILE_MODE,
+                        chown=lambda fd: self._chown(fd, self.roots.puid, self.roots.pgid),
+                    )
+            finally:
+                if running:
+                    self.runner.start(app)
+        finally:
+            os.close(dir_fd)
+        return {"changed": True}
+
     def _ensure_agent_env_file(self) -> bool:
         """Create the empty --env-file if missing; True if a compose file exists yet."""
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
@@ -325,16 +388,45 @@ class Agent:
 def _read_small(dir_fd: int, name: str) -> str:
     """A regular file's text (never a link, FIFO or more than MAX_REQUEST bytes), else ""."""
     try:
+        return _read_regular(dir_fd, name, Path(name)) or ""
+    except (OSError, Refused):
+        return ""
+
+
+def _read_regular(dir_fd: int, name: str, shown: Path) -> str | None:
+    """A regular file's text, or None if there is none. Refuses a link, a FIFO or other
+    non-regular file, and a file over MAX_REQUEST bytes (never read in part). Bytes that
+    are not UTF-8 survive a round trip through ``encode("utf-8", "surrogateescape")``."""
+    try:
+        mode = os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return None
+    link = Refused(f"{_show(str(shown))} is a link; Orama only changes real files.")
+    if stat.S_ISLNK(mode):
+        raise link
+    if not stat.S_ISREG(mode):  # checked before opening: opening a device or FIFO can act
+        raise Refused(f"{_show(str(shown))} is not a regular file.")
+    try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                      dir_fd=dir_fd)
-    except OSError:
-        return ""
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise link from None
+        raise
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return ""
-        return os.read(fd, MAX_REQUEST).decode("utf-8", "replace")
+        if not stat.S_ISREG(os.fstat(fd).st_mode):  # swapped since the check above
+            raise Refused(f"{_show(str(shown))} is not a regular file.")
+        chunks, size = [], 0
+        while chunk := os.read(fd, MAX_REQUEST + 1 - size):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > MAX_REQUEST:
+                raise Refused(f"{_show(str(shown))} is too large for Orama to change.")
     finally:
         os.close(fd)
+    return b"".join(chunks).decode("utf-8", "surrogateescape")
 
 
 def _exists(dir_fd: int, name: str) -> bool:
@@ -455,7 +547,7 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         if cmd == "self-update":
             log.info("%s id=%s: not implemented", cmd, shown_id)
             return {"id": rid, "ok": False, "error": "not implemented in Plan 1"}
-        if cmd not in {"ensure-folders", "apply", "status", "restart"}:
+        if cmd not in {"ensure-folders", "apply", "status", "restart", "seed-config"}:
             log.warning("unknown command %s id=%s", _show(cmd), shown_id)
             return {"id": rid, "ok": False, "error": "unknown command"}
         try:

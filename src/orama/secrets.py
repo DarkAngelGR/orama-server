@@ -8,11 +8,14 @@ directory.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
 import re
 import secrets
+from collections.abc import Callable
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -20,9 +23,14 @@ from cryptography.fernet import Fernet, InvalidToken
 from orama.catalog import CATALOG
 from orama.setup_model import DesiredSetup, enabled_apps
 
-_KEYED_APPS = ("sonarr", "radarr", "prowlarr")
+_KEYED_APPS = ("sonarr", "radarr", "prowlarr", "sabnzbd")
 VPN_KEY_NAME = "vpn:wireguard_private_key"
 _PROXY_PASSWORD_NAME = "password:gluetun-proxy"
+QBITTORRENT_PASSWORD_NAME = "password:qbittorrent"
+SABNZBD_NZB_KEY_NAME = "nzbkey:sabnzbd"
+_QBT_PBKDF2_ITERATIONS = 100_000
+_QBT_SALT_BYTES = 16
+_QBT_KEY_BYTES = 64
 _MIN_LITERAL_LEN = 4
 _PATTERN = re.compile(r"(?i)(api[_-]?key|token|password|private[_-]?key)[\"'=:\s]+\S+")
 
@@ -108,14 +116,44 @@ def generate_api_key() -> str:
 def ensure_app_keys(store: SecretStore, apps: list[str], *, gluetun_proxy: bool = False) -> None:
     """Create missing app secrets; never overwrite.
 
-    ``apikey:<app>`` for sonarr/radarr/prowlarr, and with ``gluetun_proxy`` (Prowlarr via
-    the VPN) the password for Gluetun's HTTP proxy when Gluetun runs.
+    ``apikey:<app>`` for sonarr/radarr/prowlarr/sabnzbd, SABnzbd's ``nzbkey:sabnzbd``,
+    qBittorrent's WebUI password, and with ``gluetun_proxy`` (Prowlarr via the VPN) the
+    password for Gluetun's HTTP proxy when Gluetun runs.
     """
+    wanted: dict[str, Callable[[], str]] = {}
     for app in apps:
-        if app in _KEYED_APPS and store.get(f"apikey:{app}") is None:
-            store.set(f"apikey:{app}", generate_api_key())
-    if gluetun_proxy and "gluetun" in apps and store.get(_PROXY_PASSWORD_NAME) is None:
-        store.set(_PROXY_PASSWORD_NAME, secrets.token_urlsafe(24))
+        if app in _KEYED_APPS:
+            wanted[f"apikey:{app}"] = generate_api_key
+    if "sabnzbd" in apps:
+        wanted[SABNZBD_NZB_KEY_NAME] = generate_api_key
+    if "qbittorrent" in apps:
+        wanted[QBITTORRENT_PASSWORD_NAME] = _new_password
+    if gluetun_proxy and "gluetun" in apps:
+        wanted[_PROXY_PASSWORD_NAME] = _new_password
+    for name, make in wanted.items():
+        if store.get(name) is None:
+            store.set(name, make())
+
+
+def _new_password() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def qbittorrent_pbkdf2(password: str, salt: bytes | None = None) -> str:
+    """qBittorrent's ``WebUI\\Password_PBKDF2`` value for ``password``.
+
+    PBKDF2-HMAC-SHA512, 100000 iterations, 16-byte salt, 64-byte key, written the way
+    qBittorrent stores it: ``@ByteArray(<base64 salt>:<base64 key>)``. Only this hash is
+    sent to the Agent, never the password.
+    """
+    if salt is None:
+        salt = secrets.token_bytes(_QBT_SALT_BYTES)
+    if len(salt) != _QBT_SALT_BYTES:
+        raise ValueError(f"the salt must be {_QBT_SALT_BYTES} bytes")
+    key = hashlib.pbkdf2_hmac(
+        "sha512", password.encode(), salt, _QBT_PBKDF2_ITERATIONS, dklen=_QBT_KEY_BYTES
+    )
+    return f"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(key).decode()})"
 
 
 class MissingSecret(KeyError):
