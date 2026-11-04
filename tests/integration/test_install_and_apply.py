@@ -527,7 +527,8 @@ def prowlarr_api(applied: dict, secrets_: dict[str, str], method: str, path: str
             raw = response.read()
             return response.status, (json.loads(raw) if raw.strip() else None)
     except urllib.error.HTTPError as e:
-        return e.code, None
+        # Prowlarr's validation answer (field names and reasons, never our values).
+        return e.code, e.read().decode(errors="replace")[:1500]
 
 
 def run_proxy_wiring(setup: dict, step: str, password: str, clean_host: Host) -> list:
@@ -558,6 +559,16 @@ def test_prowlarr_vpn_proxy_and_masked_secrets(clean_host: Host, applied: dict):
     http_proxy = next((s for s in schema if s.get("implementation") == "Http"), None)
     assert http_proxy is not None, [s.get("implementation") for s in schema]
     assert {"host", "port", "username", "password"} <= {f["name"] for f in http_proxy["fields"]}
+
+    # The same request the wiring sends, from the schema; show Prowlarr's reasons if refused.
+    probe = json.loads(json.dumps(http_proxy))
+    probe.update(name="Probe (Orama)", tags=[])
+    for field in probe["fields"]:
+        field["value"] = {"host": "gluetun", "port": 8888, "username": GLUETUN_PROXY_USER,
+                          "password": secrets.token_hex(8)}.get(field["name"], field.get("value"))
+    status, answer = api("POST", "/indexerProxy", probe, "?forceSave=true")
+    assert status in (200, 201), f"Prowlarr refused the proxy (HTTP {status}): {answer}"
+    api("DELETE", f"/indexerProxy/{answer['id']}")
 
     on = {**applied["setup"], "vpn": {"route_prowlarr": True}}
     first_password, second_password = secrets.token_hex(12), secrets.token_hex(12)
