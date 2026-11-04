@@ -5,6 +5,12 @@ Run ids (GitHub Actions): **41925893375** (earlier probes), **41926191557** (pro
 **41927471905** (probe round 2, commit fd79f88). Each line says *observed* or *assumed*.
 Later tasks must keep an owner check (Task 11) for every *assumed* line.
 
+Probes clean up after themselves; anything that can't be undone is listed here. Left behind: the Jellyfin
+wizard user `orama-test` and the completed wizard (needed for any authenticated call), the two hidden Plex prefs
+(reset to defaults, but unreadable) and, if the cleanup lines in the CI log show otherwise, whatever they report.
+`_probe` catches failures and prints only the error type, so a green CI run does **not** prove a contract
+still holds: read the printed `Contract ...` lines.
+
 ## Already observed before this task
 - Sonarr/Radarr notification schemas: `PlexServer` fields `authToken, host, mapFrom, mapTo, port, server, signIn, updateLibrary, urlBase, useSsl`; `MediaBrowser` fields `apiKey, host, mapFrom, mapTo, notify, port, updateLibrary, urlBase, useSsl` (observed, 41926191557).
 - Bazarr: key at `auth.apikey` in `/config/config/config.yaml`, header `X-API-KEY`, anonymous 401 (observed).
@@ -60,6 +66,6 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 ## Plex 1.43.5 (observed, 41927471905, except where marked)
 - Unclaimed `GET /identity` (send `Accept: application/json`): 200, `MediaContainer` fields `apiVersion, claimed (false), machineIdentifier, size, version`.
 - Unclaimed, **no token needed** from the local network for: `/`, `/library/sections`, `/:/prefs`, `/servers`, `/myplex/account`, `/status/sessions`, `/transcode/sessions`, `/updater/status`, `/web/index.html` (all 200), and for writes below. Whether a claimed server demands a token for these is *assumed* yes (Plex docs): wiring must be able to send `X-Plex-Token` after the owner claims.
-- Library create: `POST /library/sections?name=&type=movie&agent=tv.plex.agents.movie&scanner=Plex%20Movie&language=en-US&location=/data/media/movies` returned **201** with JSON `MediaContainer.Directory[]`. The query **must be percent-encoded with `%20`**; `+` for spaces was not needed because the first (quote-encoded) attempt succeeded (the `+` variant was not exercised). Read back `GET /library/sections` shows `Directory[]{key, type, title, agent, scanner, language, uuid, Location[]{id, path}}`.
+- Library create: `POST /library/sections?name=&type=movie&agent=tv.plex.agents.movie&scanner=Plex%20Movie&language=en-US&location=/data/media/movies` returned **201** with JSON `MediaContainer.Directory[]`. The query was percent-encoded (`%20` for spaces) and succeeded; the `+` encoding was not tested. Read back `GET /library/sections` shows `Directory[]{key, type, title, agent, scanner, language, uuid, Location[]{id, path}}`.
 - Prefs: `GET /:/prefs` lists 151 `Setting` entries. `HardwareAcceleratedCodecs` and `LanNetworksBandwidth` are **not in that list** (hidden prefs). `PUT /:/prefs?<key>=<value>` answers 200 for both, but the value cannot be read back through `/:/prefs` (observed `None`). Whether they take effect is *assumed* (Plex docs; hardware transcoding also needs Plex Pass): owner check.
 - Claiming and account sign-in (plex.tv, claim token) are owner-only and *assumed* from Plex docs; nothing in CI touches them.
