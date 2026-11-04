@@ -50,7 +50,9 @@ class _Api:
         return data
 
     def config(self, section: str) -> Any:
-        return self.call(mode="get_config", section=section)["config"][section]
+        # SABnzbd 5 leaves a list section out until something has been added to it.
+        found = self.call(mode="get_config", section=section)["config"].get(section)
+        return [] if found is None and section in ("categories", "servers") else found
 
 
 def _norm_dir(value: object) -> str:
