@@ -12,6 +12,16 @@ def test_vpn_requires_torrent():
         make_setup(download_methods={"usenet"}, vpn=VpnConfig())
 
 
+def test_qbittorrent_cannot_be_removed_while_port_forwarding_is_on():
+    with pytest.raises(ValidationError, match="port forwarding"):
+        make_setup(download_methods={"torrent"}, vpn=VpnConfig(),
+                   removed_apps={"qbittorrent"})
+    # Without port forwarding, or without the VPN, removing it is fine.
+    make_setup(download_methods={"torrent"}, vpn=VpnConfig(port_forwarding=False),
+               removed_apps={"qbittorrent"})
+    make_setup(download_methods={"torrent"}, removed_apps={"qbittorrent"})
+
+
 def test_media_server_and_download_method_required():
     with pytest.raises(ValidationError):
         make_setup(media_servers=set())

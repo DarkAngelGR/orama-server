@@ -648,6 +648,32 @@ def test_apply_agent_socket_is_not_a_socket(capsys, caplog, roots, monkeypatch):
     assert_clean_failure(out, caplog, cfg, "Cannot reach the Agent")
 
 
+def test_apply_invalid_saved_setup_gives_the_plain_reasons(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    geek = {"slug": "geek", "definition": "geek", "name": "Same",
+            "fields": {}, "secret_fields": ["apikey"]}
+    other = {**geek, "slug": "other"}
+    saved = json.loads(path.read_text())
+    saved["indexers"] = [geek, other]  # two indexers with the same name
+    path.write_text(json.dumps(saved))
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert "Indexer names must be unique." in out.err
+    assert "cannot be read" not in out.err
+    assert "Traceback" not in out.err
+    assert agent.up_calls == 0
+
+
+def test_apply_garbage_setup_still_says_cannot_be_read(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    path.write_text("{ not json")
+    assert cli.main(["apply", "--setup", str(path)]) == 1
+    assert "cannot be read" in capsys.readouterr().err
+
+
 def test_apply_missing_setup(capsys, tmp_path):
     code = cli.main(["apply", "--setup", str(tmp_path / "missing.json")])
     out = capsys.readouterr()
@@ -959,6 +985,9 @@ def test_set_secret_tty_reads_without_echo(capsys, monkeypatch, roots):
         "indexer::apiKey",
         "a-secret-typed-by-mistake",
         "vpn:wireguard_private_key\n",
+        "usenet:" + "a" * 41 + ":password",
+        "indexer:" + "a" * 41 + ":apiKey",
+        "indexer:geek:" + "f" * 65,
     ],
 )
 def test_set_secret_refuses_bad_name_plainly(capsys, caplog, monkeypatch, roots, name):
@@ -1007,6 +1036,43 @@ def test_set_secret_value_on_command_line_is_refused_without_echo(capsys, monkey
     assert out.err.startswith("✗ ")
     assert value not in out.err + out.out
     assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+def test_set_secret_accepts_names_at_the_length_limits(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    for name in ("usenet:" + "a" * 40 + ":password", "indexer:" + "a" * 40 + ":" + "F" * 64):
+        code, _ = run_set_secret(capsys, monkeypatch, cfg, [name], FakeStdin("value\n"))
+        assert code == 0
+
+
+def test_set_secret_uses_the_store_apply_uses(capsys, monkeypatch, roots, tmp_path):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)  # config_root is cfg: the store is cfg/orama/secrets.bin
+    elsewhere = Path(os.path.realpath(tmp_path)) / "elsewhere"
+    elsewhere.mkdir()
+    moved = elsewhere / "setup.json"
+    moved.write_bytes((cfg / "orama" / "setup.json").read_bytes())
+    monkeypatch.setattr(sys, "stdin", FakeStdin("value\n"))
+    assert cli.main(["set-secret", "usenet:main:password", "--setup", str(moved)]) == 0
+    capsys.readouterr()
+    assert SecretStore(cfg / "orama" / "secrets.bin").get("usenet:main:password") == "value"
+    assert not (elsewhere / "secrets.bin").exists()
+
+
+def test_set_secret_with_an_unreadable_setup_uses_the_folder_next_to_it(
+    capsys, monkeypatch, roots
+):
+    data, cfg = roots
+    cfg.mkdir()
+    path = write_setup(cfg, data)
+    path.write_text("{ not json")
+    code, _ = run_set_secret(capsys, monkeypatch, cfg, ["usenet:main:password"],
+                             FakeStdin("value\n"))
+    assert code == 0
+    assert SecretStore(cfg / "orama" / "secrets.bin").get("usenet:main:password") == "value"
 
 
 def test_set_secret_missing_setup(capsys, monkeypatch, roots):

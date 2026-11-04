@@ -443,7 +443,8 @@ def test_real_compose_accepts_generated_yaml(tmp_path, kind):
 
 
 def test_gluetun_has_no_ports_when_qbittorrent_removed():
-    s = full(removed_apps={"qbittorrent"})
+    # Removing qBittorrent with port forwarding on is refused (the VPN would forward to nothing).
+    s = full(removed_apps={"qbittorrent"}, vpn={"provider": "protonvpn", "port_forwarding": False})
     g = build_apps_compose(s)["services"]["gluetun"]
     assert "ports" not in g
 
