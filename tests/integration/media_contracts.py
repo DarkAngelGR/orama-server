@@ -30,7 +30,7 @@ def _request(port, path, *, body=None, headers=None, method=None, form=None):
         with urllib.request.urlopen(request, timeout=15) as reply:
             return reply.status, reply.read()
     except urllib.error.HTTPError as exc:
-        return exc.code, b""
+        return exc.code, exc.read()
 
 
 def _shape(value, depth=3):
@@ -173,7 +173,23 @@ def _bazarr_settings(port, key):
     status, raw = _request(port, "/api/system/languages?enabled=true", headers=headers)
     data = _json(raw) or []
     print(f"Contract Bazarr enabled languages after write: {status} "
-          f"{[d.get('code2') for d in data if isinstance(d, dict)]}")
+          f"{[d.get('code2') for d in data if isinstance(d, dict) and d.get('enabled')]}")
+    _probe("Bazarr providers", lambda: _bazarr_providers(port, headers))
+
+
+def _bazarr_providers(port, headers):
+    candidates = ["podnapisi", "yifysubtitles", "tvsubtitles", "subf2m", "embeddedsubtitles",
+                  "greeksubtitles", "xsubs", "subtitlecat", "animetosho", "supersubtitles",
+                  "subdl", "opensubtitlescom", "addic7ed"]
+    form = {"settings-general-enabled_providers": candidates}
+    status, _ = _request(port, "/api/system/settings", method="POST", headers=headers, form=form)
+    print(f"Contract Bazarr POST settings-general-enabled_providers (repeated field): {status}")
+    time.sleep(10)
+    status, raw = _request(port, "/api/system/settings", headers=headers)
+    stored = ((_json(raw) or {}).get("general") or {}).get("enabled_providers")
+    print(f"Contract Bazarr general.enabled_providers stored: {stored}")
+    status, raw = _request(port, "/api/providers", headers=headers)
+    print(f"Contract Bazarr GET /api/providers after enabling: {status} {_json(raw)}")
 
 
 def recyclarr(host, folder, key):
@@ -204,20 +220,41 @@ def _recyclarr_run(host, folder, *args):
 WANTED = re.compile(r"DV|Dolby Vision|DTS|TrueHD|Atmos|PCM|FLAC|HDR", re.IGNORECASE)
 
 
+def _recyclarr_shell(host, folder, script):
+    return run(["docker", "run", "--rm", "--network", "orama-net", "--entrypoint", "sh",
+                "--user", f"{host.puid}:{host.pgid}", "-v", f"{folder}:/config",
+                CATALOG["recyclarr"].image, "-c", script], timeout=240)
+
+
 def _recyclarr_lists(host, folder):
-    result = _recyclarr_run(host, folder, "list", "templates")
-    lines = result.stdout.splitlines()
-    print(f"Contract Recyclarr list templates: exit {result.returncode}, {len(lines)} lines")
-    for line in lines:
-        print(f"  template| {line}")
+    for args in (["list", "--help"], ["list", "custom-formats", "--help"],
+                 ["config", "--help"], ["config", "list", "--help"],
+                 ["config", "list", "templates"], ["list", "custom-formats", "radarr", "--raw"]):
+        result = _recyclarr_run(host, folder, *args)
+        lines = [line[:300] for line in result.stdout.splitlines()]
+        print(f"Contract Recyclarr {' '.join(args)}: exit {result.returncode}, {len(lines)} lines")
+        for line in lines[:25]:
+            print(f"  out| {line}")
+    # Names come from the cloned TRaSH repository the list command just fetched.
+    found = _recyclarr_shell(host, folder, "find / -type d \\( -name cf -o -name templates \\) "
+                             "-not -path '/proc/*' 2>/dev/null | head -20")
+    print(f"Contract Recyclarr cloned folders:\n{found.stdout}")
+    pattern = "dv|dolby|dts|truehd|atmos|pcm|flac|hdr"
     for app in ("radarr", "sonarr"):
-        result = _recyclarr_run(host, folder, "list", "custom-formats", app)
-        lines = result.stdout.splitlines()
-        print(f"Contract Recyclarr list custom-formats {app}: exit {result.returncode}, "
-              f"{len(lines)} lines; header: {lines[:4]}")
-        for line in lines:
-            if WANTED.search(line):
-                print(f"  cf-{app}| {line}")
+        script = (
+            f"for d in $(find / -type d -path '*/{app}/cf' -not -path '/proc/*' 2>/dev/null | head -1); do "
+            f"for f in $(ls $d | grep -iE '{pattern}'); do "
+            "echo \"$f $(grep -m1 '\"name\"' $d/$f) $(grep -m1 '\"trash_id\"' $d/$f)\"; done; done")
+        result = _recyclarr_shell(host, folder, script)
+        print(f"Contract Recyclarr {app} custom formats (file name, name, trash_id): "
+              f"exit {result.returncode}")
+        for line in result.stdout.splitlines():
+            print(f"  cf-{app}| {line}")
+    script = ("for d in $(find / -type d -name templates -not -path '/proc/*' 2>/dev/null | head -3); "
+              "do echo \"$d\"; find $d -type f | head -80; done")
+    result = _recyclarr_shell(host, folder, script)
+    for line in result.stdout.splitlines():
+        print(f"  tmpl| {line}")
 
 
 def plex(port):
@@ -235,21 +272,41 @@ def plex(port):
 
 
 def _plex_library(port, headers):
-    query = urllib.parse.urlencode({
-        "name": "Orama Test Movies", "type": "movie", "agent": "tv.plex.agents.movie",
-        "scanner": "Plex Movie", "language": "en-US", "location": "/data/media/movies"})
-    status, _ = _request(port, f"/library/sections?{query}", method="POST", headers=headers)
-    print(f"Contract Plex POST /library/sections?name&type&agent&scanner&language&location "
-          f"without a token: {status}")
+    fields = {"name": "Orama Test Movies", "type": "movie", "agent": "tv.plex.agents.movie",
+              "scanner": "Plex Movie", "language": "en-US", "location": "/data/media/movies"}
+    variants = {
+        "quote-encoded": urllib.parse.urlencode(fields, quote_via=urllib.parse.quote),
+        "plus-encoded": urllib.parse.urlencode(fields),
+        "with-prefs": urllib.parse.urlencode(
+            {**fields, "prefs[enableCinemaTrailers]": "0"}, quote_via=urllib.parse.quote),
+    }
+    for label, query in variants.items():
+        extra = {**headers, "X-Plex-Client-Identifier": "orama-ci", "X-Plex-Product": "Orama"}
+        status, raw = _request(port, f"/library/sections?{query}", method="POST", headers=extra)
+        print(f"Contract Plex POST /library/sections ({label}) name&type&agent&scanner&language"
+              f"&location without a token: {status} body={raw[:300]!r}")
+        if status < 300:
+            break
     status, raw = _request(port, "/library/sections", headers=headers)
-    print(f"Contract Plex GET /library/sections: {status} "
-          f"{_shape((_json(raw) or {}).get('MediaContainer'), 3)}")
+    container = (_json(raw) or {}).get("MediaContainer") or {}
+    print(f"Contract Plex GET /library/sections: {status} {_shape(container, 3)} "
+          f"types={[d.get('type') for d in container.get('Directory', [])]}")
     status, raw = _request(port, "/:/prefs", headers=headers)
     settings = (_json(raw) or {}).get("MediaContainer", {}).get("Setting", [])
-    print(f"Contract Plex GET /:/prefs: {status}, {len(settings)} settings")
+    ids = [entry.get("id") for entry in settings]
+    print(f"Contract Plex GET /:/prefs: {status}, {len(settings)} settings, "
+          f"matching ids={[i for i in ids if re.search('hardware|lan|bandwidth|transcod', str(i), re.IGNORECASE)]}")
     for entry in settings:
-        if entry.get("id") in ("HardwareAcceleratedCodecs", "LanNetworksBandwidth"):
+        if re.search("hardwareaccel|lannetworks", str(entry.get("id")), re.IGNORECASE):
             print(f"Contract Plex pref {entry.get('id')}: {entry}")
-    status, _ = _request(port, "/:/prefs?HardwareAcceleratedCodecs=1", method="PUT",
-                         headers=headers)
-    print(f"Contract Plex PUT /:/prefs?HardwareAcceleratedCodecs=1 without a token: {status}")
+    for pref in ("HardwareAcceleratedCodecs", "LanNetworksBandwidth"):
+        value = "1" if pref == "HardwareAcceleratedCodecs" else "192.168.0.0/16"
+        status, _ = _request(port, f"/:/prefs?{pref}={urllib.parse.quote(value)}", method="PUT",
+                             headers=headers)
+        print(f"Contract Plex PUT /:/prefs?{pref}= without a token: {status}")
+    status, raw = _request(port, "/:/prefs", headers=headers)
+    after = {e.get("id"): e.get("value") for e in
+             (_json(raw) or {}).get("MediaContainer", {}).get("Setting", [])}
+    print(f"Contract Plex prefs after PUT: HardwareAcceleratedCodecs="
+          f"{after.get('HardwareAcceleratedCodecs')} LanNetworksBandwidth="
+          f"{after.get('LanNetworksBandwidth')}")
