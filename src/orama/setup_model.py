@@ -138,6 +138,15 @@ class DesiredSetup(BaseModel):
                 "the VPN container cannot be removed while the VPN is on; "
                 "turn the VPN off instead"
             )
+        if (
+            self.vpn is not None
+            and self.vpn.port_forwarding
+            and "qbittorrent" in self.removed_apps
+        ):
+            raise ValueError(
+                "qBittorrent cannot be removed while the VPN's port forwarding is on; "
+                "turn port forwarding off instead"
+            )
         for label, items in (("indexer", self.indexers), ("usenet server", self.usenet_servers)):
             slugs = [item.slug for item in items]
             if len(set(slugs)) != len(slugs):

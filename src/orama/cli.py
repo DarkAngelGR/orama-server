@@ -63,8 +63,8 @@ SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
 SECRET_NAME = re.compile(
     rf"(?:{re.escape(VPN_KEY_NAME)}"
-    r"|usenet:[a-z0-9-]+:password"
-    r"|indexer:[a-z0-9-]+:[A-Za-z0-9_.]+)"
+    r"|usenet:[a-z0-9-]{1,40}:password"
+    r"|indexer:[a-z0-9-]{1,40}:[A-Za-z0-9_.]{1,64})"
 )
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -374,6 +374,10 @@ def apply(setup_path: Path) -> int:
         setup = DesiredSetup.load(setup_path)
     except FileNotFoundError:
         raise Failed(f"No setup found at {setup_path}.") from None
+    except ValidationError as e:
+        if any(err["type"] == "json_invalid" for err in e.errors()):
+            raise Failed(f"The setup at {setup_path} cannot be read.") from None
+        raise Failed(f"The setup at {setup_path} is not valid. " + _plain_errors(e)) from None
     except (OSError, ValueError):
         raise Failed(f"The setup at {setup_path} cannot be read.") from None
 
@@ -489,7 +493,7 @@ def set_secret(name: str, setup_path: Path) -> None:
         )
     if not setup_path.is_file():
         raise Failed(f"No setup found at {setup_path}.")
-    store = SecretStore(setup_path.parent / SECRETS_FILE)
+    store = SecretStore(_secrets_path(setup_path))
     install_redaction(store)
     value = _read_secret()
     # The only secret typed by the user that goes into an Agent env file; the Agent accepts
@@ -506,6 +510,15 @@ def set_secret(name: str, setup_path: Path) -> None:
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
     print(f"✓ Saved {name}")
+
+
+def _secrets_path(setup_path: Path) -> Path:
+    """The store apply uses: in the setup's own Orama folder; next to the file if it won't load."""
+    try:
+        setup = DesiredSetup.load(setup_path)
+    except (OSError, ValueError):
+        return setup_path.parent / SECRETS_FILE
+    return Path(orama_state_dir(setup.config_root)) / SECRETS_FILE
 
 
 def _read_secret() -> str:
