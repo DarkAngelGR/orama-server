@@ -30,7 +30,7 @@ def qbittorrent_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]
             resp = http.request(method, f"{base}/{path}", **kw)
         except Unreachable:
             raise StepError("qBittorrent could not be reached — run apply again.") from None
-        if resp.status != 200:
+        if resp.status not in (200, 204):
             raise StepError(f"qBittorrent refused a request (HTTP {resp.status}) — run apply again.")
         return resp
 
@@ -44,7 +44,9 @@ def qbittorrent_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]
                 "POST", f"{base}/auth/login",
                 form={"username": QBITTORRENT_WEBUI_USER, "password": password},
             )
-            if resp.status != 200 or resp.body.decode(errors="replace").strip() != "Ok.":
+            # qBittorrent 5 answers 204 with no body; older versions 200 "Ok.".
+            body = resp.body.decode(errors="replace").strip()
+            if not (resp.status == 204 or (resp.status == 200 and body == "Ok.")):
                 raise StepError(_REFUSED)
             return True
 

@@ -38,6 +38,20 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _is_definition(schema: dict[str, Any], definition: str) -> bool:
+    """Does this indexer template match the chosen definition?
+
+    Prowlarr 2.x names the generic ones "Newznab" / "Torznab" (capital letter) in
+    ``definitionName``, and lists every named Newznab site (NZBgeek, ...) under the same
+    ``definitionName``; only the one called "Generic ..." is the plain protocol.
+    """
+    if str(schema.get("definitionName", "")).lower() != definition.lower():
+        return False
+    if schema.get("implementation") in ("Newznab", "Torznab"):
+        return str(schema.get("name", "")).startswith("Generic ")
+    return True
+
+
 def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     apps = enabled_apps(setup)
     if "prowlarr" not in apps:
@@ -242,7 +256,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             want: dict[str, Any] = {**choice.fields, **secrets}
             item, message, _ = upsert(
                 resource="indexer", label=f"the {choice.name} indexer", name=choice.name,
-                pick=lambda s: s.get("definitionName") == choice.definition,
+                pick=lambda s: _is_definition(s, choice.definition),
                 want=want, secret=json.dumps(secrets, sort_keys=True),
                 secret_names=frozenset(choice.secret_fields),
                 marker=sent_marker_name(f"indexer:{choice.slug}"), top={"enable": True},

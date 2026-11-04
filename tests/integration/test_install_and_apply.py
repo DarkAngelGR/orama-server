@@ -247,9 +247,15 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
 
     sab = f"http://127.0.0.1:{ports['sabnzbd']}/api?output=json&apikey={secrets_['apikey:sabnzbd']}"
     st, _, body = fetch(sab + "&mode=get_config")
-    say("sab get_config keys", f"{st} {body[:300]}")
-    st, _, body = fetch(sab + "&mode=get_config&section=categories")
-    say("sab categories", f"{st} {body}")
+    try:
+        whole = json.loads(body)["config"]
+        say("sab get_config keys", f"{st} { {k: type(v).__name__ for k, v in whole.items()} }")
+    except (ValueError, KeyError):
+        say("sab get_config keys", f"{st} {body[:300]}")
+    for extra in ("&mode=get_config&section=categories", "&mode=get_config&section=misc&keyword=complete_dir",
+                  "&mode=get_config&section=servers", "&mode=get_cats", "&mode=version"):
+        st, _, body = fetch(sab + extra)
+        say(f"sab {extra}", f"{st} {body[:400]}")
     form = urllib.parse.urlencode(
         {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
     st, headers, body = fetch(f"http://127.0.0.1:{ports['qbittorrent']}/api/v2/auth/login", data=form)
@@ -478,7 +484,7 @@ def test_qbittorrent_is_wired(clean_host: Host, applied: dict):
     with urllib.request.urlopen(
         f"http://127.0.0.1:{port}/api/v2/auth/login", data=form, timeout=20
     ) as response:
-        assert response.read().decode().strip() == "Ok."
+        assert response.status in (200, 204)
         cookie = response.headers["Set-Cookie"].split(";")[0]
     categories = http_json(f"http://127.0.0.1:{port}/api/v2/torrents/categories",
                            {"Cookie": cookie})

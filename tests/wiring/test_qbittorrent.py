@@ -27,7 +27,8 @@ class FakeQbt:
 
     def login(self, call):
         ok = self.login_ok and call.form == {"username": "orama", "password": PASSWORD}
-        return Response(200 if ok else 403, {}, b"Ok." if ok else b"Fails.")
+        # qBittorrent 5.x: 204 and no body on success.
+        return Response(204, {}, b"") if ok else Response(403, {}, b"Fails.")
 
     def set_prefs(self, call):
         self.prefs.update(json.loads(call.form["json"]))
@@ -93,6 +94,15 @@ def test_host_is_gluetun_with_vpn(tmp_path):
     setup, store = make(tmp_path)
     run_steps(qbittorrent_steps(setup, store, q2.http))
     assert {c.url.split("/api")[0] for c in q2.http.calls} == {"http://qbittorrent:8090"}
+
+
+def test_older_qbittorrent_login_answer_is_accepted(tmp_path):
+    q = FakeQbt()
+    q.login = lambda call: Response(200, {}, b"Ok.")
+    q.http.route("POST", "/api/v2/auth/login", q.login)
+    setup, store = make(tmp_path)
+    by = {r.name: r for r in run_steps(qbittorrent_steps(setup, store, q.http))}
+    assert by["wait:qbittorrent"].status == "unchanged"
 
 
 def test_login_failure_skips_the_rest(tmp_path):
