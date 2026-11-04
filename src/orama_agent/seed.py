@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from orama.catalog import QBITTORRENT_WEBUI_USER
 from orama_agent.validate import Refused
 
 
@@ -42,18 +43,23 @@ FORMATS: dict[str, _Format] = {
         allowed={"api_key": ("api_key", _HEX32), "nzb_key": ("nzb_key", _HEX32)},
         fixed={"host_whitelist": "sabnzbd, gluetun, localhost"},
     ),
+    # qBittorrent 5.x keeps WebUI settings in their own [WebUI] section (its settings
+    # migration 12 moves them out of [Preferences] on first start, and 5.3 reads only
+    # [WebUI]). Checked against the pinned 5.3.0 image.
     "qbittorrent": _Format(
-        section="Preferences",
+        section="WebUI",
         separator="=",
         file=("qBittorrent", "qBittorrent.conf"),
-        allowed={"password_pbkdf2": ("WebUI\\Password_PBKDF2", _QT_PBKDF2)},
+        allowed={"password_pbkdf2": ("Password_PBKDF2", _QT_PBKDF2)},
         fixed={
-            "WebUI\\Username": "orama",
-            "WebUI\\LocalHostAuth": "false",
-            "WebUI\\HostHeaderValidation": "false",
+            "Username": QBITTORRENT_WEBUI_USER,
+            # Never off: Gluetun's proxy shares qBittorrent's network, so a request through
+            # it arrives from localhost. The port-forward hook logs in instead.
+            "LocalHostAuth": "true",
+            "HostHeaderValidation": "false",
         },
         # qBittorrent itself writes the hash quoted; matching it keeps a re-run unchanged.
-        quoted=frozenset({"WebUI\\Password_PBKDF2"}),
+        quoted=frozenset({"Password_PBKDF2"}),
     ),
 }
 

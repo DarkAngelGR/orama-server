@@ -43,7 +43,9 @@ def test_secret_env_and_gluetun_privileges():
     assert CATALOG["sonarr"].secret_env == ("SONARR__AUTH__APIKEY",)
     assert CATALOG["radarr"].secret_env == ("RADARR__AUTH__APIKEY",)
     assert CATALOG["prowlarr"].secret_env == ("PROWLARR__AUTH__APIKEY",)
-    assert CATALOG["gluetun"].secret_env == ("WIREGUARD_PRIVATE_KEY", "HTTPPROXY_PASSWORD")
+    assert CATALOG["gluetun"].secret_env == (
+        "WIREGUARD_PRIVATE_KEY", "HTTPPROXY_PASSWORD", "QBT_WEBUI_PASSWORD",
+    )
     assert CATALOG["gluetun"].cap_add == ("NET_ADMIN",)
     assert CATALOG["gluetun"].devices == ("/dev/net/tun",)
     assert CATALOG["plex"].secret_env == ()

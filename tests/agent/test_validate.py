@@ -780,14 +780,70 @@ def test_gluetun_options_refused_on_other_apps(roots, key):
     refused(doc, roots)
 
 
-def test_port_forward_command_keeps_interpolation_refusal(roots):
-    # The pinned command holds no '$', so the blanket '$' refusal still covers it.
-    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND
+HOOK = GLUETUN_PORT_FORWARD_UP_COMMAND
+DOLLAR = "may not contain '\\$'"
+
+
+def test_pinned_hook_is_the_one_dollar_accepted(roots):
     doc = good_doc(roots)
-    doc["services"]["gluetun"]["environment"]["VPN_PORT_FORWARDING_UP_COMMAND"] = (
-        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("{{PORTS}}", "${PORTS}")
-    )
-    refused_with(doc, roots, "may not contain '\\$'")
+    assert "$" in gluetun_env(doc)["VPN_PORT_FORWARDING_UP_COMMAND"]
+    validate_compose(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        HOOK.replace("{{PORTS}}", "${PORTS}"),
+        HOOK.replace("$$QBT_WEBUI_PASSWORD", "$QBT_WEBUI_PASSWORD"),
+        HOOK.replace("$$QBT_WEBUI_PASSWORD", "${QBT_WEBUI_PASSWORD}"),
+        HOOK.replace("$$QBT_WEBUI_PASSWORD", "$$HOME"),
+        HOOK + "$$",
+        HOOK + " ",
+        "$$QBT_WEBUI_PASSWORD",
+    ],
+)
+def test_altered_hook_with_dollar_refused(roots, command):
+    doc = good_doc(roots)
+    gluetun_env(doc)["VPN_PORT_FORWARDING_UP_COMMAND"] = command
+    refused_with(doc, roots, DOLLAR)
+
+
+def _put(doc, where):
+    """Place the pinned hook (or '$$x') somewhere other than its one allowed spot."""
+    services = doc["services"]
+    if where == "sonarr_same_key":
+        services["sonarr"]["environment"]["VPN_PORT_FORWARDING_UP_COMMAND"] = HOOK
+    elif where == "gluetun_other_key":
+        gluetun_env(doc)["TZ"] = HOOK
+    elif where == "gluetun_down_command":
+        gluetun_env(doc)["VPN_PORT_FORWARDING_DOWN_COMMAND"] = HOOK
+    elif where == "as_key":
+        gluetun_env(doc)[HOOK] = "on"
+    elif where == "env_as_list":
+        services["gluetun"]["environment"] = [f"VPN_PORT_FORWARDING_UP_COMMAND={HOOK}"]
+    elif where == "image":
+        services["gluetun"]["image"] = HOOK
+    elif where == "volume":
+        services["sonarr"]["volumes"].append(HOOK)
+    elif where == "network":
+        doc["networks"]["orama"]["name"] = HOOK
+    elif where == "double_dollar_env":
+        services["sonarr"]["environment"]["TZ"] = "$$HOME"
+    elif where == "double_dollar_gluetun":
+        gluetun_env(doc)["HTTPPROXY_USER"] = "$$orama"
+    elif where == "top_level_key":
+        doc[HOOK] = {}
+
+
+@pytest.mark.parametrize("where", [
+    "sonarr_same_key", "gluetun_other_key", "gluetun_down_command", "as_key", "env_as_list",
+    "image", "volume", "network", "double_dollar_env", "double_dollar_gluetun",
+    "top_level_key",
+])
+def test_dollar_refused_everywhere_else(roots, where):
+    doc = good_doc(roots)
+    _put(doc, where)
+    refused_with(doc, roots, DOLLAR)
 
 
 def test_refuses_missing_environment_key(roots):
@@ -921,8 +977,33 @@ def test_proxy_user_requires_a_proxy_password(roots, gluetun_env_file):
         validate_secrets_present(good_doc(roots), env_files)
 
 
+def test_env_files_accept_qbittorrent_password_for_gluetun_only(roots):
+    validate_env_files(
+        {"gluetun": {"WIREGUARD_PRIVATE_KEY": "k+/=", "QBT_WEBUI_PASSWORD": "a-b_c"}}, roots
+    )
+    for app, name in [("qbittorrent", "QBT_WEBUI_PASSWORD"), ("sonarr", "QBT_WEBUI_PASSWORD")]:
+        with pytest.raises(Refused):
+            validate_env_files({app: {name: "a-b_c"}}, roots)
+
+
+def test_qbittorrent_password_refused_in_compose(roots):
+    doc = good_doc(roots)
+    gluetun_env(doc)["QBT_WEBUI_PASSWORD"] = "x" * 12
+    refused_with(doc, roots, "secrets file")
+
+
+@pytest.mark.parametrize("password", [None, ""])
+def test_port_forward_hook_requires_qbittorrent_password(roots, password):
+    gluetun = {"WIREGUARD_PRIVATE_KEY": "k", "HTTPPROXY_PASSWORD": "p"}
+    if password is not None:
+        gluetun["QBT_WEBUI_PASSWORD"] = password
+    with pytest.raises(Refused, match="qBittorrent"):
+        validate_secrets_present(good_doc(roots), {"gluetun": gluetun})
+
+
 def test_proxy_password_present_is_accepted(roots):
-    env_files = {"gluetun": {"WIREGUARD_PRIVATE_KEY": "k", "HTTPPROXY_PASSWORD": "p"}}
+    env_files = {"gluetun": {"WIREGUARD_PRIVATE_KEY": "k", "HTTPPROXY_PASSWORD": "p",
+                             "QBT_WEBUI_PASSWORD": "q"}}
     validate_secrets_present(good_doc(roots), env_files)
     validate_secrets_present(build_apps_compose(setup_for(roots)), {})  # no proxy, no need
 

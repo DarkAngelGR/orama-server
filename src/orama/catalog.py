@@ -64,7 +64,8 @@ CATALOG: dict[str, ServiceSpec] = {
         _lsio("sabnzbd", "5.1.3-ls279", 8080),
         # No host port of its own; with VPN on it publishes qbittorrent's port.
         ServiceSpec("gluetun", "qmcgaw/gluetun:v3.41.3", 0, 0, "/gluetun", False,
-                    "gluetun", ("WIREGUARD_PRIVATE_KEY", "HTTPPROXY_PASSWORD"),
+                    "gluetun",
+                    ("WIREGUARD_PRIVATE_KEY", "HTTPPROXY_PASSWORD", "QBT_WEBUI_PASSWORD"),
                     cap_add=("NET_ADMIN",), devices=("/dev/net/tun",)),
         _lsio("qbittorrent", "5.3.0_v2.1.2-ls486", 8090),
         ServiceSpec("recyclarr", "recyclarr/recyclarr:8.8.1", 0, 0, "/config", False,
@@ -84,18 +85,31 @@ CORE: dict[str, ServiceSpec] = {
     )
 }
 
+# qBittorrent's WebUI user (orama-seeded); its password is the secret password:qbittorrent.
+QBITTORRENT_WEBUI_USER = "orama"
+
 # Gluetun runs this whenever the VPN forwards a new port, telling qBittorrent (in Gluetun's
-# network, WebUI port 8090, localhost auth off) to listen on it. Gluetun v3.41.3 substitutes
-# {{PORTS}} and splits the line itself; no '$', which the Agent refuses in any compose value.
+# network, WebUI port 8090) to listen on it. qBittorrent keeps localhost auth on, so the
+# hook logs in first and keeps the session cookie in Gluetun's /tmp.
+# - Gluetun v3.41.3 substitutes {{PORTS}}, splits the line itself (quotes, no expansion)
+#   and runs it with its own environment, which holds QBT_WEBUI_PASSWORD from its env
+#   file; the shell expands it. The password is never in compose.yaml.
+# - '$$' is Compose's escape for a literal '$'. This exact string is the only '$' the
+#   Agent accepts anywhere in a compose document.
+# - qBittorrent accepts a login with no Origin/Referer (not cross-site); the password is
+#   token_urlsafe, so it needs no form encoding.
 # Shared by the compose builder and the Agent's pin so the two cannot drift apart.
 GLUETUN_PORT_FORWARD_UP_COMMAND = (
-    r"""/bin/sh -c 'wget -O- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" """
+    r"""/bin/sh -c 'wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies """
+    r"""--keep-session-cookies --post-data "username=orama&password=$$QBT_WEBUI_PASSWORD" """
+    r"""http://127.0.0.1:8090/api/v2/auth/login && wget -qO- --load-cookies /tmp/qbt.cookies """
+    r"""--post-data "json={\"listen_port\":{{PORTS}}}" """
     r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
 )
 
 # User name for Gluetun's HTTP proxy (Prowlarr via the VPN). Its password is a secret in
 # Gluetun's env file. Without auth any container on orama-net could use the proxy to reach
-# qBittorrent's WebUI as "localhost", where it asks for no password.
+# qBittorrent's WebUI from "localhost" (qBittorrent still asks for its password there).
 GLUETUN_PROXY_USER = "orama"
 
 # UGOS Pro web UI ports (HTTP / HTTPS) plus common system ports.

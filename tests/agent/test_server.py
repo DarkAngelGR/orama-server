@@ -691,7 +691,8 @@ def test_seed_config_writes_private_file_owned_by_app_user(agent, roots):
 def test_seed_config_creates_qbittorrent_subfolder_owned_by_app_user(agent, roots):
     assert agent.client.seed_config("qbittorrent", qbt_values()) is True
     path = qbt_conf(roots)
-    assert f'WebUI\\Password_PBKDF2="{qbt_values()["password_pbkdf2"]}"' in path.read_text()
+    text = path.read_text()
+    assert f'[WebUI]\nPassword_PBKDF2="{qbt_values()["password_pbkdf2"]}"\n' in text
     assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
     sub = path.parent
     assert (str(sub), roots.puid, roots.pgid) in agent.chowns.calls

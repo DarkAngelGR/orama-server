@@ -186,6 +186,9 @@ def _secret_names(app: str, setup: DesiredSetup) -> dict[str, str]:
         names = {"WIREGUARD_PRIVATE_KEY": VPN_KEY_NAME}
         if setup.vpn is not None and setup.vpn.route_prowlarr:
             names["HTTPPROXY_PASSWORD"] = _PROXY_PASSWORD_NAME
+        if setup.vpn is not None and setup.vpn.port_forwarding:
+            # The port-forward hook logs in to qBittorrent with it.
+            names["QBT_WEBUI_PASSWORD"] = QBITTORRENT_PASSWORD_NAME
         return names
     return {env: f"apikey:{app}" for env in CATALOG[app].secret_env}
 
