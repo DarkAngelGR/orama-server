@@ -2,7 +2,7 @@ import copy
 import os
 
 import pytest
-from conftest import make_setup
+from conftest import make_setup, random_secret
 
 from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND, GLUETUN_PROXY_USER
 from orama.compose import build_apps_compose
@@ -899,10 +899,11 @@ def test_refusal_message_truncates_untrusted_names(roots):
 
 def test_refusal_message_hides_environment_values(roots):
     doc = good_doc(roots)
-    doc["services"]["sonarr"]["environment"]["SONARR__AUTH__APIKEY"] = "s3cr3tvalue"
+    secret = random_secret()
+    doc["services"]["sonarr"]["environment"]["SONARR__AUTH__APIKEY"] = secret
     with pytest.raises(Refused) as exc:
         validate_compose(doc, roots)
-    assert "s3cr3tvalue" not in str(exc.value)
+    assert secret not in str(exc.value)
 
 
 # ---------------------------------------------------------------- ports

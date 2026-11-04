@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
-from conftest import make_setup
+from conftest import make_setup, random_secret
 from wiring import test_arr, test_prowlarr, test_qbittorrent, test_sabnzbd
 
 from orama import cli
@@ -566,13 +566,14 @@ def test_apply_undecryptable_secret_store(capsys, caplog, roots, agent):
     data, cfg = roots
     path = write_setup(cfg, data)
     store = SecretStore(cfg / "orama" / "secrets.bin")
-    store.set("apikey:sonarr", "0123456789abcdef0123456789abcdef")
+    stored = random_secret()
+    store.set("apikey:sonarr", stored)
     (cfg / "orama" / "secrets.key").write_bytes(b"A" * 43 + b"=")
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr()
     assert code == 1
     assert_clean_failure(out, caplog, cfg, "Cannot apply: cannot decrypt")
-    assert "0123456789abcdef" not in out.err + out.out + caplog.text
+    assert stored not in out.err + out.out + caplog.text
 
 
 def test_apply_with_prowlarr_via_vpn_sends_proxy_password(capsys, roots, agent):
@@ -695,14 +696,15 @@ def test_apply_failing_indexer_exits_1_but_finishes_the_rest(capsys, roots, agen
     geek = IndexerChoice(slug="geek", definition="geek", name="NZBGeek",
                          fields={"baseUrl": "https://geek.example"}, secret_fields=("apikey",))
     path = write_setup(cfg, data, indexers=(geek,))
-    SecretStore(cfg / "orama" / "secrets.bin").set("indexer:geek:apikey", "indexer-secret-1")
+    indexer_key = random_secret()
+    SecretStore(cfg / "orama" / "secrets.bin").set("indexer:geek:apikey", indexer_key)
     agent.fleet.prowlarr.test_status = 400
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr()
     assert code == 1
     failed = [line for line in out.out.splitlines() if line.startswith("✗")]
     assert len(failed) == 1 and failed[0].startswith("✗ Prowlarr: ")
-    assert "indexer-secret-1" not in out.out + out.err
+    assert indexer_key not in out.out + out.err
     assert "✓ Sonarr: " in "\n".join(out.out.splitlines())  # wiring before it still ran
     assert "Traceback" not in out.err
 
@@ -807,7 +809,7 @@ def test_apply_new_qbittorrent_password_gets_a_new_hash(capsys, roots, agent):
     assert cli.main(["apply", "--setup", str(path)]) == 0
     store = SecretStore(cfg / "orama" / "secrets.bin")
     first = store.get("qbhash:qbittorrent")
-    store.set("password:qbittorrent", "another-password-1")
+    store.set("password:qbittorrent", random_secret())
     capsys.readouterr()
     assert cli.main(["apply", "--setup", str(path)]) == 0
     assert store.get("qbhash:qbittorrent") != first
@@ -915,13 +917,14 @@ def test_set_secret_replaces_and_keeps_others(capsys, monkeypatch, roots):
     cfg.mkdir()
     write_setup(cfg, data)
     store = SecretStore(cfg / "orama" / "secrets.bin")
-    store.set("apikey:sonarr", "0123456789abcdef0123456789abcdef")
-    store.set("usenet:main:password", "old-value")
+    kept = random_secret()
+    store.set("apikey:sonarr", kept)
+    store.set("usenet:main:password", random_secret())
     code, _ = run_set_secret(capsys, monkeypatch, cfg, ["usenet:main:password"],
                              FakeStdin("new-value\r\n"))
     assert code == 0
     assert store.get("usenet:main:password") == "new-value"
-    assert store.get("apikey:sonarr") == "0123456789abcdef0123456789abcdef"
+    assert store.get("apikey:sonarr") == kept
 
 
 def test_set_secret_tty_reads_without_echo(capsys, monkeypatch, roots):
@@ -1018,7 +1021,7 @@ def test_set_secret_undecryptable_store_is_plain(capsys, caplog, monkeypatch, ro
     data, cfg = roots
     cfg.mkdir()
     write_setup(cfg, data)
-    SecretStore(cfg / "orama" / "secrets.bin").set("apikey:sonarr", "0123456789abcdef")
+    SecretStore(cfg / "orama" / "secrets.bin").set("apikey:sonarr", random_secret())
     (cfg / "orama" / "secrets.key").write_bytes(b"A" * 43 + b"=")
     value = _secret_value()
     code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey"],

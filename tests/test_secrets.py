@@ -5,7 +5,7 @@ import re
 import stat
 
 import pytest
-from conftest import make_setup
+from conftest import make_setup, random_secret
 
 from orama.secrets import (
     MissingSecret,
@@ -30,9 +30,10 @@ def mode(path) -> int:
 
 def test_store_file_is_encrypted_and_private(tmp_path):
     st = SecretStore(tmp_path / "secrets.bin")
-    st.set("apikey:sonarr", "abc123secret")
+    value = random_secret()
+    st.set("apikey:sonarr", value)
     raw = (tmp_path / "secrets.bin").read_bytes()
-    assert b"abc123secret" not in raw
+    assert value.encode() not in raw
     assert mode(tmp_path / "secrets.bin") == 0o600
     assert mode(tmp_path / "secrets.key") == 0o600
 
@@ -96,9 +97,10 @@ def test_ensure_app_keys_is_idempotent(tmp_path):
 
 def test_ensure_app_keys_never_overwrites_existing(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
-    st.set("apikey:sonarr", "existing-key")
+    existing = random_secret()
+    st.set("apikey:sonarr", existing)
     ensure_app_keys(st, ["sonarr", "radarr"])
-    assert st.get("apikey:sonarr") == "existing-key"
+    assert st.get("apikey:sonarr") == existing
     assert st.get("apikey:radarr") is not None
 
 
@@ -224,8 +226,9 @@ def test_short_values_not_used_for_literal_replacement(tmp_path, caplog):
 
 def test_pattern_rule_applies_without_store_values(tmp_path, caplog):
     install_redaction(SecretStore(tmp_path / "s.bin"))
-    logging.getLogger("x").warning('cfg {"password": "hunter2hunter2"} token: abcdefgh')
-    assert "hunter2hunter2" not in caplog.text and "abcdefgh" not in caplog.text
+    pw, tok = random_secret(), random_secret()
+    logging.getLogger("x").warning('cfg {"password": "' + pw + '"} token: ' + tok)
+    assert pw not in caplog.text and tok not in caplog.text
 
 
 def test_exception_tracebacks_redacted(tmp_path, caplog):
@@ -321,11 +324,12 @@ def test_ensure_app_keys_creates_download_client_secrets(tmp_path):
 
 def test_ensure_app_keys_keeps_existing_download_client_secrets(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
-    st.set("password:qbittorrent", "existing-password")
-    st.set("nzbkey:sabnzbd", "existing-nzb-key")
+    password, nzb = random_secret(), random_secret()
+    st.set("password:qbittorrent", password)
+    st.set("nzbkey:sabnzbd", nzb)
     ensure_app_keys(st, DOWNLOAD_APPS)
-    assert st.get("password:qbittorrent") == "existing-password"
-    assert st.get("nzbkey:sabnzbd") == "existing-nzb-key"
+    assert st.get("password:qbittorrent") == password
+    assert st.get("nzbkey:sabnzbd") == nzb
     assert st.get("apikey:sabnzbd") is not None
 
 
