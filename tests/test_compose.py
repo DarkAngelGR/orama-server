@@ -7,7 +7,13 @@ import pytest
 import yaml
 from conftest import make_setup
 
-from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND, GLUETUN_PROXY_USER
+from orama.catalog import (
+    CATALOG,
+    CORE,
+    GLUETUN_PORT_FORWARD_UP_COMMAND,
+    GLUETUN_PROXY_USER,
+    QBITTORRENT_WEBUI_USER,
+)
 from orama.compose import (
     QBITTORRENT_WEBUI_PORT,
     SHARED_NETWORK,
@@ -102,9 +108,14 @@ def test_no_port_forwarding_env_when_disabled():
     assert "VPN_PORT_FORWARDING" not in env
 
 
-# Verbatim from the plan's "Fixed values" table.
+# The plan's "Fixed values" hook, changed in the Task 2 fix round: qBittorrent keeps
+# localhost auth on, so the hook logs in first. '$$' is Compose's escape for a literal '$';
+# the password comes from Gluetun's env file.
 PORT_FORWARD_COMMAND = (
-    r"""/bin/sh -c 'wget -O- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" """
+    r"""/bin/sh -c 'wget -qO- --retry-connrefused --save-cookies /tmp/qbt.cookies """
+    r"""--keep-session-cookies --post-data "username=orama&password=$$QBT_WEBUI_PASSWORD" """
+    r"""http://127.0.0.1:8090/api/v2/auth/login && wget -qO- --load-cookies /tmp/qbt.cookies """
+    r"""--post-data "json={\"listen_port\":{{PORTS}}}" """
     r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
 )
 
@@ -112,8 +123,10 @@ PORT_FORWARD_COMMAND = (
 def test_port_forward_command_is_the_fixed_value():
     assert GLUETUN_PORT_FORWARD_UP_COMMAND == PORT_FORWARD_COMMAND
     assert f"http://127.0.0.1:{QBITTORRENT_WEBUI_PORT}/" in GLUETUN_PORT_FORWARD_UP_COMMAND
-    # No '$': the Agent refuses Compose variable substitution anywhere in the document.
-    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND
+    # One '$' only, escaped for Compose: the Agent refuses every other '$' in the document.
+    assert GLUETUN_PORT_FORWARD_UP_COMMAND.count("$") == 2
+    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND.replace("$$QBT_WEBUI_PASSWORD", "")
+    assert f"username={QBITTORRENT_WEBUI_USER}&" in GLUETUN_PORT_FORWARD_UP_COMMAND
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -334,3 +347,17 @@ def test_env_file_pin_is_in_app_env_dir():
     doc = build_apps_compose(s)
     assert doc["services"]["sonarr"]["env_file"] == ["/srv/orama/app-env/sonarr.env"]
     assert doc["services"]["gluetun"]["env_file"] == ["/srv/orama/app-env/gluetun.env"]
+
+
+def test_qbittorrent_password_never_in_compose_yaml(tmp_path):
+    s = full(vpn={"provider": "protonvpn", "port_forwarding": True})
+    store = SecretStore(tmp_path / "s.bin")
+    store.set("vpn:wireguard_private_key", "k" * 8)
+    ensure_app_keys(store, enabled_apps(s))
+    password = env_files_for(s, store)["gluetun"]["QBT_WEBUI_PASSWORD"]
+    assert password == store.get("password:qbittorrent")
+    text = dump_yaml(build_apps_compose(s))
+    assert password not in text
+    env = yaml.safe_load(text)["services"]["gluetun"]["environment"]
+    assert "QBT_WEBUI_PASSWORD" not in env
+    assert "$$QBT_WEBUI_PASSWORD" in env["VPN_PORT_FORWARDING_UP_COMMAND"]

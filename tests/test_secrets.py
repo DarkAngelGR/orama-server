@@ -117,11 +117,14 @@ def test_env_files_for_gluetun(tmp_path):
     from orama.setup_model import VpnConfig
 
     st = SecretStore(tmp_path / "s.bin")
-    ensure_app_keys(st, ["sonarr", "radarr", "prowlarr"])
+    ensure_app_keys(st, ["sonarr", "radarr", "prowlarr", "qbittorrent"])
     st.set("vpn:wireguard_private_key", fake_secret("ab"))
     setup = make_setup(download_methods={"torrent"}, vpn=VpnConfig())
     envs = env_files_for(setup, st)
-    assert envs["gluetun"] == {"WIREGUARD_PRIVATE_KEY": fake_secret("ab")}
+    assert envs["gluetun"] == {
+        "WIREGUARD_PRIVATE_KEY": fake_secret("ab"),
+        "QBT_WEBUI_PASSWORD": st.get("password:qbittorrent"),
+    }
     assert "qbittorrent" not in envs and "bazarr" not in envs
 
 
@@ -150,13 +153,15 @@ def test_env_files_for_gluetun_proxy_password(tmp_path, route):
     setup = make_setup(download_methods={"torrent"}, vpn=VpnConfig(route_prowlarr=route))
     ensure_app_keys(st, VPN_APPS, gluetun_proxy=route)
     gluetun = env_files_for(setup, st)["gluetun"]
+    qbt = {"QBT_WEBUI_PASSWORD": st.get("password:qbittorrent")}  # port forwarding is on
     if route:
         assert gluetun == {
             "WIREGUARD_PRIVATE_KEY": fake_secret("ab"),
             "HTTPPROXY_PASSWORD": st.get("password:gluetun-proxy"),
+            **qbt,
         }
     else:
-        assert gluetun == {"WIREGUARD_PRIVATE_KEY": fake_secret("ab")}
+        assert gluetun == {"WIREGUARD_PRIVATE_KEY": fake_secret("ab"), **qbt}
 
 
 def test_env_files_for_missing_proxy_password(tmp_path):
@@ -342,3 +347,34 @@ def test_qbittorrent_pbkdf2_random_salt_and_shape():
 def test_qbittorrent_pbkdf2_refuses_wrong_salt_size():
     with pytest.raises(ValueError):
         qbittorrent_pbkdf2("pw", b"short")
+
+
+@pytest.mark.parametrize("port_forwarding", [True, False])
+def test_env_files_for_gluetun_qbittorrent_password_only_with_port_forwarding(
+    tmp_path, port_forwarding
+):
+    from orama.setup_model import VpnConfig
+
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("vpn:wireguard_private_key", fake_secret("ab"))
+    ensure_app_keys(st, VPN_APPS)
+    setup = make_setup(download_methods={"torrent"},
+                       vpn=VpnConfig(port_forwarding=port_forwarding))
+    gluetun = env_files_for(setup, st)["gluetun"]
+    if port_forwarding:
+        assert gluetun["QBT_WEBUI_PASSWORD"] == st.get("password:qbittorrent")
+    else:
+        assert "QBT_WEBUI_PASSWORD" not in gluetun
+    assert "qbittorrent" not in env_files_for(setup, st)
+
+
+def test_env_files_for_missing_qbittorrent_password(tmp_path):
+    from orama.setup_model import VpnConfig
+
+    st = SecretStore(tmp_path / "s.bin")
+    st.set("vpn:wireguard_private_key", fake_secret("ab"))
+    ensure_app_keys(st, ["sonarr", "radarr", "prowlarr"])
+    setup = make_setup(download_methods={"torrent"}, vpn=VpnConfig(port_forwarding=True))
+    with pytest.raises(MissingSecret) as ei:
+        env_files_for(setup, st)
+    assert (ei.value.secret_name, ei.value.app) == ("password:qbittorrent", "gluetun")

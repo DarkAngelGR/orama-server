@@ -55,27 +55,32 @@ def test_sabnzbd_patches_section_and_keeps_every_other_line():
 
 
 def test_qbittorrent_patches_existing_keys_and_appends_missing():
+    # The layout qBittorrent 5.3 writes after its first start (MigrationVersion 12).
     text = (
-        "[Application]\r\n"
-        "FileLogger\\Enabled=true\r\n"
+        "[Meta]\r\n"
+        "MigrationVersion=12\r\n"
         "\r\n"
         "[Preferences]\r\n"
-        "Connection\\PortRangeMin=6881\r\n"
-        "WebUI\\LocalHostAuth=true\r\n"
-        "WebUI\\Port=8090\r\n"
+        "Connection\\ResolvePeerCountries=true\r\n"
+        "\r\n"
+        "[WebUI]\r\n"
+        "LocalHostAuth=false\r\n"
+        "Port=8090\r\n"
     )
     out = render("qbittorrent", text, QBT)
     assert out == (
-        "[Application]\r\n"
-        "FileLogger\\Enabled=true\r\n"
+        "[Meta]\r\n"
+        "MigrationVersion=12\r\n"
         "\r\n"
         "[Preferences]\r\n"
-        "Connection\\PortRangeMin=6881\r\n"
-        "WebUI\\LocalHostAuth=false\r\n"
-        "WebUI\\Port=8090\r\n"
-        f'WebUI\\Password_PBKDF2="{QBT["password_pbkdf2"]}"\n'
-        "WebUI\\Username=orama\n"
-        "WebUI\\HostHeaderValidation=false\n"
+        "Connection\\ResolvePeerCountries=true\r\n"
+        "\r\n"
+        "[WebUI]\r\n"
+        "LocalHostAuth=true\r\n"
+        "Port=8090\r\n"
+        f'Password_PBKDF2="{QBT["password_pbkdf2"]}"\n'
+        "Username=orama\n"
+        "HostHeaderValidation=false\n"
     )
 
 
@@ -83,18 +88,27 @@ def test_qbittorrent_patches_existing_keys_and_appends_missing():
 def test_appends_missing_section(current):
     out = render("qbittorrent", current, QBT)
     body = (
-        "[Preferences]\n"
-        f'WebUI\\Password_PBKDF2="{QBT["password_pbkdf2"]}"\n'
-        "WebUI\\Username=orama\n"
-        "WebUI\\LocalHostAuth=false\n"
-        "WebUI\\HostHeaderValidation=false\n"
+        "[WebUI]\n"
+        f'Password_PBKDF2="{QBT["password_pbkdf2"]}"\n'
+        "Username=orama\n"
+        "LocalHostAuth=true\n"
+        "HostHeaderValidation=false\n"
     )
     assert out == ("[Application]\nx=1\n\n" + body if current else body)
 
 
+def test_qbittorrent_old_preferences_keys_are_not_what_counts():
+    # qBittorrent 5.3 reads [WebUI] only; old-style [Preferences] WebUI\\ keys are ignored.
+    old = ("[Preferences]\nWebUI\\LocalHostAuth=true\nWebUI\\Username=orama\n"
+           "WebUI\\HostHeaderValidation=false\n"
+           f'WebUI\\Password_PBKDF2="{QBT["password_pbkdf2"]}"\n')
+    out = render("qbittorrent", old, QBT)
+    assert out is not None and out.startswith(old) and "\n[WebUI]\n" in out
+
+
 @pytest.mark.parametrize("app,values,current", [
     ("sabnzbd", SAB, SAB_INI),
-    ("qbittorrent", QBT, "[Preferences]\nWebUI\\Port=8090\n"),
+    ("qbittorrent", QBT, "[WebUI]\nPort=8090\n"),
     ("qbittorrent", QBT, None),
 ])
 def test_second_render_is_unchanged(app, values, current):  # [RF 3]
@@ -107,8 +121,8 @@ def test_values_written_the_way_the_apps_rewrite_them_count_as_unchanged():
     sab = (f"[misc]\napi_key = {SAB['api_key']}\nnzb_key = \"{SAB['nzb_key']}\"\n"
            "host_whitelist = sabnzbd,gluetun,localhost,\n")
     assert render("sabnzbd", sab, SAB) is None
-    qbt = ("[Preferences]\nWebUI\\HostHeaderValidation=false\nWebUI\\LocalHostAuth=false\n"
-           f"WebUI\\Password_PBKDF2=\"{QBT['password_pbkdf2']}\"\nWebUI\\Username=orama\n")
+    qbt = ("[WebUI]\nHostHeaderValidation=false\nLocalHostAuth=true\n"
+           f"Password_PBKDF2=\"{QBT['password_pbkdf2']}\"\nPort=8090\nUsername=orama\n")
     assert render("qbittorrent", qbt, QBT) is None
 
 
@@ -167,7 +181,7 @@ def _swap(text, old, new):
     qt_hash() + "\n",
     _swap(qt_hash(), ")", "]"),
     _swap(qt_hash(), "==:", "==\n"),
-    _swap(qt_hash(), "==)", "==)\n[Preferences]\nWebUI\\Username=x"),
+    _swap(qt_hash(), "==)", "==)\n[WebUI]\nUsername=x"),
     _swap(qt_hash(), "AQ", "A-"),
     "password",
     "",
@@ -182,3 +196,10 @@ def test_refusal_message_never_shows_the_value():
     with pytest.raises(Refused) as err:
         render("sabnzbd", None, dict(SAB, api_key=value))
     assert value not in str(err.value)
+
+
+def test_qbittorrent_keeps_localhost_auth_on():
+    # Never off: anything in Gluetun's network (its proxy, say) would reach the WebUI as
+    # localhost. The port-forward hook logs in instead.
+    out = render("qbittorrent", "[WebUI]\nLocalHostAuth=false\n", QBT)
+    assert "\nLocalHostAuth=true\n" in out and "LocalHostAuth=false" not in out

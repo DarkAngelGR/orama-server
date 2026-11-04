@@ -47,6 +47,7 @@ VPN_SERVICE = "gluetun"
 VPN_CLIENT = "qbittorrent"
 VPN_NETWORK_MODE = f"service:{VPN_SERVICE}"
 VPN_DEPENDS_ON = {VPN_SERVICE: {"condition": "service_healthy"}}
+_HOOK_PATH = ("services", VPN_SERVICE, "environment", "VPN_PORT_FORWARDING_UP_COMMAND")
 
 TOP_LEVEL_KEYS = frozenset({"name", "services", "networks"})
 SERVICE_KEYS = frozenset({
@@ -152,8 +153,9 @@ def validate_compose(doc: dict, roots: Roots) -> None:
     """Refuse anything the apps compose builder would not have produced."""
     if not isinstance(doc, dict):
         raise Refused("The apps description is not a mapping.")
-    # Compose interpolates $VAR / ${VAR:-x} after we validate, so no string may hold '$'.
-    _refuse_interpolation(doc, 0)
+    # Compose interpolates $VAR / ${VAR:-x} after we validate, so no string may hold '$',
+    # except the one pinned port-forward hook at its one place.
+    _refuse_interpolation(doc, 0, ())
     extra = set(doc) - TOP_LEVEL_KEYS
     if extra:
         raise Refused(f"The apps description has unsupported sections: {_names(extra)}.")
@@ -192,19 +194,21 @@ def _is_shared_network(networks: Any) -> bool:
     )
 
 
-def _refuse_interpolation(node: Any, depth: int) -> None:
+def _refuse_interpolation(node: Any, depth: int, path: tuple[Any, ...]) -> None:
+    """Refuse '$' in every key and value, but for the exact pinned hook string as the
+    value of gluetun's ``VPN_PORT_FORWARDING_UP_COMMAND`` (its ``$$`` renders as ``$``)."""
     if depth > _MAX_DEPTH:
         raise Refused("The apps description is nested too deeply.")
     if isinstance(node, str):
-        if "$" in node:
+        if "$" in node and not (path == _HOOK_PATH and node == GLUETUN_PORT_FORWARD_UP_COMMAND):
             raise Refused("The apps description may not contain '$' (variable substitution).")
     elif isinstance(node, dict):
         for key, value in node.items():
-            _refuse_interpolation(key, depth + 1)
-            _refuse_interpolation(value, depth + 1)
+            _refuse_interpolation(key, depth + 1, ())
+            _refuse_interpolation(value, depth + 1, (*path, key))
     elif isinstance(node, list):
         for item in node:
-            _refuse_interpolation(item, depth + 1)
+            _refuse_interpolation(item, depth + 1, (*path, None))
 
 
 def _validate_service(
@@ -474,12 +478,19 @@ def validate_secrets_present(doc: dict, env_files: dict[str, dict[str, str]]) ->
     """Refuse an apply whose compose needs a secret its env files leave out.
 
     Call after ``validate_compose`` and ``validate_env_files``. Gluetun's proxy user without
-    a password would leave the proxy open to every app.
+    a password would leave the proxy open to every app; the port-forward hook without
+    qBittorrent's password could not log in.
     """
     gluetun = doc["services"].get("gluetun") or {}
-    proxy_on = "HTTPPROXY_USER" in gluetun.get("environment", {})
-    if proxy_on and not env_files.get("gluetun", {}).get("HTTPPROXY_PASSWORD"):
+    environment = gluetun.get("environment", {})
+    secrets = env_files.get("gluetun", {})
+    if "HTTPPROXY_USER" in environment and not secrets.get("HTTPPROXY_PASSWORD"):
         raise Refused("The VPN's web proxy is on, but its password was not sent.")
+    if "VPN_PORT_FORWARDING_UP_COMMAND" in environment and not secrets.get("QBT_WEBUI_PASSWORD"):
+        raise Refused(
+            "VPN port forwarding is on, but the qBittorrent password it logs in with was "
+            "not sent."
+        )
 
 
 def validate_env_files(env_files: dict[str, dict[str, str]], roots: Roots) -> None:
