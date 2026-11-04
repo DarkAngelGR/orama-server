@@ -386,10 +386,13 @@ def app_get(applied: dict, secrets_: dict[str, str], app: str, path: str):
 def test_pinned_notification_contracts(clean_host, applied, capsys):
     for app in ("sonarr", "radarr"):
         schemas = app_get(applied, stored_secrets(clean_host), app, "/api/v3/notification/schema")
-        media = [s for s in schemas if any(n in s["name"].lower()
-                for n in ("plex", "emby", "jellyfin"))]
-        assert any("plex" in s["name"].lower() for s in media)
-        assert any(n in s["name"].lower() for s in media for n in ("emby", "jellyfin"))
+        # Templates leave "name" empty; the type is in implementationName/implementation.
+        def label(s):
+            return " ".join(str(s.get(k) or "") for k in
+                            ("implementationName", "implementation", "name")).lower()
+        media = [s for s in schemas if any(n in label(s) for n in ("plex", "emby", "jellyfin"))]
+        assert any("plex" in label(s) for s in media), sorted(label(s) for s in schemas)
+        assert any(n in label(s) for s in media for n in ("emby", "jellyfin"))
         with capsys.disabled():
             for schema in media:
                 fields = sorted(f["name"] for f in schema["fields"])
