@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
-from conftest import make_setup
+from conftest import make_setup, random_secret
 
 from orama.agent_client import DEFAULT_TIMEOUT, AgentClient, AgentError
 from orama.catalog import CATALOG
@@ -36,7 +36,7 @@ from orama_agent.server import (
 from orama_agent.validate import Refused, Roots
 
 PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
-SECRET = "s3cr3tvalue-0123456789abcdef"
+SECRET = random_secret()
 
 # ---------------------------------------------------------------- fixtures
 

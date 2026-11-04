@@ -1,3 +1,5 @@
+import os
+
 import pytest  # noqa: F401
 
 from orama.setup_model import DesiredSetup
@@ -16,3 +18,8 @@ def make_setup(**overrides) -> DesiredSetup:
     }
     values.update(overrides)
     return DesiredSetup(**values)
+
+
+def random_secret(prefix: str = "", nbytes: int = 8) -> str:
+    """A random secret-shaped value built at run time, so no key-like literal sits in the repo."""
+    return prefix + os.urandom(nbytes).hex()
