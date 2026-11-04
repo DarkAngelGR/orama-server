@@ -7,7 +7,12 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from orama.wiring.http import (
-    FakeHttp, Http, Response, ResponseTooLarge, UnsafeRedirect, Unreachable,
+    FakeHttp,
+    Http,
+    Response,
+    ResponseTooLarge,
+    Unreachable,
+    UnsafeRedirect,
 )
 
 AWKWARD = "a&b=c%d+e #f Ταινίες"
