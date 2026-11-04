@@ -415,7 +415,53 @@ def test_changed_indexer_secret_is_resent_via_marker(tmp_path):
     store.set("indexer:geek:apikey", "new key")
     by = statuses(run(setup, store, pw))
     assert by["prowlarr:indexer:geek"] == "changed"
-    assert pw.value(pw.by_name(pw.indexers, "NZBGeek"), "…498 tokens truncated…
+    assert pw.value(pw.by_name(pw.indexers, "NZBGeek"), "apikey") == "new key"
+    assert statuses(run(setup, store, pw))["prowlarr:indexer:geek"] == "unchanged"
+
+
+def test_secret_marker_is_a_sha256_digest_not_the_secret(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    run(setup, store, pw)
+    assert store.get("prowlarr:app:sonarr:sent") == sha256(SONARR_KEY.encode()).hexdigest()
+    marker = store.get("prowlarr:indexer:geek:sent")
+    assert len(marker) == 64 and TRICKY not in marker
+
+
+def test_indexer_definition_not_offered_fails_plainly(tmp_path):
+    pw = FakeProwlarr()
+    choice = GEEK.model_copy(update={"definition": "nonexistent"})
+    setup, store = make(tmp_path, indexers=(choice,))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "failed"
+    assert "does not offer" in by["prowlarr:indexer:geek"].message
+
+
+def test_changed_indexer_definition_fails_without_modifying_existing_indexer(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    run(setup, store, pw)
+    before = copy.deepcopy(pw.indexers)
+    pw.writes.clear()
+    changed = GEEK.model_copy(update={"definition": "other"})
+    setup = setup.model_copy(update={"indexers": (changed,)})
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "failed"
+    assert "different type" in by["prowlarr:indexer:geek"].message
+    assert by["prowlarr:sync"].status == "skipped"
+    assert pw.indexers == before
+    assert pw.writes == []
+
+
+def test_indexer_field_not_in_schema_fails_plainly(tmp_path):
+    pw = FakeProwlarr()
+    choice = GEEK.model_copy(update={"fields": {"nosuchfield": "x"}})
+    setup, store = make(tmp_path, indexers=(choice,))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "failed"
+    assert "different version" in by["prowlarr:indexer:geek"].message
+
+
 def test_no_secret_in_results(tmp_path):
     pw = FakeProwlarr()
     setup, store = make(tmp_path, vpn=VpnConfig(route_prowlarr=True))
