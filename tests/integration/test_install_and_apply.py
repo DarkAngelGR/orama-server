@@ -40,6 +40,7 @@ DATA_SUBFOLDERS = [
 ]
 ADDRESS = re.compile(r"Orama is ready\. Open http://\S+:(\d+) in your browser\.")
 DOCKER_SOCKETS = {"/var/run/docker.sock", "/run/docker.sock"}
+SHARED_NETWORK = "orama-net"
 
 
 @dataclass
@@ -250,6 +251,22 @@ def test_every_app_runs(applied: dict):
         assert f"✓ {app} started" in lines
     for app in ("gluetun", "recyclarr"):
         assert run(["docker", "inspect", f"orama-{app}"]).returncode != 0, app
+
+
+def test_orama_reaches_apps_on_the_shared_network(applied: dict):
+    assert SHARED_NETWORK in docker_inspect("orama-server")["NetworkSettings"]["Networks"]
+    for app in APPS:
+        networks = docker_inspect(f"orama-{app}")["NetworkSettings"]["Networks"]
+        assert SHARED_NETWORK in networks, app
+    # By service name and container port, as the wiring will. Sonarr may still be starting.
+    deadline = time.monotonic() + READY_TIMEOUT
+    while True:
+        reach = run(["docker", "exec", "orama-server", "python", "-c",
+                     "import socket; socket.create_connection(('sonarr', 8989), 5)"])
+        if reach.returncode == 0 or time.monotonic() > deadline:
+            break
+        time.sleep(5)
+    assert reach.returncode == 0, f"Orama cannot reach sonarr:8989:\n{reach.stdout}"
 
 
 def test_sabnzbd_publishes_its_assigned_port(applied: dict, blocked_port: int):

@@ -7,8 +7,14 @@ import pytest
 import yaml
 from conftest import make_setup
 
-from orama.catalog import CATALOG, CORE
-from orama.compose import build_apps_compose, build_core_compose, dump_yaml
+from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND
+from orama.compose import (
+    QBITTORRENT_WEBUI_PORT,
+    SHARED_NETWORK,
+    build_apps_compose,
+    build_core_compose,
+    dump_yaml,
+)
 from orama.layout import app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
 
@@ -43,7 +49,6 @@ def test_compose_roundtrips_through_yaml_with_awkward_path():
 def test_top_level_and_service_basics():
     doc = build_apps_compose(full())
     assert doc["name"] == "orama-apps"
-    assert doc["networks"] == {"orama": {"driver": "bridge"}}
     for app, svc in doc["services"].items():
         assert svc["image"] == CATALOG[app].image
         assert svc["container_name"] == f"orama-{app}"
@@ -94,6 +99,67 @@ def test_no_port_forwarding_env_when_disabled():
     s = full(vpn={"provider": "protonvpn", "port_forwarding": False})
     env = build_apps_compose(s)["services"]["gluetun"]["environment"]
     assert "VPN_PORT_FORWARDING" not in env
+
+
+# Verbatim from the plan's "Fixed values" table.
+PORT_FORWARD_COMMAND = (
+    r"""/bin/sh -c 'wget -O- --retry-connrefused --post-data "json={\"listen_port\":{{PORTS}}}" """
+    r"""http://127.0.0.1:8090/api/v2/app/setPreferences 2>&1'"""
+)
+
+
+def test_port_forward_command_is_the_fixed_value():
+    assert GLUETUN_PORT_FORWARD_UP_COMMAND == PORT_FORWARD_COMMAND
+    assert f"http://127.0.0.1:{QBITTORRENT_WEBUI_PORT}/" in GLUETUN_PORT_FORWARD_UP_COMMAND
+    # No '$': the Agent refuses Compose variable substitution anywhere in the document.
+    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_gluetun_port_forward_env_only_when_enabled(enabled):
+    s = full(vpn={"provider": "protonvpn", "port_forwarding": enabled})
+    env = build_apps_compose(s)["services"]["gluetun"]["environment"]
+    if enabled:
+        assert env["VPN_PORT_FORWARDING"] == "on"
+        assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
+        assert env["PORT_FORWARD_ONLY"] == "on"
+    else:
+        for key in ("VPN_PORT_FORWARDING", "VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY"):
+            assert key not in env
+
+
+def test_port_forward_command_survives_yaml():
+    doc = yaml.safe_load(dump_yaml(build_apps_compose(full())))
+    env = doc["services"]["gluetun"]["environment"]
+    assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
+
+
+@pytest.mark.parametrize("route", [True, False])
+def test_gluetun_httpproxy_only_when_route_prowlarr(route):
+    s = full(vpn={"provider": "protonvpn", "port_forwarding": False, "route_prowlarr": route})
+    env = build_apps_compose(s)["services"]["gluetun"]["environment"]
+    if route:
+        assert env["HTTPPROXY"] == "on"
+    else:
+        assert "HTTPPROXY" not in env
+
+
+def test_apps_compose_uses_external_shared_network():
+    doc = build_apps_compose(full())
+    assert SHARED_NETWORK == "orama-net"
+    assert doc["networks"] == {"orama": {"name": "orama-net", "external": True}}
+    for app, svc in doc["services"].items():
+        if "network_mode" not in svc:
+            assert svc["networks"] == ["orama"], app
+
+
+def test_core_compose_creates_shared_network_and_orama_joins_it():
+    c = core()
+    assert c["networks"] == {"orama": {"name": "orama-net", "driver": "bridge"}}
+    assert c["services"]["orama"]["networks"] == ["orama"]
+    agent = c["services"]["orama-agent"]
+    assert agent["network_mode"] == "none"
+    assert "networks" not in agent
 
 
 def test_qbittorrent_without_vpn_has_its_own_port():

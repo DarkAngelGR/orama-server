@@ -7,11 +7,12 @@ from typing import Any
 
 import yaml
 
-from orama.catalog import CATALOG, CORE, ServiceSpec
+from orama.catalog import CATALOG, CORE, GLUETUN_PORT_FORWARD_UP_COMMAND, ServiceSpec
 from orama.layout import app_config_dir, app_env_file, orama_state_dir
 from orama.setup_model import DesiredSetup, enabled_apps
 
-NETWORK = "orama"
+NETWORK = "orama"  # the network's key inside both compose files
+SHARED_NETWORK = "orama-net"  # its Docker name: created by the core compose, joined by the apps
 QBITTORRENT_WEBUI_PORT = 8090
 
 
@@ -40,6 +41,10 @@ def _environment(spec: ServiceSpec, setup: DesiredSetup) -> dict[str, str]:
         }
         if setup.vpn.port_forwarding:
             env["VPN_PORT_FORWARDING"] = "on"
+            env["VPN_PORT_FORWARDING_UP_COMMAND"] = GLUETUN_PORT_FORWARD_UP_COMMAND
+            env["PORT_FORWARD_ONLY"] = "on"
+        if setup.vpn.route_prowlarr:
+            env["HTTPPROXY"] = "on"
         return env
     return {}
 
@@ -116,7 +121,7 @@ def build_apps_compose(setup: DesiredSetup) -> dict[str, Any]:
     return {
         "name": "orama-apps",
         "services": services,
-        "networks": {NETWORK: {"driver": "bridge"}},
+        "networks": {NETWORK: {"name": SHARED_NETWORK, "external": True}},
     }
 
 
@@ -142,6 +147,8 @@ def build_core_compose(
                 "restart": "unless-stopped",
                 "user": f"{puid}:{pgid}",
                 "ports": [f"{orama_port}:{orama_spec.container_port}"],
+                # Reaches every app by service name (http://sonarr:8989).
+                "networks": [NETWORK],
                 # Only its own state dir: app config dirs and env files stay out of reach.
                 "volumes": [_bind(state_dir, str(state_dir)), dict(run_volume)],
             },
@@ -166,6 +173,7 @@ def build_core_compose(
             },
         },
         "volumes": {"orama-run": {}},
+        "networks": {NETWORK: {"name": SHARED_NETWORK, "driver": "bridge"}},
     }
 
 

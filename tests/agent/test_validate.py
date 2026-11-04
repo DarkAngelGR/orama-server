@@ -4,7 +4,7 @@ import os
 import pytest
 from conftest import make_setup
 
-from orama.catalog import CATALOG
+from orama.catalog import CATALOG, GLUETUN_PORT_FORWARD_UP_COMMAND
 from orama.compose import build_apps_compose
 from orama.layout import app_config_dir, app_env_dir, app_env_file
 from orama.setup_model import enabled_apps
@@ -43,7 +43,7 @@ def full_setup(roots):
         roots,
         media_servers={"plex", "jellyfin"},
         download_methods={"usenet", "torrent"},
-        vpn={"provider": "protonvpn", "port_forwarding": True},
+        vpn={"provider": "protonvpn", "port_forwarding": True, "route_prowlarr": True},
         render_gid=105,
         nvidia=True,
     )
@@ -247,20 +247,36 @@ def test_refuses_wrong_project_name(roots):
     refused(doc, roots)
 
 
+def test_full_setup_has_both_gluetun_options(roots):
+    env = good_doc(roots)["services"]["gluetun"]["environment"]
+    assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == GLUETUN_PORT_FORWARD_UP_COMMAND
+    assert env["PORT_FORWARD_ONLY"] == "on" and env["HTTPPROXY"] == "on"
+
+
 @pytest.mark.parametrize(
     "networks",
     [
+        {"orama": {"driver": "bridge"}},
+        {"orama": {"name": "host", "external": True}},
+        {"orama": {"name": "orama-net", "external": True, "driver": "host"}},
+        {"orama": {"name": "orama-net", "external": True}, "other": {"driver": "bridge"}},
+        {"orama": {"name": "orama-net", "external": False}},
+        {"orama": {"name": "orama-net"}},
         {"orama": {"external": True}},
         {"orama": {"driver": "host"}},
-        {"orama": {"driver": "bridge", "driver_opts": {"x": "y"}}},
-        {"orama": {"driver": "bridge"}, "other": {"driver": "bridge"}},
-        {"host": {"driver": "bridge"}},
+        {"host": {"name": "orama-net", "external": True}},
         ["orama"],
     ],
 )
-def test_refuses_bad_top_level_networks(roots, networks):
+def test_refuses_other_network_definitions(roots, networks):
     doc = good_doc(roots)
     doc["networks"] = networks
+    refused(doc, roots)
+
+
+def test_refuses_missing_network_definition(roots):
+    doc = good_doc(roots)
+    del doc["networks"]
     refused(doc, roots)
 
 
@@ -659,6 +675,59 @@ def test_environment_is_pinned(roots, app, key, value):
     doc = good_doc(roots)
     doc["services"][app]["environment"][key] = value
     refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        GLUETUN_PORT_FORWARD_UP_COMMAND + " ",
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("127.0.0.1:8090", "127.0.0.1:8091"),
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("wget", "curl"),
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace(" 2>&1'", "; id' 2>&1"),
+        GLUETUN_PORT_FORWARD_UP_COMMAND.upper(),
+        "/bin/sh -c id",
+        "",
+    ],
+)
+def test_refuses_altered_port_forward_command(roots, command):
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["environment"]["VPN_PORT_FORWARDING_UP_COMMAND"] = command
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("value", ["off", "On", "true", "on ", ""])
+def test_refuses_httpproxy_value_other_than_on(roots, value):
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["environment"]["HTTPPROXY"] = value
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("value", ["off", "yes", ""])
+def test_refuses_port_forward_only_value_other_than_on(roots, value):
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["environment"]["PORT_FORWARD_ONLY"] = value
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize(
+    "key", ["VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY", "HTTPPROXY"]
+)
+def test_gluetun_options_refused_on_other_apps(roots, key):
+    doc = good_doc(roots)
+    doc["services"]["sonarr"]["environment"][key] = (
+        GLUETUN_PORT_FORWARD_UP_COMMAND if key == "VPN_PORT_FORWARDING_UP_COMMAND" else "on"
+    )
+    refused(doc, roots)
+
+
+def test_port_forward_command_keeps_interpolation_refusal(roots):
+    # The pinned command holds no '$', so the blanket '$' refusal still covers it.
+    assert "$" not in GLUETUN_PORT_FORWARD_UP_COMMAND
+    doc = good_doc(roots)
+    doc["services"]["gluetun"]["environment"]["VPN_PORT_FORWARDING_UP_COMMAND"] = (
+        GLUETUN_PORT_FORWARD_UP_COMMAND.replace("{{PORTS}}", "${PORTS}")
+    )
+    refused_with(doc, roots, "may not contain '\\$'")
 
 
 def test_refuses_missing_environment_key(roots):
