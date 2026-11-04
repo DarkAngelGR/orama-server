@@ -259,8 +259,8 @@ def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
         st, _, body = fetch(sab + extra)
         say(f"sab {extra}", f"{st} {body[:400]}")
     ini = run(["docker", "exec", "orama-sabnzbd", "sh", "-c",
-               "f=$(find /config -name sabnzbd.ini | head -1); "
-               "awk '/^\\[\\[/{p=1} /^\\[[a-z]/{p=0} p || /^\\[(categories|servers)\\]/' \"$f\" | head -60"])
+               ("f=$(find /config -name sabnzbd.ini | head -1); "
+                "awk '/^\\[\\[/{p=1} /^\\[[a-z]/{p=0} p || /^\\[(categories|servers)\\]/' \"$f\" | head -60")])
     say("sab ini categories/servers", ini.stdout)
     form = urllib.parse.urlencode(
         {"username": "orama", "password": secrets_["password:qbittorrent"]}).encode()
