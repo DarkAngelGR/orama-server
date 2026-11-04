@@ -418,7 +418,7 @@ def apply(setup_path: Path) -> int:
                 "page; turn the VPN off for now."
             ) from None
         raise Failed(
-            f"Orama could not find the key it keeps for {e.app}. Run the installer again "
+            f"Orama could not find the key it keeps for {e.app}. Run apply again "
             "to recreate it."
         ) from None
     except ValueError as e:  # e.g. the secret store cannot be decrypted; messages hold no values

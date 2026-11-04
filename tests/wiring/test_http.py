@@ -128,6 +128,33 @@ def test_unreachable_on_refused_port():
 
 
 
+def test_connection_cut_mid_answer_is_unreachable():
+    # An app restarting can cut or garble an answer (http.client.IncompleteRead, BadStatusLine,
+    # ...), which are not OSErrors; wait_until must still be able to retry.
+    cut = socket.socket()
+    cut.bind(("127.0.0.1", 0))
+    cut.listen(2)
+    port = cut.getsockname()[1]
+
+    def serve():
+        for body in (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab", b"not http\r\n\r\n"):
+            conn, _ = cut.accept()
+            conn.recv(4096)
+            conn.sendall(body)
+            conn.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        for _ in range(2):  # cut chunked body, then a garbled status line
+            with pytest.raises(Unreachable) as exc:
+                Http().request("GET", f"http://127.0.0.1:{port}/x", timeout=2)
+            assert exc.value.app_url == f"http://127.0.0.1:{port}"
+    finally:
+        thread.join(5)
+        cut.close()
+
+
 def test_api_redirect_is_rejected_without_following_it(server):
     base, seen = server
     with pytest.raises(UnsafeRedirect):

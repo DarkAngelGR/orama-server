@@ -632,6 +632,7 @@ def test_apply_missing_app_key_is_plain(capsys, caplog, roots, agent, monkeypatc
     assert code == 1
     assert_clean_failure(out, caplog, cfg, "Orama could not find the key it keeps for ")
     assert "apikey:" not in out.err and "missing secret" not in out.err
+    assert "Run apply again" in out.err and "install" not in out.err.lower()
     assert agent.up_calls == 0
 
 

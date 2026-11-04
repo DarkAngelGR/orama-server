@@ -60,7 +60,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def key() -> str:
         value = store.get("apikey:prowlarr")
         if value is None:
-            raise StepError("Prowlarr's API key is missing — run install again.")
+            raise StepError("The API key is missing — run apply again.")
         return value
 
     def call(
@@ -187,7 +187,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         def run() -> str | None:
             apikey = store.get(f"apikey:{app}")
             if apikey is None:
-                raise StepError(f"{display_name(app)}'s API key is missing — run install again.")
+                raise StepError(f"{display_name(app)}'s API key is missing — run apply again.")
             _, message, _ = upsert(
                 resource="applications", label=f"the {display_name(app)} connection", name=label,
                 pick=lambda s: s.get("implementation") == display_name(app),
@@ -240,7 +240,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def proxy_run() -> str | None:
         password = store.get(GLUETUN_PROXY_PASSWORD_NAME)
         if password is None:
-            raise StepError("The VPN proxy password is missing — run install again.")
+            raise StepError("The VPN proxy password is missing — run apply again.")
         _, message, _ = upsert(
             resource="indexerProxy", label="the VPN proxy", name="Gluetun (Orama)",
             pick=lambda s: s.get("implementation") == "Http",

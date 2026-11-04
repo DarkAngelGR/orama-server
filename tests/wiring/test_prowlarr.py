@@ -575,3 +575,11 @@ def test_sync_is_skipped_when_an_app_step_fails(tmp_path):
     assert by["prowlarr:app:sonarr"].status == "failed"
     assert by["prowlarr:sync"].status == "skipped"
     assert by["prowlarr:sync"].message == "waiting for Prowlarr"
+
+
+def test_missing_prowlarr_key_says_run_apply_again(tmp_path):
+    pw = FakeProwlarr()
+    setup, _ = make(tmp_path)
+    empty = SecretStore(tmp_path / "empty.bin")
+    by = {r.name: r for r in run(setup, empty, pw)}
+    assert by["wait:prowlarr"].message == "The API key is missing — run apply again."

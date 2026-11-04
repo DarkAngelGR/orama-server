@@ -59,7 +59,7 @@ def arr_steps(
     def key() -> str:
         value = store.get(f"apikey:{app}")
         if value is None:
-            raise StepError(f"{name}'s API key is missing — run install again.")
+            raise StepError("The API key is missing — run apply again.")
         return value
 
     def call(
@@ -189,7 +189,7 @@ def arr_steps(
     def sab_values() -> tuple[dict[str, Any], str]:
         apikey = store.get("apikey:sabnzbd")
         if apikey is None:
-            raise StepError("SABnzbd's API key is missing — run install again.")
+            raise StepError("SABnzbd's API key is missing — run apply again.")
         return (
             {"host": "sabnzbd", "port": SAB_PORT, "apiKey": apikey,
              spec.category_field: spec.category},
@@ -199,7 +199,7 @@ def arr_steps(
     def qbittorrent_values() -> tuple[dict[str, Any], str]:
         password = store.get("password:qbittorrent")
         if password is None:
-            raise StepError("qBittorrent's password is missing — run install again.")
+            raise StepError("qBittorrent's password is missing — run apply again.")
         return (
             {"host": qbittorrent_host, "port": QBITTORRENT_PORT,
              "username": QBITTORRENT_WEBUI_USER, "password": password,

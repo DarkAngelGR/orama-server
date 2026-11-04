@@ -146,7 +146,8 @@ def test_failed_server_test_is_plain_and_blocks_nothing(tmp_path):
     by = {r.name: r for r in results}
     assert by["sabnzbd:test:eweka"].status == "failed"
     assert by["sabnzbd:test:eweka"].message == (
-        "SABnzbd could not log in to news.example.net — check the username and password."
+        "SABnzbd could not connect or log in to news.example.net — check the server "
+        "address, port, username and password."
     )
     assert by["sabnzbd:categories"].status == "changed"
     assert AWKWARD not in repr(results)
