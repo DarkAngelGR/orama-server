@@ -62,10 +62,19 @@ RESULTS = b"""<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+LAST_KEY = {"value": ""}  # the API key of the latest request that carried one
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        kind = parse_qs(urlparse(self.path).query).get("t", [""])[0]
-        body = CAPS if kind == "caps" else RESULTS
+        query = parse_qs(urlparse(self.path).query)
+        kind = query.get("t", [""])[0]
+        if kind == "lastkey":  # test hook: which key did Prowlarr last send?
+            body = LAST_KEY["value"].encode()
+        else:
+            if query.get("apikey"):
+                LAST_KEY["value"] = query["apikey"][0]
+            body = CAPS if kind == "caps" else RESULTS
         self.send_response(200)
         self.send_header("Content-Type", "application/xml; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
