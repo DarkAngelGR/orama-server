@@ -1,0 +1,37 @@
+# Orama Server — status
+
+Update this file after every task, so whichever AI tool continues knows exactly where things stand.
+Read `AGENTS.md` first.
+
+## Release 1 roadmap
+
+| Plan | Contents | State |
+|---|---|---|
+| 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
+| 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ▶ in progress — `docs/superpowers/plans/2026-11-03-orama-r1-plan-2a-download-wiring.md` |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | not written yet (write after 2a, against the real code) |
+| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
+| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
+
+## Plan 2a — tasks
+
+| # | Task | State | Commit |
+|---|---|---|---|
+| 1 | Shared network and Gluetun options (compose + Agent pins) | in progress (Claude) | |
+| 2 | Agent `seed-config` for SABnzbd and qBittorrent | todo | |
+| 3 | HTTP client and step engine | todo | |
+| 4 | Indexers and Usenet servers in the setup; `set-secret` | todo | |
+| 5 | SABnzbd and qBittorrent wiring | todo | |
+| 6 | Sonarr and Radarr wiring | todo | |
+| 7 | Prowlarr wiring | todo | |
+| 8 | Step plan; `apply` runs the wiring | todo | |
+| 9 | Integration test: real apps wired, second run changes nothing | todo | |
+| — | Claude Security scan of the Plan 2a changes | todo (Claude only) | |
+| — | Final whole-plan review + one fix round | todo | |
+
+### Decisions made while executing Plan 2a
+
+- Task 5 also updates the integration test's data-folder list (now 11 folders, with `downloads/usenet/incomplete`).
+- "Nothing changed on the second run" means: no wiring `✓ <App>:` lines, no `✗` lines except expected
+  failures, and the deploy part reports nothing to change. An always-printed `✓ Folders ready` is fine.
