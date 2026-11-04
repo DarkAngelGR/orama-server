@@ -16,7 +16,9 @@ PRIVATE_IPV4 = (
 
 FORBIDDEN = [
     PRIVATE_IPV4,
-    r"/home/[a-z]", r"/Users/[A-Za-z]",                                  # personal paths
+    r"/home/[a-z]",                                                     # personal paths
+    # macOS homes are /Users/<name>/...; a lone /Users/<word> is an API path (Jellyfin).
+    r"/Users/[A-Za-z][\w.-]*/",
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
     r"\b[A-Za-z0-9+/]{43}=",                                            # WireGuard key shape
     r"@gmail\.com",
@@ -72,3 +74,13 @@ def test_private_ipv4_pattern_flags_address_ending_a_sentence(text):
 )
 def test_private_ipv4_pattern_ignores_non_addresses(text):
     assert not re.search(PRIVATE_IPV4, f"v {text} x")
+
+
+@pytest.mark.parametrize("text,flagged", [
+    ("/Users/" + "alice/projects/orama", True),
+    ("POST /Users/AuthenticateByName", False),
+    ("/Users/Me", False),
+])
+def test_macos_home_rule(text, flagged):
+    pattern = re.compile(next(p for p in FORBIDDEN if p.startswith("/Users")))
+    assert bool(pattern.search(text)) is flagged
