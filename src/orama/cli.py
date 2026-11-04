@@ -15,6 +15,7 @@ stdin (no echo on a terminal) and keeps it in the secret store next to the setup
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import getpass
 import json
@@ -36,19 +37,26 @@ from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
+    QBITTORRENT_PASSWORD_NAME,
+    SABNZBD_NZB_KEY_NAME,
     VPN_KEY_NAME,
     MissingSecret,
     SecretStore,
     ensure_app_keys,
     env_files_for,
     install_redaction,
+    qbittorrent_pbkdf2,
 )
 from orama.setup_model import DesiredSetup, enabled_apps
+from orama.wiring.engine import display_name, format_checklist, run_steps
+from orama.wiring.http import Http
+from orama.wiring.plan import build_steps
 
 CORE_COMPOSE_FILE = "core.compose.yaml"
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
 SECRETS_FILE = "secrets.bin"
+QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
 SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
@@ -154,7 +162,7 @@ def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> in
                 ) from None
             print(port)
         else:
-            apply(args.setup)
+            return apply(args.setup)
     except Failed as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
@@ -355,8 +363,11 @@ def _write_all(fd: int, data: bytes) -> None:
 
 # ---------------------------------------------------------------- apply
 
-def apply(setup_path: Path) -> None:
-    """Apply the saved setup through the Agent; print a checklist."""
+def apply(setup_path: Path) -> int:
+    """Apply the saved setup through the Agent, wire the apps; print a checklist.
+
+    Returns 0, or 1 when a wiring step failed.
+    """
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     try:
         setup = DesiredSetup.load(setup_path)
@@ -382,6 +393,16 @@ def apply(setup_path: Path) -> None:
         print("✓ Folders ready", flush=True)
         changed = client.apply(build_apps_compose(setup), env_files_for(setup, store))
         setup.save(setup_path)
+        for app in changed:
+            print(f"✓ {app} started", flush=True)
+        # After the deploy: the apps first write their own default config files.
+        seeded = _seed_logins(client, store, apps)
+        for app in seeded:
+            print(f"✓ {display_name(app)}: login details set", flush=True)
+        if "qbittorrent" in seeded and setup.vpn is not None and setup.vpn.port_forwarding:
+            # Gluetun's port-forward hook logs in to qBittorrent; run it again with the new login.
+            client.restart("gluetun")
+            client.restart("qbittorrent")
     except AgentError as e:
         raise Failed(e.message) from None
     except MissingSecret as e:  # named in plain words, never shown
@@ -398,10 +419,56 @@ def apply(setup_path: Path) -> None:
         raise Failed(f"Cannot apply: {e}.") from None
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
-    for app in changed:
-        print(f"✓ {app} started")
-    if not changed:
-        print("✓ Nothing to change")
+    results = run_steps(build_steps(setup, store, Http()))
+    lines = format_checklist(results)
+    if lines == ["✓ Nothing to change"] and (changed or seeded):
+        lines = []  # the deploy or the login details already reported a change
+    for line in lines:
+        print(line)
+    return 1 if any(r.status == "failed" for r in results) else 0
+
+
+def _seed_logins(client: AgentClient, store: SecretStore, apps: list[str]) -> list[str]:
+    """Give SABnzbd and qBittorrent the keys Orama holds; the apps that changed."""
+    seeded = []
+    if "sabnzbd" in apps:
+        values = {
+            "api_key": _required(store, "apikey:sabnzbd", "sabnzbd"),
+            "nzb_key": _required(store, SABNZBD_NZB_KEY_NAME, "sabnzbd"),
+        }
+        if client.seed_config("sabnzbd", values):
+            seeded.append("sabnzbd")
+    if "qbittorrent" in apps:
+        values = {"password_pbkdf2": _qbittorrent_hash(store)}
+        if client.seed_config("qbittorrent", values):
+            seeded.append("qbittorrent")
+    return seeded
+
+
+def _required(store: SecretStore, name: str, app: str) -> str:
+    value = store.get(name)
+    if value is None:
+        raise MissingSecret(name, app)
+    return value
+
+
+def _qbittorrent_hash(store: SecretStore) -> str:
+    """The stored hash of qBittorrent's password, made once so a re-run sends the same value.
+
+    A new salt only when there is no hash yet, or the password changed since it was made.
+    """
+    password = _required(store, QBITTORRENT_PASSWORD_NAME, "qbittorrent")
+    kept = store.get(QBITTORRENT_HASH_NAME)
+    if kept is not None:
+        try:
+            salt = base64.b64decode(kept.removeprefix("@ByteArray(").split(":", 1)[0], validate=True)
+            if qbittorrent_pbkdf2(password, salt) == kept:
+                return kept
+        except ValueError:
+            pass
+    fresh = qbittorrent_pbkdf2(password)
+    store.set(QBITTORRENT_HASH_NAME, fresh)
+    return fresh
 
 
 # ---------------------------------------------------------------- set-secret
