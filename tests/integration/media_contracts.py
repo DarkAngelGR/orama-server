@@ -2,8 +2,11 @@
 
 import json
 import os
+import re
 import secrets
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import yaml
@@ -13,11 +16,15 @@ from orama.catalog import CATALOG
 from .conftest import run
 
 
-def _request(port, path, *, body=None, headers=None):
+def _request(port, path, *, body=None, headers=None, method=None, form=None):
+    data = None if body is None else json.dumps(body).encode()
+    content_type = "application/json"
+    if form is not None:
+        data = urllib.parse.urlencode(form, doseq=True).encode()
+        content_type = "application/x-www-form-urlencoded"
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
-        data=None if body is None else json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", **(headers or {})},
+        f"http://127.0.0.1:{port}{path}", data=data, method=method,
+        headers={"Content-Type": content_type, **(headers or {})},
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as reply:
@@ -26,14 +33,42 @@ def _request(port, path, *, body=None, headers=None):
         return exc.code, b""
 
 
+def _shape(value, depth=3):
+    """Field names and value types only; never the values themselves."""
+    if isinstance(value, dict):
+        if depth == 0:
+            return "{...}"
+        return {k: _shape(v, depth - 1) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [_shape(value[0], depth - 1)] if value else []
+    return type(value).__name__
+
+
+def _json(raw):
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
+
+
+def _probe(label, func):
+    """One failing probe must not hide the others; print the error type only."""
+    try:
+        func()
+    except Exception as exc:  # noqa: BLE001 - exploratory contract probe
+        print(f"Contract {label}: probe error {type(exc).__name__}")
+
+
 def jellyfin(port):
     status, raw = _request(port, "/System/Info/Public")
     assert status == 200 and not json.loads(raw)["StartupWizardCompleted"]
+    status, raw = _request(port, "/Startup/Configuration")
+    print(f"Contract Jellyfin GET /Startup/Configuration before completion: {status} "
+          f"{_shape(_json(raw))}")
     status, _ = _request(port, "/Startup/User")
     assert status == 200
-    status, _ = _request(port, "/Startup/User", body={
-        "Name": "orama-test", "Password": secrets.token_urlsafe(24),
-    })
+    password = secrets.token_urlsafe(24)
+    status, _ = _request(port, "/Startup/User", body={"Name": "orama-test", "Password": password})
     assert status in (200, 204)
     status, _ = _request(port, "/Startup/Complete", body={})
     assert status in (200, 204)
@@ -43,6 +78,40 @@ def jellyfin(port):
         status, _ = _request(port, path)
         assert status in (401, 403)
         print(f"Contract Jellyfin {path} after completion: {status}")
+    _probe("Jellyfin authenticated", lambda: _jellyfin_authenticated(port, password))
+
+
+def _jellyfin_authenticated(port, password):
+    client = 'Client="Orama", Device="orama-ci", DeviceId="orama-ci", Version="1"'
+    status, raw = _request(
+        port, "/Users/AuthenticateByName", body={"Username": "orama-test", "Pw": password},
+        headers={"Authorization": f"MediaBrowser {client}"})
+    reply = _json(raw)
+    print(f"Contract Jellyfin POST /Users/AuthenticateByName with header 'MediaBrowser {client}': "
+          f"{status} {_shape(reply, 2)}")
+    token = (reply or {}).get("AccessToken")
+    assert token
+    auth = {"Authorization": f'MediaBrowser {client}, Token="{token}"'}
+    for header_name, headers in (("Authorization MediaBrowser Token", auth),
+                                 ("X-Emby-Token", {"X-Emby-Token": token})):
+        status, _ = _request(port, "/System/Configuration", headers=headers)
+        print(f"Contract Jellyfin token via {header_name}: {status}")
+    query = urllib.parse.urlencode({"name": "Orama Test Movies", "collectionType": "movies",
+                                    "refreshLibrary": "false"})
+    status, raw = _request(port, f"/Library/VirtualFolders?{query}", method="POST", headers=auth,
+                           body={"LibraryOptions": {"PathInfos": [{"Path": "/data/media/movies"}]}})
+    print(f"Contract Jellyfin POST /Library/VirtualFolders?name&collectionType&refreshLibrary "
+          f"body LibraryOptions.PathInfos[].Path: {status}")
+    status, raw = _request(port, "/Library/VirtualFolders", headers=auth)
+    folders = _json(raw) or []
+    print(f"Contract Jellyfin GET /Library/VirtualFolders: {status} "
+          f"{_shape(folders[:1], 3)} collectionTypes={[f.get('CollectionType') for f in folders]}")
+    status, raw = _request(port, "/Auth/Keys?app=Orama", method="POST", headers=auth)
+    print(f"Contract Jellyfin POST /Auth/Keys?app=: {status}")
+    status, raw = _request(port, "/Auth/Keys", headers=auth)
+    print(f"Contract Jellyfin GET /Auth/Keys: {status} {_shape(_json(raw), 3)}")
+    status, raw = _request(port, "/System/Configuration/encoding", headers=auth)
+    print(f"Contract Jellyfin GET /System/Configuration/encoding: {status} {_shape(_json(raw), 1)}")
 
 
 def bazarr(port):
@@ -56,6 +125,55 @@ def bazarr(port):
     status, _ = _request(port, "/api/system/status")
     assert status == 401
     print("Contract Bazarr auth.apikey accepted via X-API-KEY; anonymous status 401")
+    _probe("Bazarr settings", lambda: _bazarr_settings(port, key))
+
+
+def _bazarr_settings(port, key):
+    headers = {"X-API-KEY": key}
+    status, raw = _request(port, "/api/system/settings", headers=headers)
+    settings = _json(raw) or {}
+    print(f"Contract Bazarr GET /api/system/settings: {status} sections={sorted(settings)}")
+    for section in ("general", "sonarr", "radarr", "subsync", "opensubtitlescom"):
+        if isinstance(settings.get(section), dict):
+            print(f"Contract Bazarr settings.{section} fields: {_shape(settings[section], 1)}")
+    for path in ("/api/system/languages", "/api/system/languages/profiles", "/api/providers",
+                 "/api/system/status", "/api/system/languages?enabled=true"):
+        status, raw = _request(port, path, headers=headers)
+        data = _json(raw)
+        names = ""
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            names = f" names={[d.get('name') or d.get('code2') for d in data][:40]}"
+        print(f"Contract Bazarr GET {path}: {status} {_shape(data, 3)}{names}")
+    # Write: form fields named settings-<section>-<field>; disposable app, fake key built here.
+    fake = secrets.token_hex(16)
+    form = {"settings-general-use_sonarr": "true", "settings-sonarr-ip": "sonarr",
+            "settings-sonarr-port": "8989", "settings-sonarr-base_url": "/",
+            "settings-sonarr-apikey": fake, "settings-sonarr-ssl": "false"}
+    status, _ = _request(port, "/api/system/settings", method="POST", headers=headers, form=form)
+    print(f"Contract Bazarr POST /api/system/settings form settings-<section>-<field>: {status}")
+    time.sleep(3)
+    status, raw = _request(port, "/api/system/settings", headers=headers)
+    after = _json(raw) or {}
+    got = after.get("sonarr", {})
+    print(f"Contract Bazarr settings applied without restart: status={status} "
+          f"sonarr.ip={got.get('ip')} sonarr.port={got.get('port')} "
+          f"general.use_sonarr={after.get('general', {}).get('use_sonarr')} "
+          f"apikey_saved={got.get('apikey') == fake}")
+    status, raw = _request(port, "/api/system/status", headers=headers)
+    print(f"Contract Bazarr status after settings write: {status}")
+    profile = {"profileId": 1, "name": "orama-test", "cutoff": None, "items": [
+        {"id": 1, "language": "en", "audio_exclude": "False", "hi": "False", "forced": "False"},
+        {"id": 2, "language": "el", "audio_exclude": "False", "hi": "False", "forced": "False"}],
+        "mustContain": [], "mustNotContain": [], "originalFormat": False, "tag": None}
+    form = {"languages-enabled": ["en", "el"], "languages-profiles": json.dumps([profile])}
+    status, _ = _request(port, "/api/system/settings", method="POST", headers=headers, form=form)
+    print(f"Contract Bazarr POST languages-enabled / languages-profiles: {status}")
+    status, raw = _request(port, "/api/system/languages/profiles", headers=headers)
+    print(f"Contract Bazarr profiles after write: {status} {_shape(_json(raw), 3)}")
+    status, raw = _request(port, "/api/system/languages?enabled=true", headers=headers)
+    data = _json(raw) or []
+    print(f"Contract Bazarr enabled languages after write: {status} "
+          f"{[d.get('code2') for d in data if isinstance(d, dict)]}")
 
 
 def recyclarr(host, folder, key):
@@ -74,3 +192,64 @@ def recyclarr(host, folder, key):
     if result.returncode:
         raise AssertionError("Pinned Recyclarr preview failed (output withheld)")
     print("Contract Recyclarr sync radarr --preview --config accepted; exited successfully")
+    _probe("Recyclarr lists", lambda: _recyclarr_lists(host, folder))
+
+
+def _recyclarr_run(host, folder, *args):
+    return run(["docker", "run", "--rm", "--network", "orama-net",
+                "--user", f"{host.puid}:{host.pgid}", "-v", f"{folder}:/config",
+                CATALOG["recyclarr"].image, *args], timeout=240)
+
+
+WANTED = re.compile(r"DV|Dolby Vision|DTS|TrueHD|Atmos|PCM|FLAC|HDR", re.IGNORECASE)
+
+
+def _recyclarr_lists(host, folder):
+    result = _recyclarr_run(host, folder, "list", "templates")
+    lines = result.stdout.splitlines()
+    print(f"Contract Recyclarr list templates: exit {result.returncode}, {len(lines)} lines")
+    for line in lines:
+        print(f"  template| {line}")
+    for app in ("radarr", "sonarr"):
+        result = _recyclarr_run(host, folder, "list", "custom-formats", app)
+        lines = result.stdout.splitlines()
+        print(f"Contract Recyclarr list custom-formats {app}: exit {result.returncode}, "
+              f"{len(lines)} lines; header: {lines[:4]}")
+        for line in lines:
+            if WANTED.search(line):
+                print(f"  cf-{app}| {line}")
+
+
+def plex(port):
+    """Unclaimed Plex: which local endpoints answer without a token."""
+    json_header = {"Accept": "application/json"}
+    status, raw = _request(port, "/identity", headers=json_header)
+    container = (_json(raw) or {}).get("MediaContainer", {})
+    print(f"Contract Plex GET /identity (unclaimed): {status} fields={sorted(container)} "
+          f"claimed={container.get('claimed')} version={container.get('version')}")
+    for path in ("/", "/library/sections", "/:/prefs", "/servers", "/myplex/account",
+                 "/status/sessions", "/transcode/sessions", "/updater/status", "/web/index.html"):
+        status, _ = _request(port, path, headers=json_header)
+        print(f"Contract Plex GET {path} without a token: {status}")
+    _probe("Plex library create", lambda: _plex_library(port, json_header))
+
+
+def _plex_library(port, headers):
+    query = urllib.parse.urlencode({
+        "name": "Orama Test Movies", "type": "movie", "agent": "tv.plex.agents.movie",
+        "scanner": "Plex Movie", "language": "en-US", "location": "/data/media/movies"})
+    status, _ = _request(port, f"/library/sections?{query}", method="POST", headers=headers)
+    print(f"Contract Plex POST /library/sections?name&type&agent&scanner&language&location "
+          f"without a token: {status}")
+    status, raw = _request(port, "/library/sections", headers=headers)
+    print(f"Contract Plex GET /library/sections: {status} "
+          f"{_shape((_json(raw) or {}).get('MediaContainer'), 3)}")
+    status, raw = _request(port, "/:/prefs", headers=headers)
+    settings = (_json(raw) or {}).get("MediaContainer", {}).get("Setting", [])
+    print(f"Contract Plex GET /:/prefs: {status}, {len(settings)} settings")
+    for entry in settings:
+        if entry.get("id") in ("HardwareAcceleratedCodecs", "LanNetworksBandwidth"):
+            print(f"Contract Plex pref {entry.get('id')}: {entry}")
+    status, _ = _request(port, "/:/prefs?HardwareAcceleratedCodecs=1", method="PUT",
+                         headers=headers)
+    print(f"Contract Plex PUT /:/prefs?HardwareAcceleratedCodecs=1 without a token: {status}")

@@ -416,6 +416,11 @@ def test_pinned_recyclarr_contract(clean_host, applied, tmp_path, capsys):
         media_contracts.recyclarr(clean_host, tmp_path, stored_secrets(clean_host)["apikey:radarr"])
 
 
+def test_pinned_plex_contract(applied, capsys):
+    with capsys.disabled():
+        media_contracts.plex(applied["setup"]["ports"]["plex"])
+
+
 @pytest.mark.parametrize("app,root,category_field,category", [
     ("sonarr", "/data/media/tv", "tvCategory", "tv"),
     ("radarr", "/data/media/movies", "movieCategory", "movies"),
