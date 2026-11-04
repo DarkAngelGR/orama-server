@@ -100,8 +100,8 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
 
     def upsert(
         *, resource: str, label: str, name: str, pick: Any, want: dict[str, Any],
-        secret: str, marker: str, top: dict[str, Any], tag: int | None,
-        base_item: Any = None,
+        secret: str, secret_names: frozenset[str], marker: str, top: dict[str, Any],
+        tag: int | None, base_item: Any = None,
     ) -> tuple[dict[str, Any], str | None, bool]:
         """Create or fix one item. Returns (item as sent, change message or None, existing)."""
         items = read(resource)
@@ -130,7 +130,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         stale = stale or (tag is not None and tag not in have.get("tags", []))
         for field, value in want.items():
             shown = current.get(field)
-            if field.lower() in ("apikey", "password"):
+            if field in secret_names:
                 if shown not in (None, MASK) and str(shown) != str(value):
                     stale = True
             elif str(shown) != str(value):
@@ -170,12 +170,49 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 pick=lambda s: s.get("implementation") == display_name(app),
                 want={"prowlarrUrl": PROWLARR_URL, "baseUrl": f"http://{app}:{spec.port}",
                       "apiKey": apikey},
-                secret=apikey, marker=sent_marker_name(f"app:{app}"),
+                secret=apikey, secret_names=frozenset({"apiKey"}),
+                marker=sent_marker_name(f"app:{app}"),
                 top={"syncLevel": "fullSync"}, tag=None,
             )
             return message
 
         return Step(f"prowlarr:app:{app}", "prowlarr", run, needs=("wait:prowlarr", f"wait:{app}"))
+
+    def app_remove_step(app: str) -> Step:
+        label = f"{display_name(app)} (Orama)"
+
+        def run() -> str | None:
+            have = next((a for a in read("applications") if a.get("name") == label), None)
+            if have is None:
+                return None
+            mark_pending()
+            call("DELETE", f"applications/{have['id']}")
+            store.set(sent_marker_name(f"app:{app}"), "")
+            return f"removed the {display_name(app)} connection"
+
+        return Step(f"prowlarr:app:{app}", "prowlarr", run, needs=("wait:prowlarr",))
+
+    def proxy_remove() -> str | None:
+        """Proxy is off: stop routing Orama's indexers through it and delete it."""
+        changes: list[str] = []
+        tag = next(
+            (t for t in read("tag") if str(t.get("label", "")).lower() == VPN_TAG), None
+        )
+        if tag is not None:
+            managed = {c.name for c in setup.indexers}
+            for item in read("indexer"):
+                if item.get("name") in managed and tag["id"] in item.get("tags", []):
+                    item["tags"] = [t for t in item["tags"] if t != tag["id"]]
+                    mark_pending()
+                    call("PUT", f"indexer/{item['id']}", json=item, params={"forceSave": "true"})
+                    changes.append("stopped routing indexers through the VPN")
+        proxy = next((p for p in read("indexerProxy") if p.get("name") == "Gluetun (Orama)"), None)
+        if proxy is not None:
+            mark_pending()
+            call("DELETE", f"indexerProxy/{proxy['id']}")
+            store.set(sent_marker_name("proxy"), "")
+            changes.append("removed the VPN proxy")
+        return "; ".join(dict.fromkeys(changes)) or None
 
     def proxy_run() -> str | None:
         password = store.get(GLUETUN_PROXY_PASSWORD_NAME)
@@ -186,7 +223,8 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             pick=lambda s: s.get("implementation") == "Http",
             want={"host": PROXY_HOST, "port": PROXY_PORT, "username": GLUETUN_PROXY_USER,
                   "password": password},
-            secret=password, marker=sent_marker_name("proxy"), top={}, tag=vpn_tag_id(),
+            secret=password, secret_names=frozenset({"password"}),
+            marker=sent_marker_name("proxy"), top={}, tag=vpn_tag_id(),
         )
         return message
 
@@ -206,6 +244,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 resource="indexer", label=f"the {choice.name} indexer", name=choice.name,
                 pick=lambda s: s.get("definitionName") == choice.definition,
                 want=want, secret=json.dumps(secrets, sort_keys=True),
+                secret_names=frozenset(choice.secret_fields),
                 marker=sent_marker_name(f"indexer:{choice.slug}"), top={"enable": True},
                 tag=vpn_tag_id() if proxy_on else None, base_item=fill_profile,
             )
@@ -234,15 +273,18 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
 
     steps = [Step("wait:prowlarr", "prowlarr", wait)]
     app_names = [a for a in ("sonarr", "radarr") if a in apps]
-    steps += [app_step(a) for a in app_names]
+    steps += [app_step(a) if a in apps else app_remove_step(a) for a in ("sonarr", "radarr")]
     app_needs = tuple(f"prowlarr:app:{a}" for a in app_names)
     proxy_on = setup.vpn is not None and setup.vpn.route_prowlarr
     indexer_needs = ("wait:prowlarr", *app_needs)
     if proxy_on:
         steps.append(Step("prowlarr:proxy", "prowlarr", proxy_run, needs=("wait:prowlarr",)))
         indexer_needs += ("prowlarr:proxy",)
+    else:
+        steps.append(Step("prowlarr:proxy-off", "prowlarr", proxy_remove, needs=("wait:prowlarr",)))
+        indexer_needs += ("prowlarr:proxy-off",)
     indexer_steps = [indexer_step(c, indexer_needs, proxy_on) for c in setup.indexers]
     steps += indexer_steps
-    sync_needs = ("wait:prowlarr", *app_needs, *(s.name for s in indexer_steps))
+    sync_needs = ("wait:prowlarr", *(s.name for s in steps[1:]))
     steps.append(Step("prowlarr:sync", "prowlarr", sync, needs=sync_needs))
     return steps

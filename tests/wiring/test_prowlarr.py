@@ -56,7 +56,7 @@ def proxy_schema():
 class FakeProwlarr:
     """Just enough of Prowlarr's v1 API. Secret fields come back masked."""
 
-    SECRET = ("apiKey", "apikey", "password")
+    SECRET = ("apiKey", "apikey", "password", "passkey")
 
     def __init__(self):
         self.apps, self.indexers, self.proxies, self.tags = {}, {}, {}, []
@@ -170,19 +170,34 @@ def test_step_names_and_dependencies(tmp_path):
     setup, store = make(tmp_path)
     steps = {s.name: s for s in prowlarr_steps(setup, store, FakeHttp())}
     assert list(steps) == ["wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:app:radarr",
-                           "prowlarr:indexer:geek", "prowlarr:sync"]
+                           "prowlarr:proxy-off", "prowlarr:indexer:geek", "prowlarr:sync"]
     assert steps["prowlarr:app:sonarr"].needs == ("wait:prowlarr", "wait:sonarr")
     assert steps["prowlarr:app:radarr"].needs == ("wait:prowlarr", "wait:radarr")
     assert steps["prowlarr:indexer:geek"].needs == (
-        "wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:app:radarr")
+        "wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:app:radarr", "prowlarr:proxy-off")
     assert steps["prowlarr:sync"].needs[-1] == "prowlarr:indexer:geek"
 
 
-def test_removed_app_has_no_app_step(tmp_path):
-    setup, store = make(tmp_path, removed_apps=frozenset({"radarr"}))
-    steps = {s.name: s for s in prowlarr_steps(setup, store, FakeHttp())}
-    assert "prowlarr:app:radarr" not in steps
-    assert steps["prowlarr:indexer:geek"].needs == ("wait:prowlarr", "prowlarr:app:sonarr")
+def test_removed_app_is_not_waited_for_and_its_connection_is_deleted(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    run(setup, store, pw)
+    assert pw.by_name(pw.apps, "Radarr (Orama)") is not None
+    mine = {"id": 99, "name": "My Radarr", "fields": []}
+    pw.apps[99] = mine
+    setup, _ = make(tmp_path, removed_apps=frozenset({"radarr"}))
+    steps = {s.name: s for s in prowlarr_steps(setup, store, pw.http)}
+    assert steps["prowlarr:app:radarr"].needs == ("wait:prowlarr",)
+    assert steps["prowlarr:indexer:geek"].needs == ("wait:prowlarr", "prowlarr:app:sonarr", "prowlarr:proxy-off")
+    pw.commands.clear()
+    pw.http.route("DELETE", f"{API}/applications/2", pw.guard(lambda c: pw.ok(pw.apps.pop(2) and {})))
+    by = statuses(run_steps(list(steps.values())))
+    assert by["prowlarr:app:radarr"] == "changed"
+    assert pw.by_name(pw.apps, "Radarr (Orama)") is None
+    assert pw.apps[99] == mine and pw.by_name(pw.apps, "Sonarr (Orama)") is not None
+    assert len(pw.commands) == 1
+    again = statuses(run_steps(prowlarr_steps(setup, store, pw.http)))
+    assert again["prowlarr:app:radarr"] == "unchanged"
 
 
 def test_removed_prowlarr_has_no_steps(tmp_path):
@@ -194,7 +209,7 @@ def test_create_then_unchanged_on_second_run(tmp_path):
     pw = FakeProwlarr()
     setup, store = make(tmp_path)
     first = statuses(run(setup, store, pw))
-    assert all(s == "changed" for n, s in first.items() if n != "wait:prowlarr")
+    assert all(s == "changed" for n, s in first.items() if n not in ("wait:prowlarr", "prowlarr:proxy-off"))
     sonarr = pw.by_name(pw.apps, "Sonarr (Orama)")
     assert sonarr["implementation"] == "Sonarr" and sonarr["syncLevel"] == "fullSync"
     assert pw.value(sonarr, "prowlarrUrl") == "http://prowlarr:9696"
@@ -221,8 +236,7 @@ def test_secret_with_special_characters_is_sent_unchanged(tmp_path):
     run(setup, store, pw)
     assert pw.value(pw.by_name(pw.indexers, "NZBGeek"), "apikey") == TRICKY
     post = next(c for c in pw.http.calls if c.method == "POST" and c.path == f"{API}/indexer")
-    assert TRICKY in json.dumps(post.json, ensure_ascii=False) or TRICKY in [
-        x["value"] for x in post.json["fields"]]
+    assert TRICKY in [x["value"] for x in post.json["fields"]]
 
 
 def test_missing_secret_fails_with_exact_message(tmp_path):
@@ -437,3 +451,46 @@ def test_default_app_profile_is_looked_up_when_schema_has_none(tmp_path):
     setup, store = make(tmp_path)
     run(setup, store, pw)
     assert pw.by_name(pw.indexers, "NZBGeek")["appProfileId"] == 4
+
+
+def test_masked_custom_secret_field_does_not_cause_resend(tmp_path):
+    pw = FakeProwlarr()
+    pw.http.route("GET", f"{API}/indexer/schema", lambda c: pw.ok(
+        [dict(s, fields=s["fields"] + [f("passkey")]) for s in indexer_schema()]))
+    choice = GEEK.model_copy(update={"secret_fields": ("apikey", "passkey")})
+    setup, store = make(tmp_path, indexers=(choice,))
+    store.set("indexer:geek:passkey", "pk&1")
+    run(setup, store, pw)
+    assert pw.value(pw.by_name(pw.indexers, "NZBGeek"), "passkey") == "pk&1"
+    pw.writes.clear()
+    pw.commands.clear()
+    second = run(setup, store, pw)
+    assert all(s == "unchanged" for s in statuses(second).values())
+    assert pw.writes == [] and pw.commands == []
+    store.set("indexer:geek:passkey", "other")
+    assert statuses(run(setup, store, pw))["prowlarr:indexer:geek"] == "changed"
+
+
+def test_proxy_switched_off_removes_proxy_and_tag_from_orama_indexers_only(tmp_path):
+    pw = FakeProwlarr()
+    on, store = make(tmp_path, vpn=VpnConfig(route_prowlarr=True))
+    run(on, store, pw)
+    mine = pw.add_user_indexer()
+    mine["tags"] = [1]
+    mine_before = copy.deepcopy(mine)
+    pid = pw.by_name(pw.proxies, "Gluetun (Orama)")["id"]
+    pw.http.route("DELETE", f"{API}/indexerProxy/{pid}",
+                  pw.guard(lambda c: pw.ok(pw.proxies.pop(pid) and {})))
+    off, _ = make(tmp_path, vpn=VpnConfig(route_prowlarr=False))
+    pw.commands.clear()
+    by = statuses(run(off, store, pw))
+    assert by["prowlarr:proxy-off"] == "changed" and by["prowlarr:indexer:geek"] == "unchanged"
+    assert pw.by_name(pw.proxies, "Gluetun (Orama)") is None
+    assert pw.by_name(pw.indexers, "NZBGeek")["tags"] == []
+    assert pw.tags == [{"id": 1, "label": "vpn"}]
+    assert pw.indexers[mine["id"]] == mine_before
+    assert len(pw.commands) == 1
+    pw.writes.clear()
+    again = run(off, store, pw)
+    assert all(s == "unchanged" for s in statuses(again).values())
+    assert pw.writes == []
