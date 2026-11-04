@@ -6,7 +6,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from orama.wiring.http import FakeHttp, Http, Response, Unreachable
+from orama.wiring.http import (
+    FakeHttp, Http, Response, ResponseTooLarge, UnsafeRedirect, Unreachable,
+)
 
 AWKWARD = "a&b=c%d+e #f Ταινίες"
 
@@ -45,16 +47,22 @@ def server():
                     "cookie": self.headers.get("Cookie"),
                 }
             )
-            if self.path.startswith("/login"):
+            if self.path.startswith("/redirect"):
+                self.send_response(302)
+                self.send_header("Location", "/next")
+            elif self.path.startswith("/large"):
+                self.send_response(200)
+            elif self.path.startswith("/login"):
                 self.send_response(200)
                 self.send_header("Set-Cookie", "SID=abc; Path=/")
             elif self.path.startswith("/missing"):
                 self.send_response(404)
             else:
                 self.send_response(200)
-            self.send_header("Content-Length", "2")
+            body = b"large" if self.path.startswith("/large") else b"{}"
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"{}")
+            self.wfile.write(body)
 
         do_GET = do_POST = _handle
 
@@ -112,3 +120,22 @@ def test_unreachable_on_refused_port():
     with pytest.raises(Unreachable) as exc:
         Http().request("GET", f"http://127.0.0.1:{port}/x", timeout=2)
     assert exc.value.app_url == f"http://127.0.0.1:{port}"
+
+
+
+def test_api_redirect_is_rejected_without_following_it(server):
+    base, seen = server
+    with pytest.raises(UnsafeRedirect):
+        Http().request("GET", base + "/redirect")
+    # The /next handler would create a second entry if urllib followed the redirect.
+    assert [item["path"] for item in seen] == ["/redirect"]
+
+
+def test_response_body_is_bounded(server, monkeypatch):
+    import orama.wiring.http as http_module
+
+    base, seen = server
+    monkeypatch.setattr(http_module, "MAX_RESPONSE_BYTES", 4)
+    with pytest.raises(ResponseTooLarge):
+        Http().request("GET", base + "/large")
+    assert [item["path"] for item in seen] == ["/large"]

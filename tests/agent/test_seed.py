@@ -49,9 +49,10 @@ def test_sabnzbd_patches_section_and_keeps_every_other_line():
     assert new[:5] == old[:5]
     assert new[5] == f"api_key = {SAB['api_key']}"
     assert new[6:8] == old[6:8]
-    assert new[8:11] == [f"nzb_key = {SAB['nzb_key']}",
-                         "host_whitelist = sabnzbd, gluetun, localhost", ""]
-    assert new[11:] == old[9:]  # [servers] untouched, its api_key too
+    assert new[8:12] == [f"nzb_key = {SAB['nzb_key']}",
+                         "host_whitelist = sabnzbd, gluetun, localhost",
+                         "api_logging = 0", ""]
+    assert new[12:] == old[9:]  # [servers] untouched, its api_key too
 
 
 def test_qbittorrent_patches_existing_keys_and_appends_missing():
@@ -119,7 +120,7 @@ def test_second_render_is_unchanged(app, values, current):  # [RF 3]
 
 def test_values_written_the_way_the_apps_rewrite_them_count_as_unchanged():
     sab = (f"[misc]\napi_key = {SAB['api_key']}\nnzb_key = \"{SAB['nzb_key']}\"\n"
-           "host_whitelist = sabnzbd,gluetun,localhost,\n")
+           "host_whitelist = sabnzbd,gluetun,localhost,\napi_logging = 0\n")
     assert render("sabnzbd", sab, SAB) is None
     qbt = ("[WebUI]\nHostHeaderValidation=false\nLocalHostAuth=true\n"
            f"Password_PBKDF2=\"{QBT['password_pbkdf2']}\"\nPort=8090\nUsername=orama\n")

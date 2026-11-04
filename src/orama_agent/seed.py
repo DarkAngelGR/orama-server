@@ -41,7 +41,11 @@ FORMATS: dict[str, _Format] = {
         separator=" = ",
         file=("sabnzbd.ini",),
         allowed={"api_key": ("api_key", _HEX32), "nzb_key": ("nzb_key", _HEX32)},
-        fixed={"host_whitelist": "sabnzbd, gluetun, localhost"},
+        # SABnzbd logs API kwargs (including API keys and server passwords) when this is on.
+        fixed={
+            "host_whitelist": "sabnzbd, gluetun, localhost",
+            "api_logging": "0",
+        },
     ),
     # qBittorrent 5.x keeps WebUI settings in their own [WebUI] section (its settings
     # migration 12 moves them out of [Preferences] on first start, and 5.3 reads only

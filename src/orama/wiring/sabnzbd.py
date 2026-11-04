@@ -36,7 +36,7 @@ class _Api:
     def call(self, **params: Any) -> Any:
         query = {"apikey": self.apikey, "output": "json", **params}
         try:
-            resp = self.http.request("GET", BASE, params=query)
+            resp = self.http.request("POST", BASE, form=query)
         except Unreachable:
             raise StepError("SABnzbd could not be reached — run apply again.") from None
         if resp.status != 200:
@@ -81,8 +81,8 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         client = api()
 
         def ready() -> bool:
-            return http.request("GET", BASE, params={"mode": "version", "apikey": client.apikey,
-                                                      "output": "json"}).status == 200
+            return http.request("POST", BASE, form={"mode": "version", "apikey": client.apikey,
+                                                     "output": "json"}).status == 200
 
         wait_until(ready, app="sabnzbd", timeout=START_TIMEOUT)
         return None

@@ -53,3 +53,11 @@ Read `AGENTS.md` first.
 - Real-app findings (Task 9): qBittorrent 5 answers a good login with 204; Prowlarr 2.x names the generic template
   "Newznab"; SABnzbd 5 omits empty sections and creates default categories on first read; Prowlarr tests the indexer
   as saved. The test's fake Newznab returns one TV and one movie release (an empty feed can't pass the apps' tests).
+
+### Security hardening follow-up (ChatGPT/Codex)
+
+- API HTTP client: redirects are rejected rather than followed; response bodies are capped at 16 MiB.
+- Agent Unix socket: concurrent client handlers are bounded to 16; excess connections are closed.
+- SABnzbd: Orama sends API requests as POST form bodies, avoiding credentials in query strings. The Agent seeds `api_logging = 0` because SABnzbd logs parsed API parameters when that option is enabled.
+- Regression tests cover redirect refusal, oversized responses, connection saturation/recovery, POST-only SABnzbd credentials and disabled SABnzbd API parameter logging.
+- This is an independent hardening pass, not the required Claude Security scan. Keep the scan marked blocked until Claude Code Dynamic workflows are enabled and the owner runs it.

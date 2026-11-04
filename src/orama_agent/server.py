@@ -44,6 +44,7 @@ log = logging.getLogger("orama_agent")
 
 DEFAULT_SOCKET = "/run/orama/agent.sock"
 MAX_REQUEST = 1024 * 1024  # bytes per request line
+MAX_CONNECTIONS = 16  # bound concurrent idle clients and command waiters
 MAX_PATHS = 64
 READ_TIMEOUT = 30.0
 SOCKET_MODE = 0o660
@@ -516,10 +517,28 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self._chown = chown
         self.roots = roots
         self.read_timeout = read_timeout
+        self._connection_slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self.agent = Agent(roots, runner, chown)
         self.socket_path = socket_path
         _remove_stale_socket(socket_path)
         super().__init__(socket_path, _Handler)
+
+    def process_request(self, request, client_address) -> None:
+        # Refuse excess clients rather than queueing unbounded handler threads.
+        if not self._connection_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
 
     def server_bind(self) -> None:
         old = os.umask(0o777 & ~SOCKET_MODE)  # bind creates the socket 0660 directly
