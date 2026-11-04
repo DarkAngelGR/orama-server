@@ -135,7 +135,7 @@ def test_awkward_password_arrives_intact(tmp_path):
     assert all(AWKWARD not in c.url for c in sab.http.calls)
     wire = parse_qs(urlencode(write.form))  # what the real client puts on the wire
     assert wire["password"] == [AWKWARD]
-    test_call = next(c for c in sab.http.calls if c.params["mode"] == "config")
+    test_call = next(c for c in sab.http.calls if c.form["mode"] == "config")
     assert test_call.form["password"] == AWKWARD
 
 
