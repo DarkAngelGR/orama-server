@@ -29,10 +29,14 @@ Read `AGENTS.md` first.
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
 | — | Claude Security scan of the Plan 2a changes | ⛔ blocked — needs "Dynamic workflows" on in Claude Code `/config`; the owner starts `/claude-security:claude-security` → scan changes, base `2c599c9` | |
 | — | Final whole-plan review + one fix round | ▶ in progress — ChatGPT/Codex hardening; Claude Security scan remains blocked | |
+| — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
 
 ### Supplemental review fixes (Codex)
 
-- In progress by Codex: reject duplicate indexer names, remove connections to removed downloaders, and report unsupported indexer definition changes safely.
+- Done by Codex: duplicate indexer display names are refused before apply; removing SABnzbd or qBittorrent removes only its Orama-managed Sonarr/Radarr clients; changing an existing indexer definition under the same name reports a clear failure and preserves the entry.
+- Indexer type changes are deliberately refused rather than automatically replacing an entry. Restore the original type or use a new name; the old indexer remains and is not silently deleted.
+- Regression cases failed against the original source before implementation. Local setup/wiring/hygiene checks passed (171 tests), plus Ruff and ShellCheck. The full Linux unit suite and real-container integration passed in CI for `2fbe547`: https://github.com/DarkAngelGR/orama-server/actions/runs/41898589745.
+- A separate supplemental review found no actionable issues in the fixes. The required carry-forward section is now in `2026-11-03-orama-r1-plan-1-notes.md`. The Agent, compose pins and secret handling were not changed in this fix round.
 - The dedicated Claude Security scan and final whole-plan review remain outstanding. This fix round does not close either gate.
 
 ### Decisions made while executing Plan 2a
