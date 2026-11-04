@@ -169,7 +169,9 @@ def newznab(clean_host: Host, installed: dict):
 
 
 @pytest.fixture(scope="module")
-def applied(clean_host: Host, installed: dict, newznab, outputs: Outputs) -> dict:
+def applied(
+    request: pytest.FixtureRequest, clean_host: Host, installed: dict, newznab, outputs: Outputs,
+) -> dict:
     setup = dict(installed["draft"])
     setup.update(
         media_servers=["jellyfin", "plex"], download_methods=["torrent", "usenet"], vpn=None,
@@ -198,6 +200,8 @@ def applied(clean_host: Host, installed: dict, newznab, outputs: Outputs) -> dic
     status, output = apply(clean_host, outputs, "apply-1")
     if status not in (0, 1):
         diagnose_apps_up(clean_host)
+    if len(failure_lines(output)) != 1:
+        diagnose_wiring(clean_host, request)
     assert status == 1, f"apply should report only the fake Usenet server (exit {status}):\n{output}"
     wait_until_ready(APPS)
     return {"output": output, "setup": setup}
@@ -213,6 +217,23 @@ def rerun(clean_host: Host, installed: dict, applied: dict, outputs: Outputs) ->
         "first_apply": first_apply, "before": before, "after": container_ids(),
         "install": (install_status, install_output), "apply": (apply_status, apply_output),
     }
+
+
+def diagnose_wiring(host: Host, request: pytest.FixtureRequest) -> None:
+    """Print what the wiring met, secrets scrubbed, so a CI log shows why a step failed."""
+    values = [v for v in stored_secrets(host).values() if len(v) >= 8]
+
+    def scrub(text: str) -> str:
+        for v in values:
+            text = text.replace(v, "***")
+        return text
+
+    reporter = request.config.pluginmanager.getplugin("terminalreporter")
+    for app in ("sabnzbd", "qbittorrent", "prowlarr", "sonarr"):
+        logs = run(["docker", "logs", "--tail", "60", f"orama-{app}"]).stdout
+        reporter.write_line(f"--- diagnostics: orama-{app} log tail\n{scrub(logs)}")
+    reporter.write_line(f"--- diagnostics: orama-server log tail\n"
+                        f"{scrub(run(['docker', 'logs', '--tail', '60', 'orama-server']).stdout)}")
 
 
 def diagnose_apps_up(host: Host) -> None:
@@ -455,7 +476,8 @@ def test_second_install_and_apply_change_nothing(installed: dict, rerun: dict):
 
 
 def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Outputs):
-    values = [v for v in stored_secrets(clean_host).values() if v]
+    # Short entries are flags and markers (e.g. "1"), which any text contains; real secrets are longer.
+    values = [v for v in stored_secrets(clean_host).values() if len(v) >= 8]
     assert values, "the secret store is empty"
     texts = dict(outputs.texts)
     for name in ("orama-server", "orama-server-agent"):
