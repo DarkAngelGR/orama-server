@@ -24,8 +24,8 @@ Read `AGENTS.md` first.
 | 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | ba80dfe |
 | 5 | SABnzbd and qBittorrent wiring | ✅ done | cba82cc |
 | 6 | Sonarr and Radarr wiring | ✅ done | 9455d71 |
-| 7 | Prowlarr wiring | in progress (Claude) | |
-| 8 | Step plan; `apply` runs the wiring | todo | |
+| 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
+| 8 | Step plan; `apply` runs the wiring | in progress (Claude) | |
 | 9 | Integration test: real apps wired, second run changes nothing | todo | |
 | — | Claude Security scan of the Plan 2a changes | todo (Claude only) | |
 | — | Final whole-plan review + one fix round | todo | |
@@ -48,3 +48,5 @@ Read `AGENTS.md` first.
 - Seeding runs AFTER the first deploy (Task 8 order: apply → seed-config → wiring), so the apps first write their defaults.
   When port forwarding is on and qBittorrent was seeded, Task 8 restarts Gluetun and then qBittorrent so the hook fires again.
 - SABnzbd's `host_whitelist` is set to `sabnzbd, gluetun, localhost` and replaces any hostnames the user added.
+- Turning the "Prowlarr through the VPN" option off removes the proxy and its tag from Orama's indexers. Turning
+  Sonarr or Radarr off removes its Prowlarr connection. Indexers removed from the setup are NOT deleted from Prowlarr.
