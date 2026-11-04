@@ -46,6 +46,7 @@ ADDRESS = re.compile(r"Orama is ready\. Open http://\S+:(\d+) in your browser\."
 DOCKER_SOCKETS = {"/var/run/docker.sock", "/run/docker.sock"}
 SHARED_NETWORK = "orama-net"
 NEWZNAB = "orama-test-newznab"
+PROXY_STAND_IN = "orama-test-proxy"
 FAKE_SERVER_HOST = "fake-nntp.invalid"
 SYNC_TIMEOUT = 120
 WIRED_APPS = ["prowlarr", "sonarr", "radarr", "sabnzbd", "qbittorrent"]
@@ -560,24 +561,18 @@ def test_prowlarr_vpn_proxy_and_masked_secrets(clean_host: Host, applied: dict):
     assert http_proxy is not None, [s.get("implementation") for s in schema]
     assert {"host", "port", "username", "password"} <= {f["name"] for f in http_proxy["fields"]}
 
-    # The same request the wiring sends, from the schema; show Prowlarr's reasons if refused.
-    probe = json.loads(json.dumps(http_proxy))
-    probe.update(name="Probe (Orama)", tags=[])
-    for field in probe["fields"]:
-        field["value"] = {"host": "gluetun", "port": 8888, "username": GLUETUN_PROXY_USER,
-                          "password": secrets.token_hex(8)}.get(field["name"], field.get("value"))
-    status, answer = api("POST", "/indexerProxy", probe, "?forceSave=true")
-    assert status in (200, 201), f"Prowlarr refused the proxy (HTTP {status}): {answer}"
-    api("DELETE", f"/indexerProxy/{answer['id']}")
-    # Same again with a tag, as the wiring sends it.
-    status, tag = api("POST", "/tag", {"label": "vpn"})
-    assert status in (200, 201), f"Prowlarr refused the tag (HTTP {status}): {tag}"
-    probe["tags"] = [tag["id"]]
-    status, answer = api("POST", "/indexerProxy", probe, "?forceSave=true")
-    assert status in (200, 201), f"Prowlarr refused the tagged proxy (HTTP {status}): {answer}"
-    api("DELETE", f"/indexerProxy/{answer['id']}")
-    api("DELETE", f"/tag/{tag['id']}")
-
+    # Prowlarr fetches a page through an HTTP proxy when it is saved, so something must
+    # answer on gluetun:8888; the VPN itself is not part of CI.
+    stand_in = run(["docker", "run", "-d", "--name", PROXY_STAND_IN, "--network", SHARED_NETWORK,
+                    "--network-alias", "gluetun",
+                    "-v", f"{Path(__file__).with_name('fake_proxy.py')}:/proxy.py:ro",
+                    "python:3.12-slim", "python", "/proxy.py"], timeout=600)
+    assert stand_in.returncode == 0, f"stand-in proxy did not start:\n{stand_in.stdout}"
+    deadline = time.monotonic() + 60
+    while run(["docker", "exec", "orama-server", "python", "-c",
+               "import socket; socket.create_connection(('gluetun', 8888), 3)"]).returncode != 0:
+        assert time.monotonic() < deadline, "the stand-in proxy never answered"
+        time.sleep(1)
     on = {**applied["setup"], "vpn": {"route_prowlarr": True}}
     first_password, second_password = secrets.token_hex(12), secrets.token_hex(12)
     try:
@@ -616,6 +611,8 @@ def test_prowlarr_vpn_proxy_and_masked_secrets(clean_host: Host, applied: dict):
         kept = seen.stdout.strip() == secrets_["indexer:fake:apiKey"]  # never shown on failure
         assert kept, "Prowlarr did not keep the indexer's stored key (values withheld)"
     finally:  # leave Prowlarr as the wiring left it, whatever happened above
+        clean_host.save_log("container-proxy.log", run(["docker", "logs", PROXY_STAND_IN]).stdout)
+        run(["docker", "rm", "-f", PROXY_STAND_IN])
         proxy = listed("indexerProxy", "Gluetun (Orama)")
         if proxy is not None:
             api("DELETE", f"/indexerProxy/{proxy['id']}")
