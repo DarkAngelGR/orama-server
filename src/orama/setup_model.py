@@ -7,10 +7,14 @@ from pathlib import Path, PurePath, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     Field,
     PlainSerializer,
     PlainValidator,
+    StrictBool,
+    StrictInt,
+    StrictStr,
     field_validator,
     model_validator,
 )
@@ -45,6 +49,62 @@ def _validate_root(value: Any) -> PurePosixPath:
 
 Root = Annotated[PurePosixPath, PlainValidator(_validate_root), PlainSerializer(str)]
 
+MAX_FIELDS = 40
+MAX_FIELD_VALUE_LEN = 512
+
+Slug = Annotated[str, Field(pattern=r"^[a-z0-9-]{1,40}$")]
+# A Prowlarr field name; also the last part of the store name ``indexer:<slug>:<field>``.
+FieldName = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.]{1,64}$")]
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOSTNAME = rf"^{_LABEL}(?:\.{_LABEL})*$"
+
+
+def _printable(value: str) -> str:
+    # Shown in logs and messages: no control characters, nothing that redraws a terminal.
+    if not value.isprintable():
+        raise ValueError("must contain only printable characters")
+    return value
+
+
+def _printable_value(value: Any) -> Any:
+    if isinstance(value, str):
+        if len(value) > MAX_FIELD_VALUE_LEN:
+            raise ValueError(f"must be at most {MAX_FIELD_VALUE_LEN} characters")
+        _printable(value)
+    return value
+
+
+FieldValue = Annotated[StrictStr | StrictBool | StrictInt, AfterValidator(_printable_value)]
+
+
+class IndexerChoice(BaseModel):
+    """An indexer Orama adds to Prowlarr. Secret field values live in SecretStore."""
+
+    slug: Slug
+    definition: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+    name: Annotated[str, Field(min_length=1, max_length=60), AfterValidator(_printable)]
+    fields: dict[FieldName, FieldValue] = Field(default={}, max_length=MAX_FIELDS)
+    secret_fields: tuple[FieldName, ...] = Field(default=(), max_length=MAX_FIELDS)
+
+    @model_validator(mode="after")
+    def _check_secret_fields(self) -> Self:
+        if len(set(self.secret_fields)) != len(self.secret_fields):
+            raise ValueError("secret field names must be unique")
+        if set(self.secret_fields) & set(self.fields):
+            raise ValueError("a field cannot be both secret and plain")
+        return self
+
+
+class UsenetServer(BaseModel):
+    """A Usenet server for SABnzbd. Its password lives in SecretStore."""
+
+    slug: Slug
+    host: str = Field(max_length=253, pattern=_HOSTNAME)
+    port: int = Field(default=563, ge=1, le=65535)
+    ssl: bool = True
+    connections: int = Field(default=20, ge=1, le=100)
+    username: Annotated[str, Field(max_length=256), AfterValidator(_printable)] = ""
+
 
 class DesiredSetup(BaseModel):
     media_servers: frozenset[Literal["plex", "jellyfin"]]
@@ -59,6 +119,8 @@ class DesiredSetup(BaseModel):
     timezone: str = "Etc/UTC"
     ports: dict[str, int] = {}
     removed_apps: frozenset[str] = frozenset()
+    indexers: tuple[IndexerChoice, ...] = ()
+    usenet_servers: tuple[UsenetServer, ...] = ()
 
     @field_validator("media_servers", "download_methods")
     @classmethod
@@ -76,6 +138,12 @@ class DesiredSetup(BaseModel):
                 "the VPN container cannot be removed while the VPN is on; "
                 "turn the VPN off instead"
             )
+        for label, items in (("indexer", self.indexers), ("usenet server", self.usenet_servers)):
+            slugs = [item.slug for item in items]
+            if len(set(slugs)) != len(slugs):
+                raise ValueError(f"{label} slugs must be unique")
+        if self.usenet_servers and "usenet" not in self.download_methods:
+            raise ValueError("usenet servers require the usenet download method")
         d, c = self.data_root, self.config_root
         if d == c or d.is_relative_to(c) or c.is_relative_to(d):
             raise ValueError("data_root and config_root must not be the same or nested")

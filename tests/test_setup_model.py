@@ -4,7 +4,7 @@ import pytest
 from conftest import make_setup
 from pydantic import ValidationError
 
-from orama.setup_model import DesiredSetup, VpnConfig, enabled_apps
+from orama.setup_model import DesiredSetup, IndexerChoice, UsenetServer, VpnConfig, enabled_apps
 
 
 def test_vpn_requires_torrent():
@@ -118,3 +118,130 @@ def test_unusual_path_characters_roundtrip(tmp_path):
     path = tmp_path / "setup.json"
     s.save(path)
     assert str(DesiredSetup.load(path).data_root) == root
+
+
+# ---------------------------------------------------------------- indexers and usenet servers
+
+def _indexer(**kw):
+    values = {
+        "slug": "geek",
+        "definition": "nzbgeek",
+        "name": "NZBgeek",
+        "fields": {"baseUrl": "https://api.example.test", "minimumSeeders": 1, "rss": True},
+        "secret_fields": ("apiKey",),
+    }
+    values.update(kw)
+    return IndexerChoice(**values)
+
+
+def test_indexers_and_servers_roundtrip(tmp_path):
+    s = make_setup(
+        indexers=(_indexer(), _indexer(slug="own", definition="newznab", name="Own Μέσα #1",
+                                       fields={}, secret_fields=())),
+        usenet_servers=(
+            UsenetServer(slug="main", host="news.example.test", username="me"),
+            UsenetServer(slug="fill", host="eu.news.example.test", port=119, ssl=False,
+                         connections=4),
+        ),
+    )
+    path = tmp_path / "setup.json"
+    s.save(path)
+    loaded = DesiredSetup.load(path)
+    assert loaded == s
+    assert loaded.indexers[0].fields == {
+        "baseUrl": "https://api.example.test", "minimumSeeders": 1, "rss": True
+    }
+    assert type(loaded.indexers[0].fields["rss"]) is bool
+    assert type(loaded.indexers[0].fields["minimumSeeders"]) is int
+    main = loaded.usenet_servers[0]
+    assert (main.port, main.ssl, main.connections) == (563, True, 20)
+    first = path.read_bytes()
+    s.save(path)
+    assert path.read_bytes() == first
+
+
+def test_plan1_setup_without_new_fields_loads(tmp_path):
+    data = make_setup().to_json_dict()
+    del data["indexers"], data["usenet_servers"]
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps(data))
+    loaded = DesiredSetup.load(path)
+    assert loaded.indexers == () and loaded.usenet_servers == ()
+
+
+def test_duplicate_indexer_slug_is_refused():
+    with pytest.raises(ValidationError, match="unique"):
+        make_setup(indexers=(_indexer(), _indexer(name="Other")))
+
+
+def test_duplicate_server_slug_is_refused():
+    servers = (UsenetServer(slug="a", host="x.test"), UsenetServer(slug="a", host="y.test"))
+    with pytest.raises(ValidationError, match="unique"):
+        make_setup(usenet_servers=servers)
+
+
+def test_usenet_servers_require_usenet():
+    with pytest.raises(ValidationError, match="usenet"):
+        make_setup(
+            download_methods={"torrent"},
+            usenet_servers=(UsenetServer(slug="a", host="x.test"),),
+        )
+
+
+@pytest.mark.parametrize(
+    "host", ["a:b", "a/b", "a b", "", "-a.test", "a..test", "a\nb", "x" * 254, "[::1]"]
+)
+def test_bad_server_host_is_refused(host):
+    with pytest.raises(ValidationError):
+        UsenetServer(slug="a", host=host)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"slug": "Bad"},
+        {"slug": ""},
+        {"slug": "a" * 41},
+        {"slug": "a_b"},
+        {"port": 0},
+        {"port": 65536},
+        {"connections": 0},
+        {"connections": 101},
+        {"username": "me\nyou"},
+    ],
+)
+def test_bad_server_values_are_refused(kw):
+    with pytest.raises(ValidationError):
+        UsenetServer(**{"slug": "a", "host": "x.test", **kw})
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"slug": "a b"},
+        {"slug": "a" * 41},
+        {"name": ""},
+        {"name": "x" * 61},
+        {"name": "bad\x1b[31m"},
+        {"definition": ""},
+        {"definition": "a/b"},
+        {"fields": {"bad key": "v"}},
+        {"fields": {"": "v"}},
+        {"fields": {"k": "line\nbreak"}},
+        {"fields": {"k": "nul\x00"}},
+        {"fields": {"k": "x" * 513}},
+        {"fields": {f"k{i}": i for i in range(41)}},
+        {"fields": {"k": ["a"]}},
+        {"secret_fields": ("bad key",)},
+        {"secret_fields": ("apiKey", "apiKey")},
+        {"secret_fields": ("baseUrl",)},  # also a plain field
+    ],
+)
+def test_bad_indexer_values_are_refused(kw):
+    with pytest.raises(ValidationError):
+        _indexer(**kw)
+
+
+def test_indexer_limits_are_inclusive():
+    choice = _indexer(name="x" * 60, fields={f"k{i}": "v" * 512 for i in range(40)})
+    assert len(choice.fields) == 40

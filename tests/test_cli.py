@@ -1,8 +1,10 @@
+import io
 import json
 import logging
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import threading
 import urllib.error
@@ -17,7 +19,7 @@ from orama import cli
 from orama.__main__ import make_server
 from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
-from orama.secrets import SecretStore, ensure_app_keys
+from orama.secrets import VPN_KEY_NAME, SecretStore, ensure_app_keys
 from orama.setup_model import DesiredSetup, VpnConfig, enabled_apps
 from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
@@ -601,6 +603,178 @@ def test_apply_missing_setup(capsys, tmp_path):
     out = capsys.readouterr()
     assert code == 1
     assert out.err.startswith("✗ ")
+
+
+# ---------------------------------------------------------------- set-secret
+
+class FakeStdin(io.StringIO):
+    def __init__(self, text, tty=False):
+        super().__init__(text)
+        self.tty = tty
+
+    def isatty(self):
+        return self.tty
+
+
+def _secret_value():
+    # Built at runtime so no key-shaped literal sits in the repo.
+    return "pw &=%+ #Ωμέγα-" + os.urandom(6).hex()
+
+
+def run_set_secret(capsys, monkeypatch, cfg, argv, stdin):
+    monkeypatch.setattr(sys, "stdin", stdin)
+    code = cli.main(["set-secret", *argv, "--setup", str(cfg / "orama" / "setup.json")])
+    return code, capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "vpn:wireguard_private_key",
+        "usenet:main-1:password",
+        "indexer:geek:apiKey",
+        "indexer:own:extra.field_2",
+    ],
+)
+def test_set_secret_stores_stdin_value(capsys, caplog, monkeypatch, roots, name):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    caplog.set_level(logging.DEBUG)
+    value = _secret_value()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, [name], FakeStdin(value + "\n"))
+    assert code == 0, out.err
+    assert out.out == f"✓ Saved {name}\n"
+    assert value not in out.out + out.err + caplog.text
+    # The same store apply reads.
+    assert SecretStore(cfg / "orama" / "secrets.bin").get(name) == value
+
+
+def test_set_secret_uses_the_vpn_name_apply_reads(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    code, _ = run_set_secret(capsys, monkeypatch, cfg, [VPN_KEY_NAME], FakeStdin("k" * 44))
+    assert code == 0
+    assert SecretStore(cfg / "orama" / "secrets.bin").get(VPN_KEY_NAME) == "k" * 44
+
+
+def test_set_secret_replaces_and_keeps_others(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    store.set("apikey:sonarr", "0123456789abcdef0123456789abcdef")
+    store.set("usenet:main:password", "old-value")
+    code, _ = run_set_secret(capsys, monkeypatch, cfg, ["usenet:main:password"],
+                             FakeStdin("new-value\r\n"))
+    assert code == 0
+    assert store.get("usenet:main:password") == "new-value"
+    assert store.get("apikey:sonarr") == "0123456789abcdef0123456789abcdef"
+
+
+def test_set_secret_tty_reads_without_echo(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    value = _secret_value()
+    prompts = []
+
+    def fake_getpass(prompt="Password: ", stream=None):
+        prompts.append(prompt)
+        return value
+
+    monkeypatch.setattr(cli.getpass, "getpass", fake_getpass)
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey"],
+                               FakeStdin("", tty=True))
+    assert code == 0, out.err
+    assert len(prompts) == 1 and value not in prompts[0]
+    assert value not in out.out + out.err
+    assert SecretStore(cfg / "orama" / "secrets.bin").get("indexer:geek:apiKey") == value
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "vpn:other",
+        "apikey:sonarr",
+        "usenet:Main:password",
+        "usenet:main:username",
+        "indexer:geek:api key",
+        "indexer::apiKey",
+        "a-secret-typed-by-mistake",
+        "vpn:wireguard_private_key\n",
+    ],
+)
+def test_set_secret_refuses_bad_name_plainly(capsys, caplog, monkeypatch, roots, name):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    code, out = run_set_secret(capsys, monkeypatch, cfg, [name], FakeStdin("value\n"))
+    assert code == 1
+    assert out.err.startswith("✗ ") and len(out.err.strip().splitlines()) == 1
+    assert "secret name" in out.err
+    assert name not in out.err + out.out + caplog.text  # it may be a mistyped secret
+    assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+@pytest.mark.parametrize(
+    "text,words",
+    [
+        ("", "No value"),
+        ("\n", "No value"),
+        ("one\ntwo\n", "one line"),
+        ("bad\x00nul\n", "one line"),
+        ("x" * 5000, "too long"),
+    ],
+)
+def test_set_secret_refuses_bad_value_plainly(capsys, caplog, monkeypatch, roots, text, words):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey"],
+                               FakeStdin(text))
+    assert code == 1
+    assert out.err.startswith("✗ ") and words in out.err, out.err
+    for part in ("two", "nul", "x" * 20):
+        assert part not in out.err + caplog.text
+    assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+def test_set_secret_value_on_command_line_is_refused_without_echo(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    value = _secret_value()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey", value],
+                               FakeStdin("ignored\n"))
+    assert code == 1
+    assert out.err.startswith("✗ ")
+    assert value not in out.err + out.out
+    assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+def test_set_secret_missing_setup(capsys, monkeypatch, roots):
+    _, cfg = roots
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey"],
+                               FakeStdin("value\n"))
+    assert code == 1
+    assert out.err.startswith("✗ No setup found")
+    assert not (cfg / "orama").exists()
+
+
+def test_set_secret_undecryptable_store_is_plain(capsys, caplog, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    SecretStore(cfg / "orama" / "secrets.bin").set("apikey:sonarr", "0123456789abcdef")
+    (cfg / "orama" / "secrets.key").write_bytes(b"A" * 43 + b"=")
+    value = _secret_value()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["indexer:geek:apiKey"],
+                               FakeStdin(value))
+    assert code == 1
+    assert out.err.startswith("✗ Cannot save the secret: cannot decrypt"), out.err
+    assert value not in out.err + out.out + caplog.text
 
 
 # ---------------------------------------------------------------- orama HTTP server
