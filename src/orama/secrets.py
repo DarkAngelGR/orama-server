@@ -25,7 +25,7 @@ from orama.setup_model import DesiredSetup, enabled_apps
 
 _KEYED_APPS = ("sonarr", "radarr", "prowlarr", "sabnzbd")
 VPN_KEY_NAME = "vpn:wireguard_private_key"
-_PROXY_PASSWORD_NAME = "password:gluetun-proxy"
+GLUETUN_PROXY_PASSWORD_NAME = "password:gluetun-proxy"
 QBITTORRENT_PASSWORD_NAME = "password:qbittorrent"
 SABNZBD_NZB_KEY_NAME = "nzbkey:sabnzbd"
 _QBT_PBKDF2_ITERATIONS = 100_000
@@ -129,7 +129,7 @@ def ensure_app_keys(store: SecretStore, apps: list[str], *, gluetun_proxy: bool 
     if "qbittorrent" in apps:
         wanted[QBITTORRENT_PASSWORD_NAME] = _new_password
     if gluetun_proxy and "gluetun" in apps:
-        wanted[_PROXY_PASSWORD_NAME] = _new_password
+        wanted[GLUETUN_PROXY_PASSWORD_NAME] = _new_password
     for name, make in wanted.items():
         if store.get(name) is None:
             store.set(name, make())
@@ -185,7 +185,7 @@ def _secret_names(app: str, setup: DesiredSetup) -> dict[str, str]:
     if app == "gluetun":
         names = {"WIREGUARD_PRIVATE_KEY": VPN_KEY_NAME}
         if setup.vpn is not None and setup.vpn.route_prowlarr:
-            names["HTTPPROXY_PASSWORD"] = _PROXY_PASSWORD_NAME
+            names["HTTPPROXY_PASSWORD"] = GLUETUN_PROXY_PASSWORD_NAME
         if setup.vpn is not None and setup.vpn.port_forwarding:
             # The port-forward hook logs in to qBittorrent with it.
             names["QBT_WEBUI_PASSWORD"] = QBITTORRENT_PASSWORD_NAME
