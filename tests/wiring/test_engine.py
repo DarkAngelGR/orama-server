@@ -44,7 +44,7 @@ def test_failed_step_skips_dependents_transitively():
     assert [r.status for r in res] == ["failed", "skipped", "skipped", "changed"]
     assert res[0].message == "Sonarr rejected the key"
     assert res[1].message == "waiting for Sonarr"
-    assert res[2].message == "waiting for Prowlarr"
+    assert res[2].message == "waiting for Sonarr"
 
 
 def test_exception_text_never_in_message():
@@ -110,3 +110,16 @@ def test_checklist_formatting():
 def test_checklist_nothing_to_change():
     assert format_checklist([StepResult("b", "sonarr", "unchanged", "")]) == ["✓ Nothing to change"]
     assert format_checklist([]) == ["✓ Nothing to change"]
+
+
+def test_skipped_step_names_the_root_cause_app_through_the_chain():
+    res = run_steps(
+        [
+            Step("wait:sonarr", "sonarr", lambda: (_ for _ in ()).throw(StepError("still starting"))),
+            Step("prowlarr:app:sonarr", "prowlarr", lambda: "x", needs=("wait:sonarr",)),
+            Step("prowlarr:indexer", "prowlarr", lambda: "x", needs=("prowlarr:app:sonarr",)),
+            Step("prowlarr:sync", "prowlarr", lambda: "x", needs=("prowlarr:indexer",)),
+        ]
+    )
+    assert [r.message for r in res[1:]] == ["waiting for Sonarr"] * 3
+    assert format_checklist(res)[-1] == "… Prowlarr: skipped, waiting for Sonarr"
