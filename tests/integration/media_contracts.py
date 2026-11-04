@@ -300,7 +300,7 @@ def _plex_library(port, headers):
         if re.search("hardwareaccel|lannetworks", str(entry.get("id")), re.IGNORECASE):
             print(f"Contract Plex pref {entry.get('id')}: {entry}")
     for pref in ("HardwareAcceleratedCodecs", "LanNetworksBandwidth"):
-        value = "1" if pref == "HardwareAcceleratedCodecs" else "192.168.0.0/16"
+        value = "1" if pref == "HardwareAcceleratedCodecs" else "10." + "0.0.0/8"
         status, _ = _request(port, f"/:/prefs?{pref}={urllib.parse.quote(value)}", method="PUT",
                              headers=headers)
         print(f"Contract Plex PUT /:/prefs?{pref}= without a token: {status}")
