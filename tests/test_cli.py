@@ -14,13 +14,15 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 from conftest import make_setup
+from wiring import test_arr, test_prowlarr, test_qbittorrent, test_sabnzbd
 
 from orama import cli
 from orama.__main__ import make_server
 from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
 from orama.secrets import VPN_KEY_NAME, SecretStore, ensure_app_keys
-from orama.setup_model import DesiredSetup, VpnConfig, enabled_apps
+from orama.setup_model import DesiredSetup, IndexerChoice, VpnConfig, enabled_apps
+from orama.wiring.http import Http
 from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
 from orama_agent.validate import Roots
@@ -363,6 +365,42 @@ def test_bootstrap_empty_taken_ports(capsys, roots):
 
 # ---------------------------------------------------------------- apply
 
+class Fleet(Http):
+    """All five download apps behind one Http: each request goes to that host's fake.
+
+    The wiring tests' fakes check one fixed key each; this points them at the keys the
+    store really holds (apply creates random ones) before every request.
+    """
+
+    def __init__(self, monkeypatch, store_path):
+        self.mp = monkeypatch
+        self.store_path = store_path
+        self.sab = test_sabnzbd.FakeSab()
+        self.qbt = test_qbittorrent.FakeQbt()
+        self.sonarr = test_arr.FakeArr("sonarr")
+        self.radarr = test_arr.FakeArr("radarr")
+        self.prowlarr = test_prowlarr.FakeProwlarr()
+        self.requests = 0
+
+    def request(self, method, url, **kw):
+        self.requests += 1
+        store = SecretStore(self.store_path)
+        host = url.split("//", 1)[1].split(":", 1)[0].split("/", 1)[0]
+        mp = self.mp
+        if host == "sabnzbd":
+            mp.setattr(test_sabnzbd, "KEY", store.get("apikey:sabnzbd"))
+            return self.sab.http.request(method, url, **kw)
+        if host in ("qbittorrent", "gluetun"):
+            mp.setattr(test_qbittorrent, "PASSWORD", store.get("password:qbittorrent"))
+            return self.qbt.http.request(method, url, **kw)
+        if host in ("sonarr", "radarr"):
+            mp.setattr(test_arr, "APP_KEY", store.get(f"apikey:{host}"))
+            return getattr(self, host).http.request(method, url, **kw)
+        assert host == "prowlarr", url
+        mp.setattr(test_prowlarr, "PROWLARR_KEY", store.get("apikey:prowlarr"))
+        return self.prowlarr.http.request(method, url, **kw)
+
+
 @pytest.fixture
 def agent(roots, monkeypatch):
     data, cfg = roots
@@ -377,6 +415,8 @@ def agent(roots, monkeypatch):
     thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     monkeypatch.setenv("ORAMA_AGENT_SOCKET", socket_path)
+    runner.fleet = Fleet(monkeypatch, cfg / "orama" / "secrets.bin")
+    monkeypatch.setattr(cli, "Http", lambda: runner.fleet)
     try:
         yield runner
     finally:
@@ -398,6 +438,14 @@ def write_setup(cfg, data, **kw):
 
 def store_values(cfg):
     return SecretStore(cfg / "orama" / "secrets.bin").values()
+
+
+def credential_values(cfg):
+    """The keys, passwords and hashes in the store, without wiring's bookkeeping markers."""
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    prefixes = ("apikey:", "nzbkey:", "password:", "qbhash:", "indexer:", "vpn:")
+    return [store.get(n) for n in store.names() if n.startswith(prefixes)
+            and not n.endswith(":sent")]
 
 
 def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, roots, agent):
@@ -425,7 +473,7 @@ def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, ro
     assert lines[0] == "✓ Folders ready"
     assert {f"✓ {a} started" for a in enabled_apps(setup)} <= set(lines)
 
-    secrets = store_values(cfg)
+    secrets = credential_values(cfg)
     assert len(secrets) == 5  # sonarr, radarr, prowlarr api keys + sabnzbd api and nzb keys
     for value in secrets:
         assert value not in out.out and value not in out.err and value not in caplog.text
@@ -603,6 +651,136 @@ def test_apply_missing_setup(capsys, tmp_path):
     out = capsys.readouterr()
     assert code == 1
     assert out.err.startswith("✗ ")
+
+
+def test_apply_wires_the_apps_and_prints_results(capsys, caplog, roots, agent):
+    data, cfg = roots
+    caplog.set_level(logging.DEBUG)
+    path = write_setup(cfg, data)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 0, out.err
+    lines = out.out.splitlines()
+    assert "✓ SABnzbd: login details set" in lines
+    assert any(line.startswith("✓ SABnzbd: ") and "folders" in line for line in lines)
+    assert any(line.startswith("✓ Sonarr: ") for line in lines)
+    assert any(line.startswith("✓ Radarr: ") for line in lines)
+    assert not [line for line in lines if line.startswith("✗")]
+    assert lines.index("✓ Folders ready") < lines.index("✓ SABnzbd: login details set")
+    assert lines.index("✓ sabnzbd started") < lines.index("✓ SABnzbd: login details set")
+    assert agent.fleet.sab.misc["complete_dir"] == "/data/downloads/usenet"
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    seed = (cfg / "config" / "sabnzbd" / "sabnzbd.ini").read_text()
+    assert f"api_key = {store.get('apikey:sabnzbd')}" in seed
+    assert f"nzb_key = {store.get('nzbkey:sabnzbd')}" in seed
+    for value in credential_values(cfg):
+        assert value not in out.out and value not in out.err and value not in caplog.text
+
+
+def test_apply_second_run_changes_nothing(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    capsys.readouterr()
+    keys = store_values(cfg)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out == ["✓ Folders ready", "✓ Nothing to change"]
+    assert store_values(cfg) == keys
+    assert agent.up_calls == 2 and agent.restarts == []
+
+
+def test_apply_failing_indexer_exits_1_but_finishes_the_rest(capsys, roots, agent):
+    data, cfg = roots
+    geek = IndexerChoice(slug="geek", definition="geek", name="NZBGeek",
+                         fields={"baseUrl": "https://geek.example"}, secret_fields=("apikey",))
+    path = write_setup(cfg, data, indexers=(geek,))
+    SecretStore(cfg / "orama" / "secrets.bin").set("indexer:geek:apikey", "indexer-secret-1")
+    agent.fleet.prowlarr.test_status = 400
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    failed = [line for line in out.out.splitlines() if line.startswith("✗")]
+    assert len(failed) == 1 and failed[0].startswith("✗ Prowlarr: ")
+    assert "indexer-secret-1" not in out.out + out.err
+    assert "✓ Sonarr: " in "\n".join(out.out.splitlines())  # wiring before it still ran
+    assert "Traceback" not in out.err
+
+
+def torrent_vpn_setup(cfg, data, **vpn):
+    path = write_setup(cfg, data, download_methods={"usenet", "torrent"},
+                       vpn=VpnConfig(**vpn))
+    SecretStore(cfg / "orama" / "secrets.bin").set("vpn:wireguard_private_key", "k" * 8)
+    return path
+
+
+def test_apply_seeds_qbittorrent_and_restarts_gluetun_for_port_forwarding(
+    capsys, caplog, roots, agent
+):
+    data, cfg = roots
+    caplog.set_level(logging.DEBUG)
+    path = torrent_vpn_setup(cfg, data)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 0, out.err
+    assert "✓ qBittorrent: login details set" in out.out.splitlines()
+    assert agent.restarts == ["gluetun", "qbittorrent"]
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    conf = (cfg / "config" / "qbittorrent" / "qBittorrent" / "qBittorrent.conf").read_text()
+    assert f'Password_PBKDF2="{store.get("qbhash:qbittorrent")}"' in conf
+    for value in credential_values(cfg):
+        assert value not in out.out and value not in out.err and value not in caplog.text
+    assert store.get("password:qbittorrent") not in conf
+
+
+def test_apply_without_port_forwarding_does_not_restart(capsys, roots, agent):
+    data, cfg = roots
+    path = torrent_vpn_setup(cfg, data, port_forwarding=False)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert "✓ qBittorrent: login details set" in capsys.readouterr().out.splitlines()
+    assert agent.restarts == []
+
+
+def test_apply_qbittorrent_second_run_is_identical(capsys, roots, agent):
+    data, cfg = roots
+    path = torrent_vpn_setup(cfg, data)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    first = store.get("qbhash:qbittorrent")
+    capsys.readouterr()
+    restarts = list(agent.restarts)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert capsys.readouterr().out.splitlines() == ["✓ Folders ready", "✓ Nothing to change"]
+    assert store.get("qbhash:qbittorrent") == first
+    assert agent.restarts == restarts
+
+
+def test_apply_new_qbittorrent_password_gets_a_new_hash(capsys, roots, agent):
+    data, cfg = roots
+    path = torrent_vpn_setup(cfg, data)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    first = store.get("qbhash:qbittorrent")
+    store.set("password:qbittorrent", "another-password-1")
+    capsys.readouterr()
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert store.get("qbhash:qbittorrent") != first
+    assert "✓ qBittorrent: login details set" in capsys.readouterr().out.splitlines()
+
+
+def test_apply_seed_refusal_is_plain(capsys, caplog, roots, agent, monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    from orama.agent_client import AgentClient, AgentError
+
+    def refuse(self, app, values):
+        raise AgentError("The Agent refused to set the login details.")
+
+    monkeypatch.setattr(AgentClient, "seed_config", refuse)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.err.strip() == "✗ The Agent refused to set the login details."
 
 
 # ---------------------------------------------------------------- set-secret
