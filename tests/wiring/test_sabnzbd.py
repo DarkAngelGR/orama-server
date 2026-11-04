@@ -18,6 +18,7 @@ class FakeSab:
     def __init__(self, login_ok=True):
         self.misc = {"complete_dir": "Downloads/complete", "download_dir": "Downloads/incomplete"}
         self.cats = {"*": {"name": "*", "dir": ""}}
+        self.cats_touched = False
         self.servers = {}
         self.passwords = {}
         self.login_ok = login_ok
@@ -35,6 +36,11 @@ class FakeSab:
             return Response(200, {}, b'{"version": "5.1.3"}')
         if mode == "get_config":
             section = p["section"]
+            # SABnzbd 5.1: a list section is absent until something was added to it.
+            if (section == "categories" and not self.cats_touched) or (
+                section == "servers" and not self.servers
+            ):
+                return self.ok({"config": {}})
             if section == "misc":
                 data = dict(self.misc)
             elif section == "categories":
@@ -46,6 +52,7 @@ class FakeSab:
             if p["section"] == "misc":
                 self.misc[p["keyword"]] = p["value"]
             elif p["section"] == "categories":
+                self.cats_touched = True
                 self.cats[p["name"]] = {"name": p["name"], "dir": p["dir"]}
             else:
                 row = {k: v for k, v in p.items() if k not in ("mode", "section", "apikey", "output", "password")}
