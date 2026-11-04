@@ -88,6 +88,7 @@ def _docker_works() -> bool:
 
 def _remove_everything() -> None:
     """Remove the test projects' containers, networks and volumes, then the test folders."""
+    run(["docker", "rm", "-f", "orama-test-newznab"])  # the fake indexer, not in a project
     for project in PROJECTS:
         run(["docker", "compose", "-p", project, "down", "-v", "--remove-orphans"],
             timeout=300)
