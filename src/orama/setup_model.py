@@ -142,6 +142,9 @@ class DesiredSetup(BaseModel):
             slugs = [item.slug for item in items]
             if len(set(slugs)) != len(slugs):
                 raise ValueError(f"{label} slugs must be unique")
+        names = [item.name for item in self.indexers]
+        if len(set(names)) != len(names):
+            raise ValueError("indexer names must be unique")
         if self.usenet_servers and "usenet" not in self.download_methods:
             raise ValueError("usenet servers require the usenet download method")
         d, c = self.data_root, self.config_root
