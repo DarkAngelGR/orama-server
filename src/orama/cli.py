@@ -1,4 +1,4 @@
-"""Installer-facing commands: ``python -m orama.cli bootstrap|apply``.
+"""Installer-facing commands: ``python -m orama.cli bootstrap|apply|set-secret``.
 
 ``bootstrap`` runs as root (the installer starts it with ``docker run --rm`` and the config
 folder bind-mounted at the identical path). It writes the root-owned core compose file and
@@ -7,15 +7,20 @@ never write anything the installer later runs as root.
 
 ``apply`` runs inside the Orama container as PUID. It talks to the Agent over its socket
 and prints a plain-language checklist. Secret values are never printed.
+
+``set-secret NAME`` also runs inside the Orama container as PUID. It reads one secret from
+stdin (no echo on a terminal) and keeps it in the secret store next to the setup file.
 """
 
 from __future__ import annotations
 
 import argparse
 import errno
+import getpass
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 import sys
@@ -46,6 +51,12 @@ DRAFT_FILE = "setup.draft.json"
 SECRETS_FILE = "secrets.bin"
 APP_CONFIG_PARENT = "config"
 SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
+SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
+SECRET_NAME = re.compile(
+    rf"(?:{re.escape(VPN_KEY_NAME)}"
+    r"|usenet:[a-z0-9-]+:password"
+    r"|indexer:[a-z0-9-]+:[A-Za-z0-9_.]+)"
+)
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -104,6 +115,12 @@ def _parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("apply", help="(inside the Orama container) apply a setup")
     a.add_argument("--setup", required=True, type=Path)
+
+    s = sub.add_parser(
+        "set-secret", help="(inside the Orama container) save one secret read from stdin"
+    )
+    s.add_argument("name", metavar="NAME")
+    s.add_argument("--setup", required=True, type=Path)
     return parser
 
 
@@ -114,9 +131,19 @@ def _default_chown() -> Chown:
 
 
 def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args, extra = parser.parse_known_args(argv)
+    if extra and args.command != "set-secret":
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
     try:
-        if args.command == "bootstrap":
+        if args.command == "set-secret":
+            if extra:  # never echo them: it is likely the secret itself
+                raise Failed(
+                    "set-secret takes only the secret's name; type the value when asked "
+                    "or pipe it in."
+                )
+            set_secret(args.name, args.setup)
+        elif args.command == "bootstrap":
             try:
                 port = bootstrap(args, chown or _default_chown())
             except OSError as e:
@@ -375,6 +402,51 @@ def apply(setup_path: Path) -> None:
         print(f"✓ {app} started")
     if not changed:
         print("✓ Nothing to change")
+
+
+# ---------------------------------------------------------------- set-secret
+
+def set_secret(name: str, setup_path: Path) -> None:
+    """Store one secret, read from stdin, next to the setup file. Never shows the value."""
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+    if not SECRET_NAME.fullmatch(name):  # never echoed: it may be a mistyped secret
+        raise Failed(
+            "That is not a secret name Orama knows. Use vpn:wireguard_private_key, "
+            "usenet:<server>:password or indexer:<indexer>:<field>."
+        )
+    if not setup_path.is_file():
+        raise Failed(f"No setup found at {setup_path}.")
+    store = SecretStore(setup_path.parent / SECRETS_FILE)
+    install_redaction(store)
+    value = _read_secret()
+    try:
+        store.set(name, value)
+    except ValueError as e:  # e.g. the store cannot be decrypted; messages hold no values
+        raise Failed(f"Cannot save the secret: {e}.") from None
+    except OSError as e:
+        raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
+    print(f"✓ Saved {name}")
+
+
+def _read_secret() -> str:
+    """One line from stdin without its line ending; no echo when stdin is a terminal."""
+    try:
+        if sys.stdin.isatty():
+            text = getpass.getpass("Value (not shown): ")
+        else:
+            text = sys.stdin.read(SECRET_LIMIT + 3)  # room for a line ending, then one more
+    except (EOFError, KeyboardInterrupt):
+        raise Failed("Cancelled; nothing was saved.") from None
+    except (OSError, UnicodeDecodeError):
+        raise Failed("Cannot read the value from the input; nothing was saved.") from None
+    text = text.removesuffix("\n").removesuffix("\r")
+    if not text:
+        raise Failed("No value was given; nothing was saved.")
+    if len(text) > SECRET_LIMIT:
+        raise Failed(f"The value is too long (over {SECRET_LIMIT} characters); nothing was saved.")
+    if any(c in text for c in "\n\r\x00"):
+        raise Failed("The value must be one line of text; nothing was saved.")
+    return text
 
 
 if __name__ == "__main__":
