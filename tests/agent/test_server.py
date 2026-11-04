@@ -897,5 +897,15 @@ def test_agent_bounds_concurrent_connections_and_recovers(agent):
     finally:
         held.close()
 
+    # Closing the socket wakes the handler asynchronously. Wait for its finally block
+    # to release the slot before opening the recovery request.
+    for _ in range(100):
+        if agent.server._connection_slots.acquire(blocking=False):
+            agent.server._connection_slots.release()
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("the Agent did not release the idle connection slot")
+
     # Releasing an idle slot must restore normal service.
     assert agent.client.status() == {}
