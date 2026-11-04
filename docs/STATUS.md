@@ -25,8 +25,8 @@ Read `AGENTS.md` first.
 | 5 | SABnzbd and qBittorrent wiring | ✅ done | cba82cc |
 | 6 | Sonarr and Radarr wiring | ✅ done | 9455d71 |
 | 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
-| 8 | Step plan; `apply` runs the wiring | in progress (Claude) | |
-| 9 | Integration test: real apps wired, second run changes nothing | todo | |
+| 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
+| 9 | Integration test: real apps wired, second run changes nothing | in progress (Claude) | |
 | — | Claude Security scan of the Plan 2a changes | todo (Claude only) | |
 | — | Final whole-plan review + one fix round | todo | |
 
