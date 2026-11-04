@@ -569,6 +569,14 @@ def test_prowlarr_vpn_proxy_and_masked_secrets(clean_host: Host, applied: dict):
     status, answer = api("POST", "/indexerProxy", probe, "?forceSave=true")
     assert status in (200, 201), f"Prowlarr refused the proxy (HTTP {status}): {answer}"
     api("DELETE", f"/indexerProxy/{answer['id']}")
+    # Same again with a tag, as the wiring sends it.
+    status, tag = api("POST", "/tag", {"label": "vpn"})
+    assert status in (200, 201), f"Prowlarr refused the tag (HTTP {status}): {tag}"
+    probe["tags"] = [tag["id"]]
+    status, answer = api("POST", "/indexerProxy", probe, "?forceSave=true")
+    assert status in (200, 201), f"Prowlarr refused the tagged proxy (HTTP {status}): {answer}"
+    api("DELETE", f"/indexerProxy/{answer['id']}")
+    api("DELETE", f"/tag/{tag['id']}")
 
     on = {**applied["setup"], "vpn": {"route_prowlarr": True}}
     first_password, second_password = secrets.token_hex(12), secrets.token_hex(12)
