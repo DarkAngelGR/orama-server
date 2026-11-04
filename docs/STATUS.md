@@ -11,6 +11,10 @@ Read `AGENTS.md` first.
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ▶ in progress — `docs/superpowers/plans/2026-11-03-orama-r1-plan-2a-download-wiring.md` |
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Task 1 in progress by Codex. Linux CI supplies the disposable host. |
 
+| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
+| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
+
 ## Resume here (updated by Claude, 2026-11-04 ~21:00 UTC)
 
 Codex is paused; Claude is working. Order of work, first unfinished step first:
@@ -18,14 +22,10 @@ Codex is paused; Claude is working. Order of work, first unfinished step first:
 1. **Fix the 2 verified Claude Security findings (Plan 2a)** — DONE in `fa5007b` (tested against real Gluetun v3.41.3); security review of the fix in progress (Claude). If Claude stops before the review reports, re-review `63a9a71..fa5007b` before closing Plan 2a. Both are confirmed 3/3 by the verification panel (scan of `2c599c9..f82dd43`, high effort):
    - **F3 (MEDIUM)** `src/orama_agent/server.py:125` `_env_file_text` + `src/orama_agent/validate.py:61/516` (`FORBIDDEN_ENV_CHARS`): env-file values are written `KEY='value'` unescaped and only `' \n \r \0` are refused. Compose's dotenv parser treats `\'` as an escaped quote, so a value ending in `\` swallows the next line and the next value becomes a new unpinned `KEY=VALUE` (e.g. `VPN_PORT_FORWARDING_UP_COMMAND` or the kill-switch off) in Gluetun. Fix: allowlist env-file value characters `[A-Za-z0-9_+/=-]` (what generated secrets use; WireGuard keys are base64), refuse everything else; defence in depth: after writing, parse the file the way Compose does and check the parsed keys equal the requested keys. Agent code → most capable model.
    - **F4 (LOW)** `src/orama/catalog.py:104` `GLUETUN_PORT_FORWARD_UP_COMMAND`: the hook puts the qBittorrent password in wget's argv (`--post-data`), readable via /proc by host users. Fix: write the login form to a private temp file with a shell builtin (umask 077) and use `wget --post-file`, then delete it; update the Agent's pinned string to match.
-2. ← NEXT after the review: **Plan 2a final whole-plan review + one fix round** over `2c599c9..HEAD` (includes Codex's supplemental fixes). Then a smaller follow-up Claude Security scan of `f82dd43..HEAD` (Claude only) to cover Codex's Agent edits and the research the usage limit cut short.
+2. **Plan 2a final whole-plan review** — DONE (opus, over `2c599c9..eca8998`, CI green there): no critical issues. ← NEXT: one fix wave for its findings I1 (skipped steps name the wrong app; one failed indexer test blocks Prowlarr sync), I2 (Gluetun/qBittorrent restart never retried), I3 (CI check of Prowlarr's Http proxy create/update/delete + masked-secret PUT), I4 (replace literal fake secrets in tests with runtime values), plus minors M1 ("run install again" → "run apply again"; SABnzbd server message covers connection errors), M2 (http.client.HTTPException → Unreachable), M3 (plain errors for an invalid saved setup), M4 (set-secret uses the same store path as apply), M5 (qbittorrent removed while port forwarding on), M9 (integration checks SABnzbd category dirs; leak-scan set-secret output). Then Then a smaller follow-up Claude Security scan of `f82dd43..HEAD` (Claude only) to cover Codex's Agent edits and the research the usage limit cut short.
 3. **Plan 2b** (CI note: the Task 1 probe `test_pinned_notification_contracts` read `name`, which Sonarr/Radarr templates leave empty; fixed to read `implementationName` in the commit after `fa5007b` — check CI is green there) (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — resume Task 1, the pinned-image contract experiments (Codex had started; probes run on the disposable Linux CI host).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
-| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
-| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
-| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
-
 ## Plan 2a — tasks
 
 | # | Task | State | Commit |
@@ -40,7 +40,7 @@ At every task boundary record the latest tested commit, CI result, open decision
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
 | — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan of `f82dd43..HEAD` pending | |
-| — | Final whole-plan review + one fix round | ▶ in progress — ChatGPT/Codex hardening; Claude Security scan remains blocked | |
+| — | Final whole-plan review + one fix round | review done (Claude, opus); fix wave next — see Resume here | |
 | — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
 
 ### Supplemental review fixes (Codex)
@@ -50,7 +50,7 @@ At every task boundary record the latest tested commit, CI result, open decision
 - Regression cases failed against the original source before implementation. Local setup/wiring/hygiene checks passed (171 tests), plus Ruff and ShellCheck. The full Linux unit suite and real-container integration passed in CI for `2fbe547`: https://github.com/DarkAngelGR/orama-server/actions/runs/41898589745.
 - A separate supplemental review found no actionable issues in the fixes. The required carry-forward section is now in `2026-11-03-orama-r1-plan-1-notes.md`. The Agent, compose pins and secret handling were not changed in this fix round.
 - The status-only follow-up exposed a race in the existing connection-limit test: it opened the recovery request before the closed client's handler released its slot. The test now waits for release with a bounded timeout, while retaining the excess-connection refusal and recovery assertions. Agent behavior is unchanged.
-- The dedicated Claude Security scan and final whole-plan review remain outstanding. This fix round does not close either gate.
+- (Superseded) The Claude Security scan has since run and its two findings are fixed (`fa5007b`); the final review has run — see Resume here.
 
 ### Decisions made while executing Plan 2a
 
@@ -82,4 +82,4 @@ At every task boundary record the latest tested commit, CI result, open decision
 - Agent Unix socket: concurrent client handlers are bounded to 16; excess connections are closed.
 - SABnzbd: Orama sends API requests as POST form bodies, avoiding credentials in query strings. The Agent seeds `api_logging = 0` because SABnzbd logs parsed API parameters when that option is enabled.
 - Regression tests cover redirect refusal, oversized responses, connection saturation/recovery, POST-only SABnzbd credentials and disabled SABnzbd API parameter logging.
-- This is an independent hardening pass, not the required Claude Security scan. Keep the scan marked blocked until Claude Code Dynamic workflows are enabled and the owner runs it.
+- This was an independent hardening pass. The Claude Security scan has since run (see the scan row above).
