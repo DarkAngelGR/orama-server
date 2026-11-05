@@ -37,6 +37,8 @@ from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
+    JELLYFIN_PASSWORD_NAME,
+    PLEX_TOKEN_NAME,
     QBITTORRENT_PASSWORD_NAME,
     SABNZBD_NZB_KEY_NAME,
     VPN_KEY_NAME,
@@ -63,6 +65,8 @@ SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
 SECRET_NAME = re.compile(
     rf"(?:{re.escape(VPN_KEY_NAME)}"
+    r"|password:jellyfin"
+    r"|opensubtitles:(?:username|password)"
     r"|usenet:[a-z0-9-]{1,40}:password"
     r"|indexer:[a-z0-9-]{1,40}:[A-Za-z0-9_.]{1,64})"
 )
@@ -489,6 +493,7 @@ def set_secret(name: str, setup_path: Path) -> None:
     if not SECRET_NAME.fullmatch(name):  # never echoed: it may be a mistyped secret
         raise Failed(
             "That is not a secret name Orama knows. Use vpn:wireguard_private_key, "
+            "password:jellyfin, opensubtitles:username, opensubtitles:password, "
             "usenet:<server>:password or indexer:<indexer>:<field>."
         )
     if not setup_path.is_file():
