@@ -144,3 +144,54 @@ def test_a_step_can_skip_itself_and_its_dependents_say_why_once():
     assert res[0].message == res[1].message == "Plex is waiting for sign-in"
     # Shown even when nothing else changed, and only once.
     assert format_checklist(res) == ["… Plex: skipped, Plex is waiting for sign-in"]
+
+
+def test_plan_2a_chain_output_is_unchanged():
+    def boom():
+        raise StepError("Sonarr is still starting — run apply again in a few minutes.")
+
+    res = run_steps(
+        [
+            Step("wait:sonarr", "sonarr", boom),
+            Step("p1", "prowlarr", lambda: "x", needs=("wait:sonarr",)),
+            Step("p2", "prowlarr", lambda: "x", needs=("wait:sonarr",)),
+            Step("p3", "prowlarr", lambda: "x", needs=("p1",)),
+            Step("q1", "radarr", lambda: "same"),
+            Step("q2", "radarr", lambda: "same"),
+        ]
+    )
+    assert format_checklist(res) == [
+        "✗ Sonarr: Sonarr is still starting — run apply again in a few minutes.",
+        "… Prowlarr: skipped, waiting for Sonarr",
+        "… Prowlarr: skipped, waiting for Sonarr",
+        "… Prowlarr: skipped, waiting for Sonarr",
+        "✓ Radarr: same",
+        "✓ Radarr: same",
+    ]
+
+
+def test_only_self_skip_reasons_are_merged():
+    from orama.wiring.engine import StepSkipped
+
+    def wait():
+        raise StepSkipped("Plex is waiting for sign-in")
+
+    def boom():
+        raise StepError("Sonarr broke")
+
+    res = run_steps(
+        [
+            Step("p1", "plex", wait),
+            Step("p2", "plex", lambda: "x", needs=("p1",)),
+            Step("p3", "plex", lambda: "x", needs=("p2",)),
+            Step("s1", "sonarr", boom),
+            Step("s2", "prowlarr", lambda: "x", needs=("s1",)),
+            Step("s3", "prowlarr", lambda: "x", needs=("s1",)),
+        ]
+    )
+    assert format_checklist(res) == [
+        "… Plex: skipped, Plex is waiting for sign-in",
+        "✗ Sonarr: Sonarr broke",
+        "… Prowlarr: skipped, waiting for Sonarr",
+        "… Prowlarr: skipped, waiting for Sonarr",
+    ]

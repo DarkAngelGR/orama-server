@@ -39,6 +39,7 @@ PRODUCT = "Orama"
 START_TIMEOUT = 300.0
 NETWORK_SENT_MARKER = "plex:network:sent"
 HARDWARE_SENT_MARKER = "plex:hardware:sent"
+CLAIMED_MARKER = "plex:claimed:"  # + machine identifier: Orama claimed this server itself
 
 WAITING_FOR_SIGN_IN = "Plex is waiting for sign-in — run `python -m orama.cli plex-sign-in`"
 OTHER_ACCOUNT = "This Plex server belongs to another Plex account — Orama won't take it over."
@@ -61,8 +62,20 @@ _PIN_CODE = re.compile(r"[A-Za-z0-9]{1,128}")
 _MACHINE_ID = re.compile(r"[A-Za-z0-9-]{1,128}")
 
 
+_SIGN_IN_MESSAGES = {
+    "unreachable": "plex.tv could not be reached — check the internet connection and "
+                   "try again.",
+    "refused": "plex.tv refused the sign-in request — try again in a minute.",
+    "unreadable": "plex.tv gave an answer Orama could not read — try again.",
+}
+
+
 class SignInError(Exception):
-    """Sign-in could not start; the message is plain language and safe to show."""
+    """Sign-in could not start. ``message`` is always one of the fixed sentences above."""
+
+    def __init__(self, kind: Literal["unreachable", "refused", "unreadable"]) -> None:
+        self.message = _SIGN_IN_MESSAGES[kind]
+        super().__init__(self.message)
 
 
 @dataclass(frozen=True)
@@ -107,14 +120,12 @@ def begin_sign_in(
     try:
         resp = http.request("POST", f"{PLEX_TV}/api/v2/pins?strong=true", headers=headers)
     except Unreachable:
-        raise SignInError(
-            "plex.tv could not be reached — check the internet connection and try again."
-        ) from None
+        raise SignInError("unreachable") from None
     if resp.status not in (200, 201):
-        raise SignInError("plex.tv refused the sign-in request — try again in a minute.")
+        raise SignInError("refused")
     data = _json(resp)
     if not isinstance(data, dict):
-        raise SignInError("plex.tv gave an answer Orama could not read — try again.")
+        raise SignInError("unreadable")
     pin_id, code, expires = data.get("id"), data.get("code"), data.get("expiresIn", 900)
     if (
         type(pin_id) is not int
@@ -123,7 +134,7 @@ def begin_sign_in(
         or not _PIN_CODE.fullmatch(code)
         or type(expires) is not int
     ):
-        raise SignInError("plex.tv gave an answer Orama could not read — try again.")
+        raise SignInError("unreadable")
     query = urllib.parse.urlencode(
         {
             "clientID": headers["X-Plex-Client-Identifier"],
@@ -145,6 +156,8 @@ def poll_sign_in(store: Any, http: Http, pin_id: int) -> Literal["waiting", "don
                             headers=_tv_headers(store))
     except Unreachable:
         return "waiting"  # a short network blip; the caller stops at the PIN's expiry
+    if resp.status == 429:
+        return "waiting"  # asked too often: slow down, the PIN is still good
     if 400 <= resp.status < 500:
         return "expired"  # gone, used up, or refused for this client: start again
     if resp.status != 200:
@@ -237,7 +250,8 @@ def plex_steps(
         token()  # skip plainly before any call when nobody has signed in
         claimed, machine = identity()
         if claimed:
-            if owned_by_this_account(machine):
+            # plex.tv may not list a server claimed a moment ago: Orama's own claim counts too.
+            if store.get(CLAIMED_MARKER + machine) == "1" or owned_by_this_account(machine):
                 return None
             raise StepError(OTHER_ACCOUNT)
         data = tv("/api/claim/token.json")
@@ -256,6 +270,7 @@ def plex_steps(
             raise StepError("Plex could not be reached — run apply again.") from None
         if resp.status >= 300:
             raise StepError("Plex did not accept the sign-in — run apply again.")
+        store.set(CLAIMED_MARKER + machine, "1")
         return "signed this Plex server in to your Plex account"
 
     def libraries() -> str | None:
