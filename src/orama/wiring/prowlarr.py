@@ -17,7 +17,7 @@ from orama.catalog import GLUETUN_PROXY_USER
 from orama.secrets import GLUETUN_PROXY_PASSWORD_NAME
 from orama.setup_model import DesiredSetup, IndexerChoice, enabled_apps
 from orama.wiring.arr import MASK, SPECS
-from orama.wiring.engine import Step, StepError, display_name, wait_until
+from orama.wiring.engine import Step, StepError, display_name, run_steps, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 START_TIMEOUT = 600.0
@@ -28,6 +28,15 @@ PROXY_PORT = 8888
 VPN_TAG = "vpn"
 SYNC_PENDING = "prowlarr:sync:pending"
 _NAME = "Prowlarr"
+REMOVE_PREFIX = "remove:indexer:"
+
+
+class _Refused(StepError):
+    """Prowlarr answered a request with an error status."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def sent_marker_name(kind: str) -> str:
@@ -76,7 +85,9 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         if resp.status in (401, 403):
             raise StepError("Prowlarr did not accept Orama's API key — run apply again.")
         if resp.status >= 300 and not accept_failure:
-            raise StepError(f"Prowlarr refused a request (HTTP {resp.status}) — run apply again.")
+            raise _Refused(
+                f"Prowlarr refused a request (HTTP {resp.status}) — run apply again.", resp.status
+            )
         return resp
 
     def read(path: str) -> Any:
@@ -241,14 +252,22 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         password = store.get(GLUETUN_PROXY_PASSWORD_NAME)
         if password is None:
             raise StepError("The VPN proxy password is missing — run apply again.")
-        _, message, _ = upsert(
-            resource="indexerProxy", label="the VPN proxy", name="Gluetun (Orama)",
-            pick=lambda s: s.get("implementation") == "Http",
-            want={"host": PROXY_HOST, "port": PROXY_PORT, "username": GLUETUN_PROXY_USER,
-                  "password": password},
-            secret=password, secret_names=frozenset({"password"}),
-            marker=sent_marker_name("proxy"), top={}, tag=vpn_tag_id(),
-        )
+        try:
+            _, message, _ = upsert(
+                resource="indexerProxy", label="the VPN proxy", name="Gluetun (Orama)",
+                pick=lambda s: s.get("implementation") == "Http",
+                want={"host": PROXY_HOST, "port": PROXY_PORT, "username": GLUETUN_PROXY_USER,
+                      "password": password},
+                secret=password, secret_names=frozenset({"password"}),
+                marker=sent_marker_name("proxy"), top={}, tag=vpn_tag_id(),
+            )
+        except _Refused as err:
+            if err.status == 400:  # Prowlarr tests the proxy when saving it
+                raise StepError(
+                    "The VPN is still connecting, so Prowlarr could not test it — "
+                    "run apply again in a minute."
+                ) from None
+            raise
         return message
 
     def indexer_step(choice: IndexerChoice, needs: tuple[str, ...], proxy_on: bool) -> Step:
@@ -259,7 +278,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 if value is None:
                     raise StepError(
                         f"The {choice.name} indexer has no API key or password yet — "
-                        "enter it, then run apply again."
+                        "enter it in Settings, then run apply again."
                     )
                 secrets[field] = value
             want: dict[str, Any] = {**choice.fields, **secrets}
@@ -294,6 +313,22 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         if profiles:
             item["appProfileId"] = profiles[0]["id"]
 
+    def remove_step(slug: str, name: str) -> Step:
+        def run() -> str | None:
+            have = next((i for i in read("indexer") if i.get("name") == name), None)
+            message = None
+            if have is not None:
+                mark_pending()
+                call("DELETE", f"indexer/{have['id']}")
+                message = f"removed the {name} indexer"
+            # only now, after the delete worked (or it was already gone)
+            store.delete(sent_marker_name(f"indexer:{slug}"))
+            store.delete(f"test-ok:indexer:{slug}")
+            store.delete(f"{REMOVE_PREFIX}{slug}")
+            return message
+
+        return Step(f"prowlarr:remove:{slug}", "prowlarr", run, needs=("wait:prowlarr",))
+
     def sync() -> str | None:
         if store.get(SYNC_PENDING) != "1":
             return None
@@ -302,6 +337,12 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         return "Indexers sent to Sonarr and Radarr"
 
     steps = [Step("wait:prowlarr", "prowlarr", wait)]
+    for entry in sorted(store.names()):
+        if entry.startswith(REMOVE_PREFIX):
+            name = store.get(entry)
+            if name:
+                steps.append(remove_step(entry[len(REMOVE_PREFIX):], name))
+    removals = len(steps)
     app_names = [a for a in ("sonarr", "radarr") if a in apps]
     steps += [app_step(a) if a in apps else app_remove_step(a) for a in ("sonarr", "radarr")]
     app_needs = tuple(f"prowlarr:app:{a}" for a in app_names)
@@ -315,7 +356,34 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         indexer_needs += ("prowlarr:proxy-off",)
     # Sync waits for the apps and the proxy, not for the indexers: one indexer failing
     # its test must not stop the others from being sent to Sonarr and Radarr.
-    sync_needs = ("wait:prowlarr", *(s.name for s in steps[1:]))
+    sync_needs = ("wait:prowlarr", *(s.name for s in steps[removals:]))
     steps += [indexer_step(c, indexer_needs, proxy_on) for c in setup.indexers]
     steps.append(Step("prowlarr:sync", "prowlarr", sync, needs=sync_needs))
     return steps
+
+
+def test_indexer(setup: DesiredSetup, store: Any, http: Http, slug: str) -> str | None:
+    """Test one indexer from the setup, running nothing else.
+
+    Returns None when it passed (and records ``test-ok:indexer:<slug>``), else the plain
+    message of the step that failed or was skipped (and clears the record).
+    """
+    wanted = ("wait:prowlarr", f"prowlarr:indexer:{slug}")
+    steps = [s for s in prowlarr_steps(setup, store, http) if s.name in wanted]
+    message: str | None = None
+    if len(steps) < 2:
+        message = "Orama does not know this indexer yet — save the settings first."
+    else:
+        for result in run_steps(steps):
+            if result.status in ("failed", "skipped"):
+                message = result.message
+                break
+    ok_name = f"test-ok:indexer:{slug}"
+    if message is None:
+        store.set(ok_name, "1")
+    else:
+        store.delete(ok_name)
+    return message
+
+
+test_indexer.__test__ = False  # type: ignore[attr-defined]  # not a pytest test

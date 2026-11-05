@@ -29,8 +29,8 @@ VAAPI_DEVICE = "/dev/dri/renderD128"
 
 # Never advise deleting anything: the owner's Jellyfin (users, watch history) is kept.
 WRONG_PASSWORD = (
-    "Jellyfin is already set up — enter its admin name and password with set-secret "
-    "user:jellyfin and password:jellyfin, then run apply again."
+    "Jellyfin is already set up — enter its admin name and password in Settings, "
+    "then run apply again."
 )
 UNREADABLE = "Jellyfin gave an answer Orama could not read — run apply again."
 NOT_ACCEPTED = "Jellyfin did not accept Orama's sign-in — run apply again."

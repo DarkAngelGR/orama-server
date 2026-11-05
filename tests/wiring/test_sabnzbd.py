@@ -6,7 +6,8 @@ from conftest import make_setup
 from orama.secrets import SecretStore
 from orama.wiring.engine import run_steps
 from orama.wiring.http import FakeHttp, Response
-from orama.wiring.sabnzbd import sabnzbd_steps
+from orama.wiring.sabnzbd import sabnzbd_steps, sent_marker_name
+from orama.wiring.sabnzbd import test_usenet_server as check_usenet_server
 
 AWKWARD = "a&b=c%d+e #f Ταινίες"
 KEY = "key" * 4
@@ -21,6 +22,7 @@ class FakeSab:
         self.servers = {}
         self.passwords = {}
         self.login_ok = login_ok
+        self.deleted = []
         self.http = FakeHttp()
         self.http.route("POST", "/api", self.handle)
 
@@ -58,6 +60,11 @@ class FakeSab:
                 self.servers[p["name"]] = row
                 self.passwords[p["name"]] = p["password"]
             return self.ok({"config": {}})
+        if mode == "del_config":
+            assert p["section"] == "servers"
+            del self.servers[p["keyword"]]
+            self.deleted.append(p["keyword"])
+            return self.ok({"status": True})
         if mode == "get_cats":
             return self.ok({"categories": [c["name"] for c in self.listed_cats()]})
         if mode == "config" and p["name"] == "test_server":
@@ -180,3 +187,48 @@ def test_no_servers_means_only_shared_steps(tmp_path):
     setup, store = make(tmp_path, servers=())
     names = [s.name for s in sabnzbd_steps(setup, store, sab.http)]
     assert names == ["wait:sabnzbd", "sabnzbd:folders", "sabnzbd:categories"]
+
+
+def test_usenet_server_removed(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path, servers=())
+    run_steps(sabnzbd_steps(make(tmp_path)[0], store, sab.http))  # server exists in SABnzbd
+    store.set("remove:usenet:eweka", "eweka")
+    results = {r.name: r for r in run_steps(sabnzbd_steps(setup, store, sab.http))}
+    assert results["sabnzbd:remove:eweka"].status == "changed"
+    assert results["sabnzbd:remove:eweka"].message == "removed the Usenet server eweka"
+    assert sab.deleted == ["eweka"] and sab.servers == {}
+    call = next(c for c in sab.http.calls if c.form["mode"] == "del_config")
+    assert call.form["keyword"] == "eweka" and call.form["section"] == "servers"
+    assert store.get("remove:usenet:eweka") is None
+    assert store.get(sent_marker_name("eweka")) is None
+
+
+def test_usenet_removal_of_missing_server_is_quiet(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path, servers=())
+    store.set("remove:usenet:eweka", "eweka")
+    by = {r.name: r for r in run_steps(sabnzbd_steps(setup, store, sab.http))}
+    assert by["sabnzbd:remove:eweka"].status == "unchanged"
+    assert sab.deleted == [] and store.get("remove:usenet:eweka") is None
+
+
+def test_test_usenet_server_sets_and_clears_test_ok(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path)
+    assert check_usenet_server(setup, store, sab.http, "eweka") is None
+    assert store.get("test-ok:usenet:eweka") == "1"
+    assert not any(c.form["mode"] == "get_cats" for c in sab.http.calls)  # no other step ran
+    sab.login_ok = False
+    msg = check_usenet_server(setup, store, sab.http, "eweka")
+    assert msg == ("SABnzbd could not connect or log in to news.example.net — check the server "
+                   "address, port, username and password.")
+    assert store.get("test-ok:usenet:eweka") is None
+
+
+def test_test_usenet_server_missing_password_points_to_settings(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path)
+    store.delete("usenet:eweka:password")
+    msg = check_usenet_server(setup, store, sab.http, "eweka")
+    assert "set-secret" not in msg and "Settings" in msg
