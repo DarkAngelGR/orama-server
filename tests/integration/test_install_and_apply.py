@@ -11,7 +11,9 @@ import json
 import os
 import re
 import secrets
+import select
 import stat
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -267,7 +269,7 @@ def poll_http(port: int, path: str, headers: dict[str, str] | None = None,
 # ---------------------------------------------------------------- install
 
 def test_installer_starts_orama(installed: dict):
-    for name in ("orama-server", "orama-server-agent"):
+    for name in ("orama-server", "orama-server-agent", "orama-jellyfin", "orama-bazarr"):
         assert docker_inspect(name)["State"]["Status"] == "running", name
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
@@ -692,13 +694,83 @@ def test_second_install_and_apply_change_nothing(clean_host: Host, installed: di
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
 
+def test_quality_and_device_changes_reuse_profile(clean_host: Host, applied: dict,
+                                                rerun: dict, outputs: Outputs):
+    keys = stored_secrets(clean_host)
+    def profiles(app):
+        return [p for p in app_get(applied, keys, app, "/api/v3/qualityprofile")
+                if p["name"] == "Orama"]
+    ids = {app: profiles(app)[0]["id"] for app in ("sonarr", "radarr")}
+    path = clean_host.state_dir / "setup.json"
+    original = path.read_text()
+    changed = json.loads(original)
+    changed.update(device="samsung_s95f", quality="1080p")
+    try:
+        path.write_text(json.dumps(changed))
+        status, output = apply(clean_host, outputs, "apply-device-quality-change")
+        assert status == 1
+        assert len(failure_lines(output)) == 1 and FAKE_SERVER_HOST in failure_lines(output)[0]
+        for app, profile_id in ids.items():
+            mine = profiles(app)
+            assert len(mine) == 1 and mine[0]["id"] == profile_id
+            scores = {i["name"]: i["score"] for i in mine[0]["formatItems"]}
+            assert scores["TrueHD"] != -10000 and scores["TrueHD ATMOS"] != -10000
+            assert scores["DTS"] == -10000 and scores["HDR10+ Boost"] == 1500
+        status, output = apply(clean_host, outputs, "apply-device-quality-again")
+        assert status == 1
+        assert [l for l in output.splitlines() if l.startswith("✓")] == ["✓ Folders ready"]
+    finally:
+        path.write_text(original)
+        status, output = apply(clean_host, outputs, "apply-restore-default-profile")
+        assert status == 1
+    for app, profile_id in ids.items():
+        assert profiles(app)[0]["id"] == profile_id
+        scores = {i["name"]: i["score"] for i in profiles(app)[0]["formatItems"]}
+        assert scores["TrueHD"] == scores["TrueHD ATMOS"] == -10000
+
+
+def test_jellyfin_interrupted_apply_recovers(clean_host: Host, rerun: dict, outputs: Outputs):
+    before_key = stored_secrets(clean_host)["apikey:jellyfin"]
+    script = Path(__file__).with_name("jellyfin_recovery.py").read_text()
+    proc = subprocess.Popen(
+        ["docker", "exec", "-i", "orama-server", "python", "-c", script,
+         str(clean_host.state_dir / "setup.json")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert select.select([proc.stdout], [], [], 120)[0], "recovery handshake timed out"
+        assert proc.stdout.readline().strip() == "READY", "recovery setup failed"
+        assert run(["docker", "kill", "orama-jellyfin"]).returncode == 0
+        output, _ = proc.communicate("continue\n", timeout=60)
+        assert proc.returncode == 0, "recovery probe failed (output withheld)"
+        results = json.loads(output)
+        assert results["jellyfin:libraries"] == "failed"
+        assert results["jellyfin:startup"] == results["jellyfin:api-key"] == "unchanged"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+        assert run(["docker", "start", "orama-jellyfin"]).returncode == 0
+    status, output = apply(clean_host, outputs, "apply-recovery")
+    assert status == 1
+    changes = [line for line in output.splitlines() if line.startswith("✓")]
+    assert changes == ["✓ Folders ready", "✓ Jellyfin: added the TV Shows library"]
+    assert bool(stored_secrets(clean_host)["apikey:jellyfin"] == before_key), "API key changed"
+    status, output = apply(clean_host, outputs, "apply-after-recovery")
+    assert status == 1
+    assert [line for line in output.splitlines() if line.startswith("✓")] == ["✓ Folders ready"]
+
+
 def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Outputs):
     # Short entries are flags and markers (e.g. "1"), which any text contains; real secrets are longer.
     values = [v for v in stored_secrets(clean_host).values() if len(v) >= 8]
     assert values, "the secret store is empty"
     texts = dict(outputs.texts)
-    for name in ("orama-server", "orama-server-agent"):
+    for name in ("orama-server", "orama-server-agent", "orama-jellyfin", "orama-bazarr"):
         texts[f"docker logs {name}"] = run(["docker", "logs", name]).stdout
+    logs = clean_host.config_root / "config/recyclarr/logs"
+    for path in logs.rglob("*"):
+        if path.is_file():
+            texts[f"Recyclarr/{path.relative_to(logs)}"] = path.read_text(errors="replace")
     # Booleans only: an assertion must never show a secret value.
     leaks = sorted(where for where, text in texts.items() if any(v in text for v in values))
     assert leaks == [], "secret values found in the output of these"

@@ -114,3 +114,16 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   `dv_no_fallback` maps to `DV (w/o HDR fallback)`. TRaSH has no single "all DV" format. `hdr10` is TRaSH's `HDR`,
   `hdr10_plus` is `HDR10+ Boost`. A symbol may map to several ids; scores are set on each.
 - Only `samsung_s95f` and `safest` are marked `verified: true`; `lg`, `apple_tv`, `nvidia_shield` are best effort.
+
+## Plan 5 owner checks carried from Plan 2b
+
+- Sign in with `python -m orama.cli plex-sign-in`; approve the PIN, confirm the server
+  is claimed, and verify Movies/TV libraries appear without duplicates after reapply.
+- With Plex Pass, play a file requiring transcoding and confirm hardware transcoding
+  works on the NAS GPU. Verify Jellyfin hardware transcoding separately.
+- Confirm Plex is discovered and reachable on the LAN at its advertised address/port.
+- Fetch a real Greek subtitle through the selected free providers; confirm the Greek,
+  then English preference and text subtitle behavior on a real movie and TV episode.
+- Play an S95F-compatible file in Plex and confirm the playback dashboard says Direct Play.
+- Other device profiles remain best effort; test the actual client before treating
+  their compatibility as verified. CI has no Plex account or GPU.
