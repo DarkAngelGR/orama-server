@@ -593,6 +593,9 @@ class Memory:  # stands in for the secret store, so the real one is not touched
     def set(self, name, value):
         self.values[name] = value
 
+    def names(self):
+        return list(self.values)
+
 
 real, wanted = sys.argv[1], sys.argv[2]
 request = json.load(sys.stdin)
