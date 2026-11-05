@@ -171,3 +171,9 @@ def test_response_body_is_bounded(server, monkeypatch):
     with pytest.raises(ResponseTooLarge):
         Http().request("GET", base + "/large")
     assert [item["path"] for item in seen] == ["/large"]
+
+
+def test_repeated_form_fields_are_sent_one_by_one(server):
+    base, seen = server
+    Http().request("POST", base + "/f", form={"x": ["el", "en"], "y": "z"})
+    assert parse_qs(seen[0]["body"].decode()) == {"x": ["el", "en"], "y": ["z"]}
