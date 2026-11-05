@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import sys
@@ -114,7 +115,7 @@ def test_bootstrap_writes_core_compose_and_draft(capsys, roots):
     assert set(draft.ports) == wanted
     assert len(set(draft.ports.values())) == len(draft.ports)
     assert orama["ports"] == [f"{draft.ports['orama']}:{CORE['orama'].container_port}"]
-    assert out.out.strip() == str(draft.ports["orama"])
+    assert out.out.splitlines()[0] == str(draft.ports["orama"])
 
 
 def test_bootstrap_modes_and_owners(capsys, roots):
@@ -145,7 +146,7 @@ def test_bootstrap_rerun_keeps_earlier_ports(capsys, roots):
     assert code == 0
     second = DesiredSetup.load(cfg / "orama" / "setup.draft.json").ports
     assert second == first
-    assert out.out.strip() == str(first["orama"])
+    assert out.out.splitlines()[0] == str(first["orama"])
 
 
 def test_bootstrap_taken_default_port_moves(capsys, roots):
@@ -155,7 +156,7 @@ def test_bootstrap_taken_default_port_moves(capsys, roots):
     ports = DesiredSetup.load(cfg / "orama" / "setup.draft.json").ports
     assert ports["orama"] not in (8765, 32400)
     assert ports["plex"] != 32400
-    assert out.out.strip() == str(ports["orama"])
+    assert out.out.splitlines()[0] == str(ports["orama"])
 
 
 def test_bootstrap_keeps_existing_setup_and_fills_missing_ports(capsys, roots):
@@ -261,7 +262,7 @@ def test_bootstrap_reassigns_bad_kept_orama_port(capsys, roots, bad):
     assert code == 0
     port = DesiredSetup.load(cfg / "orama" / "setup.json").ports["orama"]
     assert port == 8765
-    assert out.out.strip() == "8765"
+    assert out.out.splitlines()[0] == "8765"
     core = yaml.safe_load((cfg / "core.compose.yaml").read_text())
     assert core["services"]["orama"]["ports"] == ["8765:8765"]
 
@@ -274,7 +275,7 @@ def test_bootstrap_keeps_good_kept_orama_port(capsys, roots):
     )
     code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken="18080"))
     assert code == 0
-    assert out.out.strip() == "18080"
+    assert out.out.splitlines()[0] == "18080"
 
 
 @pytest.mark.parametrize(
@@ -370,7 +371,7 @@ def test_bootstrap_empty_taken_ports(capsys, roots):
     data, cfg = roots
     code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, taken=""))
     assert code == 0
-    assert out.out.strip() == "8765"
+    assert out.out.splitlines()[0] == "8765"
 
 
 # ---------------------------------------------------------------- apply
@@ -1556,3 +1557,119 @@ def test_bootstrap_refuses_an_odd_setup_lock(capsys, roots, kind):
     assert chowns.owner(target) == (0, 0)
     assert target.read_text() == "untouched"
     assert not (cfg / "orama" / "setup.draft.json").exists()
+
+
+# ---------------------------------------------------------------- first-run code, host name, graphics (Plan 3)
+
+CODE = r"[A-Za-z0-9_-]{16,64}"
+
+
+def _lines(out):
+    return out.out.splitlines()
+
+
+def test_bootstrap_writes_first_run_code_until_password_exists(capsys, roots):
+    data, cfg = roots
+    state_dir = cfg / "orama"
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    port, first = _lines(out)
+    assert port == str(DesiredSetup.load(state_dir / "setup.draft.json").ports["orama"])
+    assert re.fullmatch(CODE, first)
+    path = state_dir / "first-run.code"
+    assert path.read_text() == first
+    assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+    assert chowns.owner(path) == (1000, 1001)
+    assert first not in out.err
+
+    # Every run while there is no password: a fresh code replaces the older one.
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    second = _lines(out)[1]
+    assert re.fullmatch(CODE, second) and second != first
+    assert path.read_text() == second and chowns.owner(path) == (1000, 1001)
+    assert not list(state_dir.glob(".*tmp"))
+
+    # Once a password exists (any entry named auth.json, even a link), no code.
+    for make in (lambda p: p.write_text("{}"), lambda p: p.symlink_to(cfg.parent / "nowhere")):
+        auth = state_dir / "auth.json"
+        if os.path.lexists(auth):
+            auth.unlink()
+        make(auth)
+        path.write_text("kept")
+        code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+        assert code == 0, out.err
+        assert _lines(out)[1] == "-"
+        assert path.read_text() == "kept"
+
+
+@pytest.mark.parametrize("name", ["first-run.code", "hardware.json"])
+@pytest.mark.parametrize("kind", ["symlink", "fifo", "directory"])
+def test_bootstrap_refuses_linked_code_file(capsys, roots, name, kind):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    target = cfg.parent / "target"
+    target.write_text("untouched")
+    planted = cfg / "orama" / name
+    if kind == "symlink":
+        planted.symlink_to(target)
+    elif kind == "fifo":
+        os.mkfifo(planted)
+    else:
+        planted.mkdir()
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert out.err.startswith("✗ ") and name in out.err
+    assert ("link" if kind == "symlink" else "not a plain file") in out.err
+    assert out.out == ""
+    assert target.read_text() == "untouched" and chowns.owner(target) == (0, 0)
+    assert os.path.lexists(planted)
+    assert not list((cfg / "orama").glob(".*tmp"))
+
+
+def test_bootstrap_records_host_name_and_hardware(capsys, roots):
+    data, cfg = roots
+    hardware = cfg / "orama" / "hardware.json"
+    argv = bootstrap_args(cfg, data, **{"--host-name": "NAS-1", "--render-gid": "105",
+                                        "--nvidia": "1"})
+    code, out, chowns = run_bootstrap(capsys, argv)
+    assert code == 0, out.err
+    assert DesiredSetup.load(cfg / "orama" / "setup.draft.json").host_name == "nas-1"
+    assert json.loads(hardware.read_text()) == {"render_gid": 105, "nvidia": True}
+    assert stat.S_IMODE(os.lstat(hardware).st_mode) == 0o644
+    assert chowns.owner(hardware) == (1000, 1001)
+
+    # Every run records the latest detection; the setup's own choices stay as they were.
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    assert json.loads(hardware.read_text()) == {"render_gid": None, "nvidia": False}
+    assert chowns.owner(hardware) == (1000, 1001)
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert (draft.render_gid, draft.nvidia) == (105, True)
+
+
+@pytest.mark.parametrize("file", ["setup.json", "setup.draft.json"])
+def test_bootstrap_host_name_none_keeps_previous(capsys, roots, file):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    make_setup(data_root=str(data), config_root=str(cfg), host_name="nas",
+               extra_host_names=("media.lan",)).save(cfg / "orama" / file)
+    for argv in (bootstrap_args(cfg, data, **{"--host-name": "none"}), bootstrap_args(cfg, data)):
+        code, out, _ = run_bootstrap(capsys, argv)
+        assert code == 0, out.err
+        assert DesiredSetup.load(cfg / "orama" / file).host_name == "nas"
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, **{"--host-name": "other"}))
+    assert code == 0, out.err
+    again = DesiredSetup.load(cfg / "orama" / file)
+    assert again.host_name == "other" and again.extra_host_names == ("media.lan",)
+
+
+@pytest.mark.parametrize("name", ["bad name", "x-", "x" * 64, "ünï", "a_b", ""])
+def test_bootstrap_bad_host_name_refused(capsys, roots, name):
+    data, cfg = roots
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data, **{"--host-name": name}))
+    assert code == 1
+    assert out.err.startswith("✗ ") and "host name" in out.err
+    assert "folders cannot be used" not in out.err
+    assert not (cfg / "orama" / "setup.draft.json").exists()
+    assert not (cfg / "orama" / "first-run.code").exists()

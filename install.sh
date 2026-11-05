@@ -424,10 +424,26 @@ get_images() {
   fi
 }
 
-# Writes Orama's core settings (as root, in a throwaway container); sets ORAMA_PORT.
+# This server's short name in lower case (the web app answers to it), or "none" when it
+# is not a plain name of letters, digits and "-" (at most 63 characters).
+host_name() {
+  local name chars=abcdefghijklmnopqrstuvwxyz0123456789
+  name=$(hostname -s 2> /dev/null) || name=""
+  name=${name,,}
+  if [[ "$name" =~ ^[$chars]([$chars-]{0,61}[$chars])?$ ]]; then
+    printf '%s\n' "$name"
+  else
+    printf 'none\n'
+  fi
+}
+
+# Writes Orama's core settings (as root, in a throwaway container); sets ORAMA_PORT and
+# ORAMA_CODE (the one-time setup code, or "-" once a password exists). The code is only
+# ever shown in the final line, never written to a file or a log.
 # Args: platform docker_gid render_gid|none nvidia(0|1) taken_ports
 run_bootstrap() {
-  local platform=$1 docker_gid=$2 render_gid=$3 nvidia=$4 taken=$5 out
+  local platform=$1 docker_gid=$2 render_gid=$3 nvidia=$4 taken=$5 out port code
+  local -a lines
   local cmd=(
     "$DOCKER_BIN" run --rm --user 0:0 --network none
     --mount "$(mount_arg "$CONFIG_ROOT" "$CONFIG_ROOT")"
@@ -435,17 +451,26 @@ run_bootstrap() {
     --platform "$platform" --data-root "$DATA_ROOT" --config-root "$CONFIG_ROOT"
     --puid "$PUID" --pgid "$PGID" --docker-gid "$docker_gid" --render-gid "$render_gid"
     --nvidia "$nvidia" --taken-ports "$taken" --lan-address "$(lan_address)"
+    --host-name "$(host_name)"
     --orama-image "$ORAMA_IMAGE" --agent-image "$AGENT_IMAGE"
   )
   if is_dry_run; then
     run "${cmd[@]}"
     ORAMA_PORT="<port>"
+    ORAMA_CODE="<code>"
     return 0
   fi
   out=$("${cmd[@]}") || fail "Orama could not prepare its settings (the reason is above). Nothing was started."
-  out=${out##*$'\n'}
-  [[ "$out" =~ ^[0-9]+$ ]] || fail "Orama prepared its settings but did not say which port it uses. Nothing was started."
-  ORAMA_PORT=$out
+  # The last two lines: the port, then the setup code or "-".
+  mapfile -t lines <<< "$out"
+  (( ${#lines[@]} >= 2 )) ||
+    fail "Orama prepared its settings but did not say which port it uses. Nothing was started."
+  port=${lines[-2]} code=${lines[-1]}
+  [[ "$port" =~ ^[0-9]+$ ]] || fail "Orama prepared its settings but did not say which port it uses. Nothing was started."
+  [[ "$code" == - || "$code" =~ ^[A-Za-z0-9_-]{16,64}$ ]] ||
+    fail "Orama prepared its settings but did not give a valid setup code. Nothing was started."
+  ORAMA_PORT=$port
+  ORAMA_CODE=$code
 }
 
 start_core() {
@@ -522,8 +547,15 @@ lan_address() {
   fi
 }
 
+# Args: port [code]. With a setup code (not "-"), the link opens the first-run setup page.
 print_address() {
-  say "✓ Orama is ready. Open http://$(detected_address):$1 in your browser."
+  local port=$1 code=${2:--} address
+  address=$(detected_address)
+  if [[ "$code" != - ]]; then
+    say "✓ Orama is ready. Open http://$address:$port/setup?code=$code in your browser."
+  else
+    say "✓ Orama is ready. Open http://$address:$port in your browser."
+  fi
 }
 
 # ---------------------------------------------------------------- main
@@ -562,7 +594,7 @@ main() {
   run_bootstrap "$platform" "$docker_gid" "$render_gid" "$nvidia" "$taken"
   prepare_data_root
   start_core
-  print_address "$ORAMA_PORT"
+  print_address "$ORAMA_PORT" "$ORAMA_CODE"
 }
 
 if [[ "${BASH_SOURCE[0]:-$0}" != "$0" ]]; then return 0; fi

@@ -390,3 +390,47 @@ def test_saved_protonvpn_setup_without_address_still_loads(tmp_path):
     path.write_text(json.dumps(data))
     loaded = DesiredSetup.load(path)
     assert loaded.vpn.provider == "protonvpn" and loaded.vpn.wireguard_address is None
+
+
+# ---------------------------------------------------------------- host names (Plan 3)
+
+def test_host_names_default_to_none_and_empty():
+    s = make_setup()
+    assert s.host_name is None and s.extra_host_names == ()
+
+
+def test_host_names_round_trip(tmp_path):
+    path = tmp_path / "setup.json"
+    make_setup(host_name="nas-1", extra_host_names=("nas.tail1234.ts.net", "media.lan")).save(path)
+    loaded = DesiredSetup.load(path)
+    assert loaded.host_name == "nas-1"
+    assert loaded.extra_host_names == ("nas.tail1234.ts.net", "media.lan")
+
+
+@pytest.mark.parametrize(
+    "name", ["NAS", "a b", "", "-a", "a-", "a..b", "a\nb", "x" * 64, "ünï", "a_b", "[::1]", 7]
+)
+def test_bad_host_name_refused(name):
+    with pytest.raises(ValidationError):
+        make_setup(host_name=name)
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ("Media.lan",),
+        ("a b",),
+        ("x" * 64 + ".lan",),
+        ("a.lan", "a.lan"),
+        tuple(f"n{i}.lan" for i in range(11)),
+        ("ok.lan", ""),
+    ],
+)
+def test_bad_extra_host_names_refused(names):
+    with pytest.raises(ValidationError):
+        make_setup(extra_host_names=names)
+
+
+def test_ten_extra_host_names_allowed():
+    names = tuple(f"n{i}.lan" for i in range(10))
+    assert make_setup(extra_host_names=names).extra_host_names == names
