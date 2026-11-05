@@ -59,7 +59,34 @@ def _probe(label, func):
         print(f"Contract {label}: probe error {type(exc).__name__}")
 
 
-def jellyfin(port):
+def jellyfin():
+    """Probe a throwaway Jellyfin, never the installed one: finishing the wizard there would
+    make the real first-run test see a Jellyfin that is already set up."""
+    name = f"orama-test-jellyfin-{secrets.token_hex(4)}"
+    # Detached, own network alias, one random loopback port; removed in every case below.
+    started = run(["docker", "run", "-d", "--name", name, "--network", "orama-net",
+                   "-p", "127.0.0.1::8096", CATALOG["jellyfin"].image], timeout=600)
+    try:
+        assert started.returncode == 0, "the throwaway Jellyfin did not start"
+        mapped = run(["docker", "port", name, "8096/tcp"])
+        port = int(mapped.stdout.split()[0].rsplit(":", 1)[1])
+        for _ in range(120):
+            try:
+                if _request(port, "/System/Info/Public")[0] == 200:
+                    break
+            except OSError:
+                pass
+            time.sleep(2)
+        else:
+            raise AssertionError("the throwaway Jellyfin did not come up")
+        # The library probe needs the folder to exist; the real container mounts /data.
+        run(["docker", "exec", name, "mkdir", "-p", "/data/media/movies"])
+        _jellyfin_probe(port)
+    finally:
+        run(["docker", "rm", "-f", name])
+
+
+def _jellyfin_probe(port):
     status, raw = _request(port, "/System/Info/Public")
     assert status == 200 and not json.loads(raw)["StartupWizardCompleted"]
     status, raw = _request(port, "/Startup/Configuration")
