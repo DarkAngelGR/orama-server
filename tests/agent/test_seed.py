@@ -317,3 +317,69 @@ def test_bazarr_refuses_unusual_layouts_without_showing_values(name):
     message = str(error.value)
     assert old not in message and BAZARR["api_key"] not in message
     assert "Bazarr" in message
+
+
+# Round 2: layouts where PyYAML would silently keep the last of two keys, and YAML
+# features (anchors, aliases, merge keys, tags) the strict loader refuses outright.
+BAZARR_DUPLICATES = {
+    "bom before auth": "\ufeffauth:\n  apikey: {old}\n",
+    "bom inside": "general:\n  port: 6767\n\ufeffauth:\n  apikey: {old}\n",
+    "escaped top-level key": '"\\x61uth":\n  apikey: {old}\n',
+    "escaped key and auth": '"\\x61uth":\n  username: u\nauth:\n  apikey: {old}\n',
+    "line separator before auth": "general: 1\u2028auth:\n  apikey: {old}\n",
+    "paragraph separator": "general: 1\u2029auth:\n  apikey: {old}\n",
+    "next line char": "general: 1\x85auth:\n  apikey: {old}\n",
+    "lone carriage return": "general: 1\rauth:\n  apikey: {old}\n",
+    "top-level merge key": "<<: {{auth: {{apikey: {old}}}}}\n",
+    "merge inside auth": "auth:\n  <<: {{apikey: {old}}}\n",
+    "flow top level": "{{auth: {{apikey: {old}}}}}\n",
+    "explicit top key": "? auth\n: {{apikey: {old}}}\n",
+    "quoted apikey": 'auth:\n  "apikey": {old}\n',
+    "space before apikey colon": "auth:\n  apikey : {old}\n",
+    "tagged apikey key": "auth:\n  !!str apikey: {old}\n",
+    "explicit apikey key": "auth:\n  ? apikey\n  : {old}\n",
+    "duplicate plain keys": "general: 1\ngeneral: 2\nauth:\n  apikey: {old}\n",
+    "duplicate auth children": "auth:\n  username: a\n  username: b\n  apikey: {old}\n",
+    "anchor elsewhere": "general: &g\n  port: 1\nauth:\n  apikey: {old}\n",
+    "alias elsewhere": "a: &a 1\nb: *a\nauth:\n  apikey: {old}\n",
+    "tag elsewhere": "general: !!map\n  port: 1\nauth:\n  apikey: {old}\n",
+    "non-specific tag": "general: ! 1\nauth:\n  apikey: {old}\n",
+    "self-referencing alias": "a: &a [*a]\nauth:\n  apikey: {old}\n",
+    "flow value on apikey line": "auth:\n  other: {{a: 1,\n  apikey: {old}}}\n",
+    "deep nesting": "a: " + "[" * 5000 + "]" * 5000 + "\nauth:\n  apikey: {old}\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAZARR_DUPLICATES))
+def test_bazarr_strict_loader_refuses(name):
+    old = hex_key("cd")
+    text = BAZARR_DUPLICATES[name].replace("{old}", old).replace("{{", "{").replace("}}", "}")
+    with pytest.raises(Refused) as error:
+        render("bazarr", text, BAZARR)
+    message = str(error.value)
+    assert old not in message and BAZARR["api_key"] not in message
+    assert "Bazarr" in message
+
+
+def test_bazarr_alias_bomb_refused_fast():
+    import time
+
+    rows = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+    rows += [f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 10) + "]" for i in range(1, 12)]
+    text = "\n".join(rows) + "\nauth:\n  username: u\n  apikey: " + hex_key("cd") + "\n"
+    assert len(text) < 1500
+    started = time.monotonic()
+    with pytest.raises(Refused):
+        render("bazarr", text, BAZARR)
+    assert time.monotonic() - started < 1
+
+
+def test_bazarr_complex_and_many_keys():
+    with pytest.raises(Refused):
+        render("bazarr", "? [a, b]\n: 1\nauth:\n  apikey: x\n", BAZARR)
+    import time
+
+    many = "".join(f"k{i}: {i}\n" for i in range(20000)) + "auth:\n  apikey: x\n"
+    started = time.monotonic()
+    assert render("bazarr", many, BAZARR).endswith(f"  apikey: {BAZARR['api_key']}\n")
+    assert time.monotonic() - started < 10

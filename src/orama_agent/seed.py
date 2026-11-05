@@ -184,7 +184,7 @@ _BAZARR_AUTH_LIKE = re.compile(r"[\"']?auth(?![\w-])")  # a top-level line about
 _BAZARR_CHILD = re.compile(r"  [^\s#]")  # an entry of the auth block, two-space indented
 _BAZARR_APIKEY = re.compile(r"  apikey:(?:[ \t](.*))?")
 # apikey values Orama replaces: plain one-word text, or a closed one-line quoted string.
-_BAZARR_SIMPLE_VALUE = re.compile(r"[^\s'\"|>&*!{}\[\],#%@`][^\s#]*|'[^'\n]*'|\"[^\"\\\n]*\"")
+_BAZARR_SIMPLE_VALUE = re.compile(r"[^\s'\"|>&*!{}\[\],#%@`][^\s#{}\[\],]*|'[^'\n]*'|\"[^\"\\\n]*\"")
 
 
 def _refuse_bazarr(why: str) -> Refused:
@@ -192,10 +192,52 @@ def _refuse_bazarr(why: str) -> Refused:
                    "Fix or remove config/config.yaml in Bazarr's config folder and try again.")
 
 
+class _NotPlainYAML(yaml.YAMLError):
+    """A YAML feature the strict loader refuses (carries no part of the text)."""
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses anchors, aliases, explicit tags, merge keys and duplicate
+    keys. Without aliases the parsed tree is never bigger than the text, so comparing
+    trees is cheap; without duplicates, what Orama reads is what Bazarr reads."""
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None) is not None:
+            raise _NotPlainYAML("anchor or alias")
+        if getattr(event, "tag", None) is not None:
+            raise _NotPlainYAML("explicit tag")
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    raise _NotPlainYAML("merge key")
+                if not isinstance(key_node, yaml.ScalarNode):
+                    raise _NotPlainYAML("complex key")
+                key = self.construct_object(key_node, deep=True)
+                if key in seen:
+                    raise _NotPlainYAML("duplicate key")
+                seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+# Characters YAML reads as a line break (or skips) that a line-based patch would not see.
+_BAZARR_HIDDEN = re.compile("[\ufeff\u2028\u2029\x85]|\r(?!\n)")
+
+
 def _load_bazarr(text: str) -> dict[Any, Any]:
+    if _BAZARR_HIDDEN.search(text):
+        raise _refuse_bazarr("contains invisible characters or unusual line breaks")
     try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError:
+        data = yaml.load(text, Loader=_StrictLoader)  # a SafeLoader subclass
+    except _NotPlainYAML:
+        raise _refuse_bazarr(
+            "uses YAML features Orama does not change (anchors, aliases, tags, merge keys "
+            "or a key written twice or as a list)") from None
+    except (yaml.YAMLError, RecursionError):
         raise _refuse_bazarr("is not valid YAML") from None
     if data is None:
         data = {}
@@ -230,6 +272,8 @@ def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
     if len(starts) > 1:
         raise _refuse_bazarr("has more than one auth section")
     if not starts:
+        if "auth" in before:
+            raise _refuse_bazarr("writes its auth section in an unusual way")
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
         lines.extend(["auth:\n", f"  apikey: {key}\n"])
@@ -253,6 +297,8 @@ def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
                 found.append(i)
         if len(found) > 1:
             raise _refuse_bazarr("has more than one API key")
+        if not found and "apikey" in (before.get("auth") or {}):
+            raise _refuse_bazarr("writes the API key in an unusual way")
         if found:
             i = found[0]
             ending = lines[i][len(lines[i].rstrip("\r\n")):] or "\n"
