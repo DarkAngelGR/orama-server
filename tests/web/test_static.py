@@ -27,9 +27,8 @@ class Elements(HTMLParser):
 
 @pytest.fixture
 def template_app():
-    # Task 6 was explicitly assigned in parallel with Task 5. Its Flask dependency
-    # arrives with that task; these checks activate automatically when it lands.
-    flask = pytest.importorskip("flask", reason="Waiting for Task 5 web dependencies")
+    import flask
+
     app = flask.Flask(__name__, template_folder=str(WEB / "templates"),
                       static_folder=str(WEB / "static"))
     app.jinja_env.globals["csrf_token"] = lambda: "test-csrf"
@@ -149,8 +148,6 @@ def test_static_served_with_long_cache_and_nosniff(template_app):
 
 
 def test_task5_app_registers_static_policy(tmp_path):
-    if not (WEB / "__init__.py").exists():
-        pytest.skip("Waiting for Claude's Task 5 create_app; Task 6 is not complete")
     from orama.web import create_app
 
     client = create_app(tmp_path).test_client()
