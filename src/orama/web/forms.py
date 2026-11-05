@@ -207,6 +207,12 @@ def add_usenet_server(setup: DesiredSetup, form: Mapping[str, str],
         server = UsenetServer(slug=slug, host=host, port=_text(form, "port") or "563",
                               ssl=_on(form, "ssl"), connections=_text(form, "connections") or "20",
                               username=_text(form, "username"))
+        if existing is None:
+            # A refresh can replay the add form. Re-test the same entry on an exact match.
+            for item in setup.usenet_servers:
+                if (item == server.model_copy(update={"slug": item.slug})
+                        and (store.get(f"usenet:{item.slug}:password") or "") == password):
+                    return setup, item.slug
         others = tuple(item for item in setup.usenet_servers if item.slug != slug)
         updated = _rebuild(setup, usenet_servers=(*others, server))
     except ValidationError:
