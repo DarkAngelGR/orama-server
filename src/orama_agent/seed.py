@@ -191,11 +191,12 @@ def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
                 if lines[i] and not lines[i][0].isspace() and
                 not lines[i].lstrip().startswith("#")), len(lines))
     for i in range(start + 1, end):
-        match = re.fullmatch(r"(  apikey:\\s*)([^#\\r\\n]*?)(\\r?\\n)?", lines[i])
-        if match:
-            if match.group(2).strip().strip("'\\\"") == key:
+        if lines[i].startswith("  apikey:"):
+            old = lines[i].partition(":")[2].strip().strip("\\\"'")
+            if old == key:
                 return None
-            lines[i] = f"{match.group(1)}{key}{match.group(3) or ''}"
+            ending = "\r\n" if lines[i].endswith("\r\n") else "\n"
+            lines[i] = f"  apikey: {key}{ending}"
             return "".join(lines)
     lines.insert(end, f"  apikey: {key}\n")
     return "".join(lines)
