@@ -229,4 +229,4 @@ def test_bazarr_appends_missing_auth():
 def test_bazarr_rejects_bad_keys_without_echo(bad):
     with pytest.raises(Refused) as error:
         render("bazarr", None, {"api_key": bad})
-    assert not isinstance(bad, str) or bad not in str(error.value)
+    assert not isinstance(bad, str) or not bad or bad not in str(error.value)
