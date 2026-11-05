@@ -408,7 +408,17 @@ def test_plan2b_quality_scores(clean_host: Host, applied: dict, app):
     keys = stored_secrets(clean_host)
     profiles = app_get(applied, keys, app, "/api/v3/qualityprofile")
     mine = [p for p in profiles if p["name"] == "Orama"]
-    assert len(mine) == 1, [(p["id"], p["name"]) for p in profiles]
+    if len(mine) != 1:
+        logs = clean_host.config_root / "config/recyclarr/logs"
+        messages = []
+        for path in logs.rglob("*"):
+            if path.is_file():
+                text = path.read_text(errors="replace")
+                for value in keys.values():
+                    if len(value) >= 8:
+                        text = text.replace(value, "***")
+                messages.append(text[-20000:])
+        pytest.fail("Orama quality profile missing; Recyclarr logs:\n" + "\n".join(messages))
     scores = {i["name"]: i["score"] for i in mine[0]["formatItems"]}
     wanted = {name: -10000 for name in (
         "DV (Disk)", "DV Boost", "DV (w/o HDR fallback)", "DTS", "DTS-HD MA",
