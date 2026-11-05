@@ -84,3 +84,22 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 - Local verification at `26f4c02`: 981 unit tests passed (27 integration tests
   deselected), Ruff passed, ShellCheck passed. CI run 41944049997 passed: unit, images, integration and publish.
 - Task 3 complete. Next task: Task 4 (Plex LAN and NVIDIA capabilities).
+
+## Task 4 — Plex LAN and NVIDIA settings (ChatGPT/Codex)
+
+- Plex advertises the configured private IPv4 address using its assigned host port.
+  Bootstrap accepts `--lan-address` (default `none` for older callers); the installer
+  uses the same address selection as its printed URL, forwarding only RFC1918 IPv4.
+- Plex and Jellyfin receive the exact NVIDIA visibility and driver capability values
+  when NVIDIA is selected. The Agent requires both with its exact GPU reservation
+  and refuses them without it. No catalogue change was needed: these settings depend
+  on setup choices and belong in the builder and Agent validation.
+- Local verification at `cd24f32`: 1,003 unit tests passed, Ruff and ShellCheck passed.
+  New builder, Agent and bootstrap tests failed before implementation; installer
+  test setup was corrected to provide the existing required image variables.
+- Fresh review found no actionable correctness or security issues.
+- CI run 41945388747: first attempt failed while pulling app images, before app
+  startup (apply reported download failure). Detailed log artifact retrieval was
+  denied by storage; failed jobs retried with unchanged source. Retry passed: unit, images, integration
+  and publish all green at `cd24f32`. Task 4 complete.
+  Next task: Task 5 (Bazarr wiring).
