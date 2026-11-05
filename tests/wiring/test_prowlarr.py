@@ -464,6 +464,21 @@ def test_changed_indexer_definition_fails_without_modifying_existing_indexer(tmp
     assert pw.writes == []
 
 
+def test_existing_indexer_without_marker_is_left_alone(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    run(setup, store, pw)
+    marker = sent_marker_name("indexer:geek")
+    store.delete(marker)
+    before = copy.deepcopy(pw.indexers)
+    pw.writes.clear()
+    result = next(r for r in run(setup, store, pw) if r.name == "prowlarr:indexer:geek")
+    assert result.status == "failed"
+    assert pw.indexers == before
+    assert not pw.writes
+    assert store.get(marker) is None
+
+
 def test_indexer_field_not_in_schema_fails_plainly(tmp_path):
     pw = FakeProwlarr()
     choice = GEEK.model_copy(update={"fields": {"nosuchfield": "x"}})

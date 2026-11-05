@@ -127,9 +127,9 @@ def test_steps_listed_in_order_with_state(signed):
     assert positions == sorted(positions)
     assert 'aria-current="step"' in html
     # Indexers and Review arrive in a later task: shown, not linked.
-    assert 'href="/setup/indexers"' not in html and 'href="/setup/review"' not in html
+    assert 'href="/setup/indexers"' in html and 'href="/setup/review"' in html
     assert 'href="/setup/media"' in html and 'href="/setup/playback"' in html
-    assert html.count("Not available yet") == 2
+    assert "Not available yet" not in html
 
 
 def test_every_step_page_renders_without_errors(signed):
@@ -268,7 +268,7 @@ def test_downloads_save_after_setup_exists_starts_nothing(app, signed, tmp_path)
     gate.write_text("x")
     response = post(signed, "/setup/downloads", usenet="on")
     assert response.status_code == 303
-    assert response.headers["Location"] == "/setup/playback"
+    assert response.headers["Location"] == "/setup/indexers"
     assert runner.current() is None and not log.exists()
 
 
@@ -297,7 +297,7 @@ def test_starting_page_needs_sign_in(client, password):
 def test_last_step_stays_on_page_with_saved_notice(signed):
     response = post(signed, "/setup/subtitles", language_1="el", language_2="en")
     assert response.status_code == 303
-    assert response.headers["Location"] == "/setup/subtitles?saved=1"
+    assert response.headers["Location"] == "/setup/review"
     assert "Saved" in text(signed.get("/setup/subtitles?saved=1"))
 
 

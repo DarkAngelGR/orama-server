@@ -143,13 +143,16 @@ def _indexer_value(field: IndexerField, raw: str) -> str | int | bool:
 
 
 def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
-                form: Mapping[str, str], store) -> tuple[DesiredSetup, str]:
+                form: Mapping[str, str], store, *, existing: IndexerChoice | None = None
+                ) -> tuple[DesiredSetup, str]:
     if definition.protocol not in setup.download_methods:
         raise Invalid({"definition": "Choose an indexer for a download method you turned on."})
-    name = _text(form, "name") or definition.name
-    slug = _new_slug(name, "indexer", {item.slug for item in setup.indexers},
-                     prowlarr.REMOVE_PREFIX, store)
-    fields: dict[str, str | int | bool] = {}
+    name = existing.name if existing else _text(form, "name") or definition.name
+    slug = existing.slug if existing else _new_slug(
+        name, "indexer", {item.slug for item in setup.indexers}, prowlarr.REMOVE_PREFIX, store,
+    )
+    fields = dict(existing.fields) if existing else {}
+    private_fields = set(existing.secret_fields) if existing else set()
     secrets: dict[str, str] = {}
     errors: dict[str, str] = {}
     for field in definition.fields:
@@ -157,11 +160,15 @@ def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
         if field.kind == "info" or key not in form and field.kind != "checkbox":
             continue
         raw = form.get(key, "")
-        if field.kind == "secret":
+        if field.kind == "secret" or field.name in private_fields:
+            # A newer schema can identify a field that an older schema marked plain.
+            prior = fields.pop(field.name, None)
             if raw and not _printable_line(raw):
                 errors[key] = "Enter a shorter value on one line."
             elif raw:
                 secrets[field.name] = raw
+            elif isinstance(prior, str):
+                secrets[field.name] = prior
             continue
         if not raw and field.kind != "checkbox":
             continue  # Leave the Prowlarr template default in place.
@@ -172,59 +179,68 @@ def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
     if errors:
         raise Invalid(errors)
     try:
-        item = IndexerChoice(slug=slug, name=name, definition=definition.definition,
-                             fields=fields, secret_fields=tuple(secrets))
-        updated = _rebuild(setup, indexers=(*setup.indexers, item))
+        item = IndexerChoice(slug=slug, name=name, definition=definition.definition, fields=fields,
+                             secret_fields=tuple(sorted(private_fields | secrets.keys())))
+        others = tuple(item for item in setup.indexers if item.slug != slug)
+        updated = _rebuild(setup, indexers=(*others, item))
     except ValidationError:
         raise Invalid({"name": "Check the indexer details and use a different name."}) from None
     for field_name, value in secrets.items():
         store.set(f"indexer:{slug}:{field_name}", value)
+    if existing:
+        store.delete(f"test-ok:indexer:{slug}")
     return updated, slug
 
 
 def add_usenet_server(setup: DesiredSetup, form: Mapping[str, str],
-                      store) -> tuple[DesiredSetup, str]:
+                      store, *, existing: UsenetServer | None = None) -> tuple[DesiredSetup, str]:
     if "usenet" not in setup.download_methods:
         raise Invalid({"host": "Turn on Usenet before adding a server."})
     host = _text(form, "host")
     password = form.get("password", "")
     if password and not _printable_line(password):
         raise Invalid({"password": "Enter a shorter password on one line."})
-    slug = _new_slug(host, "usenet", {server.slug for server in setup.usenet_servers},
-                     sabnzbd.REMOVE_PREFIX, store)
+    slug = existing.slug if existing else _new_slug(
+        host, "usenet", {server.slug for server in setup.usenet_servers}, sabnzbd.REMOVE_PREFIX, store,
+    )
     try:
         server = UsenetServer(slug=slug, host=host, port=_text(form, "port") or "563",
                               ssl=_on(form, "ssl"), connections=_text(form, "connections") or "20",
                               username=_text(form, "username"))
-        updated = _rebuild(setup, usenet_servers=(*setup.usenet_servers, server))
+        others = tuple(item for item in setup.usenet_servers if item.slug != slug)
+        updated = _rebuild(setup, usenet_servers=(*others, server))
     except ValidationError:
         raise Invalid({"host": "Check the server address, port and number of connections."}) from None
     if password:
         store.set(f"usenet:{slug}:password", password)
+    if existing:
+        store.delete(f"test-ok:usenet:{slug}")
     return updated, slug
 
 
-def remove_indexer(setup: DesiredSetup, slug: str, store) -> DesiredSetup:
+def remove_indexer(setup: DesiredSetup, slug: str, store, *, keep_credentials=False) -> DesiredSetup:
     item = next((item for item in setup.indexers if item.slug == slug), None)
     if item is None:
         return setup
     updated = _rebuild(setup, indexers=tuple(other for other in setup.indexers if other != item))
     if store.get(prowlarr.sent_marker_name(f"indexer:{slug}")):
         store.set(prowlarr.REMOVE_PREFIX + slug, item.name)
-    for field_name in item.secret_fields:
-        store.delete(f"indexer:{slug}:{field_name}")
+    if not keep_credentials:
+        for field_name in item.secret_fields:
+            store.delete(f"indexer:{slug}:{field_name}")
     store.delete(f"test-ok:indexer:{slug}")
     return updated
 
 
-def remove_usenet_server(setup: DesiredSetup, slug: str, store) -> DesiredSetup:
+def remove_usenet_server(setup: DesiredSetup, slug: str, store, *, keep_credentials=False) -> DesiredSetup:
     remaining = tuple(server for server in setup.usenet_servers if server.slug != slug)
     if len(remaining) == len(setup.usenet_servers):
         return setup
     updated = _rebuild(setup, usenet_servers=remaining)
     if store.get(sabnzbd.sent_marker_name(slug)):
         store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
-    store.delete(f"usenet:{slug}:password")
+    if not keep_credentials:
+        store.delete(f"usenet:{slug}:password")
     store.delete(f"test-ok:usenet:{slug}")
     return updated
 

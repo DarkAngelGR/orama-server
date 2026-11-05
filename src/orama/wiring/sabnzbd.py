@@ -125,7 +125,12 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 )
             want = _server_values(server, password)
             have = next((s for s in client.config("servers") if s.get("name") == server.slug), None)
-            password_sent = store.get(sent_marker_name(server.slug)) == _digest(password)
+            sent = store.get(sent_marker_name(server.slug))
+            if have is not None and sent is None:
+                raise StepError(
+                    f"SABnzbd already has a server named {server.slug} that Orama did not set up."
+                )
+            password_sent = sent == _digest(password)
             if (
                 have is not None
                 and password_sent
@@ -177,6 +182,7 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 message = f"removed the Usenet server {slug}"
             # only now, after the delete worked (or it was already gone)
             store.delete(sent_marker_name(slug))
+            store.delete(_password_name(slug))
             store.delete(f"test-ok:usenet:{slug}")
             store.delete(f"{REMOVE_PREFIX}{slug}")
             return message
@@ -191,7 +197,7 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     for entry in sorted(store.names()):
         if entry.startswith(REMOVE_PREFIX):
             slug = store.get(entry)
-            if slug:
+            if slug and not any(server.slug == slug for server in setup.usenet_servers):
                 steps.append(remove_step(slug))
     for server in setup.usenet_servers:
         steps.append(server_step(server))

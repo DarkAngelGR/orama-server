@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import button, notice %}
+{% block title %}Review · Setup · Orama{% endblock %}
+{% block content %}
+<div class="wizard">
+  {% include "wizard/_steps.html" %}
+  <h1>Review your setup</h1>
+  <p class="wizard-lead">Check your choices before Orama installs and connects your apps.</p>
+  {% if message %}{{ notice('problem', message) }}{% endif %}
+  <dl class="wizard-form">
+    <dt>Media servers</dt>
+    <dd>{% if 'plex' in setup.media_servers %}Plex{% endif %}{% if setup.media_servers|length == 2 %}, {% endif %}{% if 'jellyfin' in setup.media_servers %}Jellyfin{% endif %}</dd>
+    <dt>Media folder</dt><dd>{{ setup.data_root }}</dd>
+    <dt>Downloads</dt><dd>{{ setup.download_methods|sort|join(', ') }}</dd>
+    <dt>VPN</dt><dd>{% if setup.vpn %}{{ setup.vpn.provider }}{% if vpn_key_saved %} · Key saved{% endif %}{% else %}Off{% endif %}</dd>
+    <dt>Indexers</dt>
+    <dd>{% for item in setup.indexers %}<p>{{ item.name }}{% if item.secret_fields %} · Credentials saved{% endif %}</p>{% else %}None added{% endfor %}</dd>
+    {% if 'usenet' in setup.download_methods %}
+    <dt>Usenet servers</dt>
+    <dd>{% for server in setup.usenet_servers %}<p>{{ server.host }} · Port {{ server.port }}</p>{% else %}None added{% endfor %}</dd>
+    {% endif %}
+    <dt>Playback</dt><dd>{{ device }} · {{ quality }}</dd>
+    <dt>Subtitles</dt><dd>{{ languages|join(', ') }}{% if subtitles_account_saved %} · Account saved{% endif %}</dd>
+  </dl>
+  <form method="post" action="{{ url_for('wizard.install') }}" class="wizard-actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ button('Install') }}
+    {% if back_url %}<a class="button button-secondary" href="{{ back_url }}">Back</a>{% endif %}
+  </form>
+</div>
+{% endblock %}

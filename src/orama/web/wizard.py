@@ -12,11 +12,14 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from flask import Blueprint, Flask, current_app, redirect, render_template, request
+from flask import Blueprint, Flask, abort, current_app, redirect, render_template, request, url_for
 
 from orama import state
+from orama.secrets import JELLYFIN_USER_NAME, PLEX_TOKEN_NAME, VPN_KEY_NAME
 from orama.setup_model import DesiredSetup
-from orama.web import auth, forms
+from orama.web import auth, catalogue, forms
+from orama.web.jobs import TEST_BUSY, apply_operation
+from orama.wiring import prowlarr, sabnzbd
 
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
@@ -143,7 +146,12 @@ def _wizard_pages() -> Blueprint:
             except forms.Invalid as e:
                 return render_step(key, echo(setup, request.form, st.store), e.errors, 400)
             if key == "downloads" and _first_apply_due(st):
-                st.jobs.start(st.state_dir / DRAFT_FILE)
+                try:
+                    with apply_operation(st):
+                        if _first_apply_due(st):
+                            st.jobs.start(st.state_dir / DRAFT_FILE)
+                except state.Busy:
+                    return render_template("rejected.html", message=TEST_BUSY), 409
                 return redirect("/setup/starting", 303)
             return redirect(_after(key), 303)
 
@@ -162,6 +170,227 @@ def _wizard_pages() -> Blueprint:
         return render_template(
             "wizard/starting.html", job=job, running=bool(job and job.status == "running"),
             next_url=_neighbour("downloads", 1),
+        )
+
+    def render_indexers(setup, message="", problem=False, status=200):
+        st = auth.web_state()
+        query = request.args.get("q", "")[:100]
+        definition = request.values.get("definition", "")
+        edit_slug = request.args.get("edit") or request.form.get("edit")
+        editing = next((item for item in setup.indexers if item.slug == edit_slug), None)
+        if editing:
+            definition = editing.definition
+        server_slug = request.args.get("edit-usenet") or request.form.get("edit-usenet")
+        editing_server = next((item for item in setup.usenet_servers if item.slug == server_slug), None)
+        try:
+            job = st.jobs.current()
+            if job and job.status == "running":
+                raise catalogue.Unavailable
+            definitions = catalogue.load(st.store, st.http, setup.download_methods)
+            waiting = False
+        except catalogue.Unavailable:
+            definitions = []
+            waiting = True
+        selected = next(
+            (row for row in definitions if row.definition.casefold() == definition.casefold()), None,
+        )
+        matches = [row for row in definitions if query.casefold() in row.name.casefold()][:50]
+        fragment = request.method == "GET" and request.headers.get("HX-Request") == "true"
+        return render_template(
+            "wizard/_indexer_form.html" if fragment else "wizard/indexers.html",
+            setup=setup, steps=step_list("indexers"), definitions=matches, selected=selected,
+            step=next(s for s in STEPS if s.key == "indexers"),
+            position=next(i for i, s in enumerate(STEPS, 1) if s.key == "indexers"),
+            query=query, definition=definition, waiting=waiting, message=message,
+            editing=editing, editing_server=editing_server,
+            saved_fields={field for field in editing.secret_fields
+                          if st.store.get(f"indexer:{editing.slug}:{field}") is not None}
+            if editing else set(),
+            server_password_saved=bool(editing_server and
+                                       st.store.get(f"usenet:{editing_server.slug}:password")),
+            problem=problem, back_url=_neighbour("indexers", -1),
+            next_url=_neighbour("indexers", 1),
+            tested_indexers={i.slug for i in setup.indexers
+                             if st.store.get(f"test-ok:indexer:{i.slug}") == "1"},
+            tested_servers={s.slug for s in setup.usenet_servers
+                            if st.store.get(f"test-ok:usenet:{s.slug}") == "1"},
+        ), status
+
+    def change_entry(kind: str, action: str, slug: str = ""):
+        st = auth.web_state()
+        setup = _working_setup(st)
+        if setup is None:
+            abort(409)
+        try:
+            with (apply_operation(st),
+                  state.locked(state.apply_lock(st.state_dir), blocking=False)):
+                job = st.jobs.current()
+                if job and job.status == "running":
+                    raise state.Busy
+                with state.locked(state.setup_lock(st.state_dir)):
+                    setup = _working_setup(st)
+                    if setup is None:
+                        abort(409)
+                    if kind == "indexer":
+                        items = setup.indexers
+                        remove = forms.remove_indexer
+                        test = prowlarr.test_indexer
+                    else:
+                        items = setup.usenet_servers
+                        remove = forms.remove_usenet_server
+                        test = sabnzbd.test_usenet_server
+                    if action != "add" and not any(item.slug == slug for item in items):
+                        abort(404)
+                    if action == "add":
+                        edit_key = "edit" if kind == "indexer" else "edit-usenet"
+                        edit_slug = request.form.get(edit_key)
+                        existing = next((item for item in items if item.slug == edit_slug), None)
+                        if edit_slug and existing is None:
+                            abort(404)
+                        if kind == "indexer":
+                            definitions = catalogue.load(st.store, st.http, setup.download_methods)
+                            choice = existing.definition if existing else request.form.get("definition")
+                            definition = next(
+                                (d for d in definitions if d.definition.casefold() ==
+                                 (choice or "").casefold()), None,
+                            )
+                            if definition is None:
+                                raise forms.Invalid({"definition": "Choose an indexer from the list."})
+                            setup, slug = forms.add_indexer(
+                                setup, definition, request.form, st.store, existing=existing,
+                            )
+                        else:
+                            setup, slug = forms.add_usenet_server(
+                                setup, request.form, st.store, existing=existing,
+                            )
+                    elif action == "remove":
+                        try:
+                            saved = DesiredSetup.load(st.state_dir / SETUP_FILE)
+                        except FileNotFoundError:
+                            saved = None
+                        active = (() if saved is None else
+                                  saved.indexers if kind == "indexer" else saved.usenet_servers)
+                        setup = remove(setup, slug, st.store, keep_credentials=any(
+                            item.slug == slug for item in active
+                        ))
+                    if action != "test":
+                        setup.save(st.state_dir / DRAFT_FILE)
+                if action == "remove":
+                    message, problem = "Removed.", False
+                else:
+                    error = test(setup, st.store, st.http, slug)
+                    entries = setup.indexers if kind == "indexer" else setup.usenet_servers
+                    entry = next(item for item in entries if item.slug == slug)
+                    label = entry.name if kind == "indexer" else entry.host
+                    message, problem = error or f"{label} works.", bool(error)
+        except state.Busy:
+            return render_indexers(setup, TEST_BUSY, True, 409)
+        except catalogue.Unavailable:
+            return render_indexers(setup, "Prowlarr is still starting. Try again shortly.", True, 503)
+        except forms.Invalid as error:
+            return render_indexers(setup, next(iter(error.errors.values())), True, 400)
+        return render_indexers(setup, message, problem)
+
+    @pages.route("/setup/indexers", methods=["GET", "POST"])
+    @auth.requires("setup")
+    def indexers():
+        if request.method == "POST":
+            return change_entry("indexer", "add")
+        setup = _working_setup(auth.web_state())
+        if setup is None:
+            abort(409)
+        return render_indexers(setup)
+
+    @pages.post("/setup/usenet")
+    @auth.requires("setup")
+    def usenet():
+        return change_entry("usenet", "add")
+
+    @pages.post("/setup/indexers/<slug>/<action>")
+    @auth.requires("setup")
+    def indexer_action(slug, action):
+        if action not in ("test", "remove"):
+            abort(404)
+        return change_entry("indexer", action, slug)
+
+    @pages.post("/setup/usenet/<slug>/<action>")
+    @auth.requires("setup")
+    def usenet_action(slug, action):
+        if action not in ("test", "remove"):
+            abort(404)
+        return change_entry("usenet", action, slug)
+
+    def render_review(setup, message="", status=200):
+        st = auth.web_state()
+        subtitles = forms.read_subtitles(setup, st.store)
+        language_labels = dict(subtitles["options"])
+        return render_template(
+            "wizard/review.html", setup=setup, message=message, steps=step_list("review"),
+            step=STEPS[-1], position=len(STEPS), back_url=_neighbour("review", -1),
+            device=dict(forms.DEVICES)[setup.device], quality=dict(forms.QUALITIES)[setup.quality],
+            languages=[language_labels.get(code, code) for code in setup.subtitle_languages],
+            vpn_key_saved=bool(st.store.get(VPN_KEY_NAME)),
+            subtitles_account_saved=subtitles["account_saved"],
+        ), status
+
+    @pages.get("/setup/review")
+    @auth.requires("setup")
+    def review():
+        setup = _working_setup(auth.web_state())
+        if setup is None:
+            abort(409)
+        return render_review(setup)
+
+    @pages.post("/setup/install")
+    @auth.requires("setup")
+    def install():
+        st = auth.web_state()
+        try:
+            with apply_operation(st):
+                job = st.jobs.current()
+                if job and job.status == "running":
+                    return redirect(url_for("wizard.finish"), 303)
+                with (state.locked(state.apply_lock(st.state_dir), blocking=False),
+                      state.locked(state.setup_lock(st.state_dir))):
+                    setup = _working_setup(st)
+                    if setup is None:
+                        abort(409)
+                    if not any(st.store.get(f"test-ok:indexer:{i.slug}") == "1"
+                               for i in setup.indexers):
+                        return render_review(setup, "Test at least one indexer before installing.", 400)
+                    if "usenet" in setup.download_methods and not any(
+                        st.store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers
+                    ):
+                        return render_review(
+                            setup, "Test at least one Usenet server before installing.", 400,
+                        )
+                    setup.save(st.state_dir / SETUP_FILE)
+                    (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
+                # The child acquires the same apply lock. Release it before starting the child.
+                st.jobs.start(st.state_dir / SETUP_FILE)
+        except state.Busy:
+            setup = _working_setup(st)
+            if setup is None:
+                abort(409)
+            return render_review(setup, TEST_BUSY, 409)
+        return redirect(url_for("wizard.finish"), 303)
+
+    @pages.get("/setup/finish")
+    @auth.requires("setup")
+    def finish():
+        st = auth.web_state()
+        try:
+            setup = DesiredSetup.load(st.state_dir / SETUP_FILE)
+        except FileNotFoundError:
+            return redirect(url_for("wizard.review"), 303)
+        job = st.jobs.current()
+        return render_template(
+            "wizard/_finish_actions.html" if request.headers.get("HX-Request") == "true"
+            else "wizard/finish.html",
+            job=job, setup=setup,
+            running=bool(job and job.status == "running"),
+            plex_connected=bool(st.store.get(PLEX_TOKEN_NAME)),
+            jellyfin_custom_user=bool(st.store.get(JELLYFIN_USER_NAME)),
         )
 
     return pages

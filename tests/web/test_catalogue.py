@@ -55,6 +55,21 @@ def test_advanced_fields_hidden(source):
     ]
 
 
+def test_cardigann_unmarked_text_fields_are_kept_private(source):
+    store, http = source
+    schema = [{
+        "definitionName": "tracker", "name": "Tracker", "protocol": "torrent",
+        "implementation": "Cardigann", "fields": [
+            {"name": "apikey", "type": "textbox"},
+            {"name": "alt2fatoken", "type": "textbox"},
+            {"name": "custom", "type": "textbox"},
+        ],
+    }]
+    http.route("GET", "/api/v1/indexer/schema", lambda _: Response(200, {}, json.dumps(schema).encode()))
+    tracker, = catalogue.load(store, http, frozenset({"torrent"}))
+    assert all(field.kind == "secret" for field in tracker.fields)
+
+
 def test_unreachable_schema_can_be_retried(source):
     store, http = source
     http.unreachable = True

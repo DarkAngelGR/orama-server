@@ -158,6 +158,10 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 "restore its original type in the setup, or use a different indexer name. "
                 "The existing indexer was left unchanged."
             )
+        if definition is not None and store.get(marker) is None:
+            raise StepError(
+                f"Prowlarr already has {label} that Orama did not set up. Use a different name."
+            )
         current = {f.get("name"): f.get("value") for f in have.get("fields", [])}
         stale = store.get(marker) != _digest(secret)
         stale = stale or any(have.get(k) != v for k, v in top.items())
@@ -323,6 +327,9 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 message = f"removed the {name} indexer"
             # only now, after the delete worked (or it was already gone)
             store.delete(sent_marker_name(f"indexer:{slug}"))
+            for entry in store.names():
+                if entry.startswith(f"indexer:{slug}:"):
+                    store.delete(entry)
             store.delete(f"test-ok:indexer:{slug}")
             store.delete(f"{REMOVE_PREFIX}{slug}")
             return message
@@ -340,8 +347,9 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     for entry in sorted(store.names()):
         if entry.startswith(REMOVE_PREFIX):
             name = store.get(entry)
-            if name:
-                steps.append(remove_step(entry[len(REMOVE_PREFIX):], name))
+            slug = entry[len(REMOVE_PREFIX):]
+            if name and not any(choice.slug == slug or choice.name == name for choice in setup.indexers):
+                steps.append(remove_step(slug, name))
     removals = len(steps)
     app_names = [a for a in ("sonarr", "radarr") if a in apps]
     steps += [app_step(a) if a in apps else app_remove_step(a) for a in ("sonarr", "radarr")]

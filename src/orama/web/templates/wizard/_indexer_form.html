@@ -1,0 +1,61 @@
+{% from "_macros.html" import field, secret_field, button %}
+{% if waiting %}
+<section class="wizard-form" id="indexer-catalogue"
+  hx-get="{{ url_for('wizard.indexers', q=query, definition=definition, edit=editing.slug if editing else None) }}"
+  hx-trigger="every 5s" hx-swap="outerHTML">
+  <p role="status">Prowlarr is still starting. This page updates by itself.</p>
+</section>
+{% else %}
+<section class="wizard-form" id="indexer-catalogue">
+  <form class="form-stack" method="get" action="{{ url_for('wizard.indexers') }}">
+    {{ field('q', 'Search indexers', query, type='search') }}
+    {{ button('Search', 'secondary') }}
+  </form>
+  {% if definitions and not selected %}
+  <ul class="indexer-results">
+    {% for row in definitions %}
+    <li><a href="{{ url_for('wizard.indexers', q=query, definition=row.definition) }}">{{ row.name }}</a></li>
+    {% endfor %}
+  </ul>
+  {% elif not selected %}
+  <p>No indexers match. Try a different name.</p>
+  {% endif %}
+  {% if selected %}
+  <form class="form-stack" method="post" action="{{ url_for('wizard.indexers', q=query) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="definition" value="{{ selected.definition }}">
+    {% if editing %}
+    <input type="hidden" name="edit" value="{{ editing.slug }}">
+    <h2>Edit {{ editing.name }}</h2>
+    {% else %}
+    <h2>Add {{ selected.name }}</h2>
+    {{ field('name', 'Name in Orama', selected.name) }}
+    {% endif %}
+    {% for item in selected.fields %}
+      {% set key = 'field:' ~ item.name %}
+      {% set value = editing.fields.get(item.name, '') if editing else '' %}
+      {% if item.kind == 'secret' or editing and item.name in editing.secret_fields %}
+        {{ secret_field(key, item.label, saved=item.name in saved_fields, help=item.help) }}
+      {% elif item.kind == 'checkbox' %}
+        <label class="choice"><input type="checkbox" name="{{ key }}" value="on"{% if value %} checked{% endif %}> {{ item.label }}</label>
+        {% if item.help %}<p class="field-help">{{ item.help }}</p>{% endif %}
+      {% elif item.kind == 'select' %}
+        <div class="field">
+          <label for="{{ key }}">{{ item.label }}</label>
+          <select name="{{ key }}" id="{{ key }}">
+            <option value="">Use default</option>
+            {% for option, label in item.options %}<option value="{{ option }}"{% if value == option %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+          {% if item.help %}<p class="field-help">{{ item.help }}</p>{% endif %}
+        </div>
+      {% elif item.kind == 'info' %}
+        <p>{{ item.label }}{% if item.help %}. {{ item.help }}{% endif %}</p>
+      {% else %}
+        {{ field(key, item.label, value, help=item.help, type=item.kind) }}
+      {% endif %}
+    {% endfor %}
+    {{ button('Save and test indexer' if editing else 'Add and test indexer') }}
+  </form>
+  {% endif %}
+</section>
+{% endif %}
