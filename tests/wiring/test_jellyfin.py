@@ -265,3 +265,18 @@ def test_missing_password_is_a_plain_failure(tmp_path, password):
     assert not fake.completed
     with pytest.raises(StepError):
         steps[1].run()
+
+
+def test_wait_keeps_waiting_while_the_server_does_not_yet_know_its_setup_state(store, password):
+    fake = FakeJellyfin(password)
+    answers = iter([{"ProductName": "Jellyfin"}, {"StartupWizardCompleted": False}])
+    fake.http.route("GET", "/System/Info/Public", lambda c: ok(next(answers)))
+    wait = jellyfin_steps(make_setup(media_servers={"jellyfin"}), store, fake.http)[0]
+    from orama.wiring import engine
+    original = engine.time.sleep
+    engine.time.sleep = lambda s: None
+    try:
+        wait.run()
+    finally:
+        engine.time.sleep = original
+    assert len(fake.http.calls) == 2

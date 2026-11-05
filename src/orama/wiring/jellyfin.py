@@ -90,7 +90,10 @@ def jellyfin_steps(
 
     def wait() -> str | None:
         def ready() -> bool:
-            return http.request("GET", f"{BASE}/System/Info/Public").status == 200
+            resp = http.request("GET", f"{BASE}/System/Info/Public")
+            # A starting server can answer 200 before it knows whether setup is done.
+            data = _json(resp) if resp.status == 200 else None
+            return isinstance(data, dict) and isinstance(data.get("StartupWizardCompleted"), bool)
 
         wait_until(ready, app="jellyfin", timeout=timeout)
         return None
