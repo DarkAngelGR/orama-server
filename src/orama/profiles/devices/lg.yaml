@@ -1,0 +1,4 @@
+name: LG OLED (webOS)
+verified: false
+unplayable: [dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, pcm_multichannel, flac]
+preferred: [dv, hdr10, truehd_atmos]

@@ -1,0 +1,4 @@
+name: Samsung S95F
+verified: true
+unplayable: [dv, dv_no_fallback, dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, pcm_multichannel, flac]
+preferred: [hdr10, hdr10_plus, truehd_atmos, truehd]

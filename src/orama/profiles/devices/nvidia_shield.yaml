@@ -1,0 +1,4 @@
+name: NVIDIA Shield TV
+verified: false
+unplayable: []
+preferred: [dv, hdr10, hdr10_plus, truehd_atmos, truehd, dts_hd_ma, dts_x]

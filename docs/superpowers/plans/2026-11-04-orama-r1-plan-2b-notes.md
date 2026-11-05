@@ -103,3 +103,14 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   denied by storage; failed jobs retried with unchanged source. Retry passed: unit, images, integration
   and publish all green at `cd24f32`. Task 4 complete.
   Next task: Task 5 (Bazarr wiring).
+
+## Task 6 — profiles (Claude)
+
+- Recyclarr templates per quality (chosen from the candidates above): `4k` = Radarr `uhd-bluray-web` + Sonarr
+  `web-2160p`; `1080p` = `hd-bluray-web` + `web-1080p`; `mixed` = Radarr `uhd-bluray-web` + Sonarr `web-1080p`
+  (4K movies, 1080p TV). The plain "bluray-web" and "web" templates are TRaSH's standard non-remux ones, so
+  downloads stay reasonably sized.
+- Symbolic `dv` maps to both DV formats that can win a release on score: `DV (Disk)` and `DV Boost`.
+  `dv_no_fallback` maps to `DV (w/o HDR fallback)`. TRaSH has no single "all DV" format. `hdr10` is TRaSH's `HDR`,
+  `hdr10_plus` is `HDR10+ Boost`. A symbol may map to several ids; scores are set on each.
+- Only `samsung_s95f` and `safest` are marked `verified: true`; `lg`, `apple_tv`, `nvidia_shield` are best effort.
