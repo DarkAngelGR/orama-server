@@ -82,5 +82,5 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   Added the required separator before insertion; the regression now passes.
   This is a Task 3 correctness fix, with no new command or broader allowlist.
 - Local verification at `26f4c02`: 981 unit tests passed (27 integration tests
-  deselected), Ruff passed, ShellCheck passed. CI run 41944049997 pending.
-- Next task after CI confirmation: Task 4 (Plex LAN and NVIDIA capabilities).
+  deselected), Ruff passed, ShellCheck passed. CI run 41944049997 passed: unit, images, integration and publish.
+- Task 3 complete. Next task: Task 4 (Plex LAN and NVIDIA capabilities).
