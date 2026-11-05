@@ -122,6 +122,7 @@ def wait_until(
 
 def format_checklist(results: list[StepResult]) -> list[str]:
     lines: list[str] = []
+    said: set[str] = set()  # skip reasons already given, whichever app's step was skipped
     for r in results:
         name = display_name(r.app)
         if r.status == "changed":
@@ -132,8 +133,10 @@ def format_checklist(results: list[StepResult]) -> list[str]:
             line = f"… {name}: skipped, {r.message}"
         else:
             continue
-        if r.self_skip and line in lines:  # one skip reason for several steps is said once
-            continue
+        if r.self_skip:  # one skip reason for several steps (and apps) is said once
+            if r.message in said:
+                continue
+            said.add(r.message)
         lines.append(line)
     if not lines:
         return ["✓ Nothing to change"]
