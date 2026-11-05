@@ -43,12 +43,23 @@ def test_htmx_file_hash_pinned():
 
 
 def test_no_inline_script_or_style_in_templates():
-    templates = list((WEB / "templates").glob("*.html"))
+    templates = list((WEB / "templates").rglob("*.html"))
     assert templates, "The shared templates must exist"
     for path in templates:
         source = path.read_text(encoding="utf-8")
         assert not re.search(r"<script\b(?![^>]*\bsrc\s*=)", source, re.IGNORECASE), path.name
         assert not re.search(r"\s(?:style|on[a-z]+)\s*=", source, re.IGNORECASE), path.name
+        assert not re.search(r"\shx-on\b[^\s=>]*\s*=", source, re.IGNORECASE), path.name
+        assert not re.search(r"javascript\s*:", source, re.IGNORECASE), path.name
+        assert not re.search(r"<style\b", source, re.IGNORECASE), path.name
+
+
+def test_inline_code_scan_rejects_hx_on_javascript_and_style():
+    bad = ['<a hx-on:click="x()">', '<a hx-on::after-request="x()">',
+           '<a href="javascript:x()">', "<style>a{}</style>"]
+    patterns = [r"\shx-on\b[^\s=>]*\s*=", r"javascript\s*:", r"<style\b"]
+    for sample in bad:
+        assert any(re.search(p, sample, re.IGNORECASE) for p in patterns), sample
 
 
 def test_layout_uses_local_assets_and_safe_htmx_config(template_app):
@@ -72,7 +83,7 @@ def test_layout_uses_local_assets_and_safe_htmx_config(template_app):
 def render_macro(app, source, **context):
     with app.test_request_context():
         return app.jinja_env.from_string('{% from "_macros.html" import '
-                                        'field, secret_field, choice, checklist, notice %}'
+                                        'field, secret_field, choice, checklist, checklist_items, notice %}'
                                         + source).render(**context)
 
 
@@ -97,6 +108,58 @@ def test_secret_field_always_empty_and_explains_saved_value(template_app, saved)
     assert control["type"] == "password"
     assert control.get("value", "") == ""
     assert ("leave empty to keep" in html) == saved
+
+
+def test_secret_field_disables_password_manager_autofill(template_app):
+    html = render_macro(template_app, '{{ secret_field("key", "API key") }}')
+    assert Elements(html).named("input")[0]["autocomplete"] == "new-password"
+
+
+def test_password_field_defaults_to_new_password_unless_overridden(template_app):
+    default = render_macro(template_app, '{{ field("p", "P", type="password") }}')
+    assert Elements(default).named("input")[0]["autocomplete"] == "new-password"
+    explicit = render_macro(
+        template_app, '{{ field("p", "P", type="password", autocomplete="current-password") }}')
+    assert Elements(explicit).named("input")[0]["autocomplete"] == "current-password"
+
+
+def test_signin_password_uses_current_password(template_app):
+    with template_app.test_request_context():
+        html = template_app.jinja_env.get_template("signin.html").render()
+    password = next(i for i in Elements(html).named("input") if i.get("name") == "password")
+    assert password["autocomplete"] == "current-password"
+
+
+def test_choice_describedby_only_on_fieldset(template_app):
+    html = render_macro(template_app,
+                        '{{ choice("server", "Media server", options, "plex", "Choose one") }}',
+                        options=[("plex", "Plex"), ("jellyfin", "Jellyfin")])
+    dom = Elements(html)
+    assert dom.named("fieldset")[0]["aria-describedby"] == "server-error"
+    assert not any("aria-describedby" in i for i in dom.named("input"))
+
+
+def test_none_values_render_empty(template_app):
+    html = render_macro(template_app, '{{ field("n", "N", value) }}', value=None)
+    assert "None" not in html
+    assert Elements(html).named("input")[0]["value"] == ""
+    html = render_macro(template_app,
+                        '{{ choice("c", "C", [(v, "x")], s) }}{{ notice(k, t) }}',
+                        v="a", s=None, k=None, t=None)
+    assert "None" not in html
+
+
+def test_checklist_heading_and_items_partial(template_app):
+    html = render_macro(template_app, '{{ checklist(lines, true) }}', lines=["a"])
+    dom = Elements(html)
+    assert dom.named("section")[0]["aria-live"] == "polite"
+    assert dom.named("h2")
+    items = render_macro(template_app, '{{ checklist_items(lines) }}', lines=["a", "b"])
+    idom = Elements(items)
+    assert [n for n, _ in idom.tags if n != "li"] == ["ul"]
+    assert idom.named("ul")[0]["id"] == "checklist-items"
+    assert "aria-live" not in items
+    assert 'id="checklist-items"' in html
 
 
 def test_choice_has_native_keyboard_controls_and_selected_state(template_app):

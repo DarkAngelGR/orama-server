@@ -1,17 +1,18 @@
 {# Public interfaces for later wizard, Settings and Apps pages. Text stays escaped. #}
-{% macro field(name, label, value='', error='', help='', type='text') -%}
+{% macro field(name, label, value='', error='', help='', type='text', autocomplete='') -%}
 <div class="field">
   <label for="{{ name }}">{{ label }}</label>
   {% if help %}<p class="field-help" id="{{ name }}-help">{{ help }}</p>{% endif %}
-  <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value if type != 'password' else '' }}"
+  <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ (value|default('', true)) if type != 'password' else '' }}"
+    {% if autocomplete %}autocomplete="{{ autocomplete }}"{% elif type == 'password' %}autocomplete="new-password"{% endif %}
     {% if error %}aria-invalid="true"{% endif %}
     {% if help or error %}aria-describedby="{% if help %}{{ name }}-help{% endif %}{% if help and error %} {% endif %}{% if error %}{{ name }}-error{% endif %}"{% endif %}>
-  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error }}</p>{% endif %}
+  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error|default('', true) }}</p>{% endif %}
 </div>
 {%- endmacro %}
 
 {% macro secret_field(name, label, saved=false, error='', help='') -%}
-{{ field(name, label, '', error, (help ~ ' ' if help else '') ~ ('Saved — leave empty to keep.' if saved else ''), 'password') }}
+{{ field(name, label, '', error, (help ~ ' ' if help else '') ~ ('Saved — leave empty to keep.' if saved else ''), 'password', 'new-password') }}
 {%- endmacro %}
 
 {# options: sequence of (value, label) pairs. selected: one value. #}
@@ -21,20 +22,26 @@
   <div class="choices">
   {% for value, text in options %}
     <label class="choice" for="{{ name }}-{{ loop.index }}">
-      <input id="{{ name }}-{{ loop.index }}" type="radio" name="{{ name }}" value="{{ value }}"{% if value == selected %} checked{% endif %}{% if error %} aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
-      <span>{{ text }}</span>
+      <input id="{{ name }}-{{ loop.index }}" type="radio" name="{{ name }}" value="{{ value|default('', true) }}"{% if value == selected %} checked{% endif %}{% if error %} aria-invalid="true"{% endif %}>
+      <span>{{ text|default('', true) }}</span>
     </label>
   {% endfor %}
   </div>
-  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error }}</p>{% endif %}
+  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error|default('', true) }}</p>{% endif %}
 </fieldset>
+{%- endmacro %}
+
+{# htmx must swap the inner <ul id="checklist-items"> (children, via checklist_items), never
+   the aria-live <section> itself: replacing a live region stops screen readers announcing it. #}
+{% macro checklist_items(lines) -%}
+<ul id="checklist-items">{% for line in lines %}<li>{{ line }}</li>{% else %}<li>Waiting to start.</li>{% endfor %}</ul>
 {%- endmacro %}
 
 {# lines: plain checklist strings from the job runner, already redacted server-side. #}
 {% macro checklist(lines, running=false) -%}
 <section class="checklist" aria-label="Setup progress" aria-live="polite" aria-relevant="additions text">
-  <p class="checklist-heading">{{ 'Applying your setup…' if running else 'Setup progress' }}</p>
-  <ul>{% for line in lines %}<li>{{ line }}</li>{% else %}<li>Waiting to start.</li>{% endfor %}</ul>
+  <h2 class="checklist-heading">{{ 'Applying your setup…' if running else 'Setup progress' }}</h2>
+  {{ checklist_items(lines) }}
   {% if running %}<p class="field-help">You can leave this page open while Orama connects your apps.</p>{% endif %}
 </section>
 {%- endmacro %}
@@ -43,7 +50,7 @@
 {% set severity = kind if kind in ('ok', 'wait', 'problem') else 'wait' %}
 <div class="notice notice-{{ severity }}" role="{{ 'alert' if severity == 'problem' else 'status' }}">
   <span class="notice-label">{{ {'ok': 'Done', 'wait': 'Please note', 'problem': 'Needs attention'}[severity] }}</span>
-  <p>{{ text }}</p>
+  <p>{{ text|default('', true) }}</p>
 </div>
 {%- endmacro %}
 
