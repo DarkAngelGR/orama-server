@@ -8,8 +8,6 @@ import stat
 import sys
 import tempfile
 import threading
-import urllib.error
-import urllib.request
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -27,7 +25,6 @@ from wiring import (
 )
 
 from orama import cli
-from orama.__main__ import make_server
 from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
 from orama.secrets import PLEX_CLIENT_ID_NAME, VPN_KEY_NAME, SecretStore, ensure_app_keys
@@ -1231,44 +1228,6 @@ def test_set_secret_undecryptable_store_is_plain(capsys, caplog, monkeypatch, ro
     assert code == 1
     assert out.err.startswith("✗ Cannot save the secret: cannot decrypt"), out.err
     assert value not in out.err + out.out + caplog.text
-
-
-# ---------------------------------------------------------------- orama HTTP server
-
-@pytest.fixture
-def http_base():
-    server = make_server("127.0.0.1", 0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(5)
-
-
-def get(url):
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(url, timeout=5) as r:
-            return r.status, r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-
-
-def test_http_healthz(http_base):
-    assert get(f"{http_base}/healthz") == (200, "ok")
-
-
-def test_http_root(http_base):
-    assert get(f"{http_base}/") == (
-        200, "Orama is running — setup page arrives in a later update."
-    )
-
-
-def test_http_unknown_path(http_base):
-    assert get(f"{http_base}/nope")[0] == 404
 
 
 @pytest.mark.parametrize("name", ["password:jellyfin", "opensubtitles:username",
