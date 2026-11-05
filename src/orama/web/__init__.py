@@ -25,6 +25,7 @@ from orama.setup_model import DesiredSetup
 from orama.web import auth, security
 from orama.web.assets import configure_assets
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
+from orama.web.wizard import register_wizard
 from orama.wiring.http import Http
 
 SETUP_FILE = "setup.json"
@@ -131,6 +132,7 @@ def create_app(
     app.register_error_handler(Exception, _server_error)
     app.register_blueprint(_auth_pages())
     register_jobs(app)
+    register_wizard(app)
     return app
 
 

@@ -1,0 +1,35 @@
+{% extends "wizard/step.html" %}
+{% from "_macros.html" import field, secret_field, checkbox %}
+{% set heading = 'How do you want to download?' %}
+{% set intro = 'Usenet needs a paid Usenet account; torrents work with a VPN that keeps your downloads private. Choose what you will use.' %}
+{% set submit_label = 'Save and start your apps' if first_time else 'Save and continue' %}
+{% block fields %}
+<fieldset class="wizard-group field">
+  <legend>Download methods</legend>
+  {{ checkbox('usenet', 'Usenet', values.usenet, 'Uses SABnzbd.', '', 'usenet') }}
+  {{ checkbox('torrent', 'Torrents', values.torrent, 'Uses qBittorrent.', '', 'torrent') }}
+  {% if errors.download_methods %}<p class="field-error" id="download_methods-error">{{ errors.download_methods }}</p>{% endif %}
+</fieldset>
+<div class="wizard-group">
+  <h2>VPN for torrents</h2>
+  {{ checkbox('vpn', 'Send torrent downloads through a VPN', values.vpn, 'Recommended. Needs a WireGuard key from your VPN service.', errors.vpn, 'vpn') }}
+  <div class="wizard-form" data-visible-if="vpn"{% if not values.vpn %} hidden{% endif %}>
+    <div class="field">
+      <label for="vpn_provider">VPN service</label>
+      <select id="vpn_provider" name="vpn_provider"{% if errors.vpn_provider %} aria-invalid="true" aria-describedby="vpn_provider-error"{% endif %}>
+        {% for p in values.providers %}<option value="{{ p.value }}" data-port-forwarding="{{ 'true' if p.port_forwarding else 'false' }}" data-needs-address="{{ 'true' if p.needs_address else 'false' }}"{% if p.value == values.provider %} selected{% endif %}>{{ p.label }}</option>{% endfor %}
+      </select>
+      {% if errors.vpn_provider %}<p class="field-error" id="vpn_provider-error">{{ errors.vpn_provider }}</p>{% endif %}
+    </div>
+    {{ secret_field('vpn_key', 'WireGuard private key', values.key_saved, errors.vpn_key, 'From the WireGuard file your VPN service gives you (the PrivateKey line).') }}
+    {% set current = values.providers|selectattr('value', 'equalto', values.provider)|first %}
+    <div data-feature="address"{% if not current.needs_address %} hidden{% endif %}>
+      {{ field('vpn_address', 'WireGuard address', values.address, errors.vpn_address, 'The Address line from the same file, like 10.64.12.34/32. If you leave off the /32 at the end, Orama adds it. Mullvad, IVPN and Surfshark need this; other services do not.', 'text', 'off') }}
+    </div>
+    <div data-feature="port_forwarding"{% if not current.port_forwarding %} hidden{% endif %}>
+      {{ checkbox('port_forwarding', 'Use port forwarding', values.port_forwarding, 'Lets other people connect to you, so torrents download faster. Only Proton VPN offers it here.', '', 'port_forwarding') }}
+    </div>
+    {{ checkbox('route_prowlarr', 'Send Prowlarr through the VPN', values.route_prowlarr, 'Prowlarr is the app that searches for downloads. Turn this on if your indexers block your home address.', '', 'route_prowlarr') }}
+  </div>
+</div>
+{% endblock %}

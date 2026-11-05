@@ -31,6 +31,36 @@
 </fieldset>
 {%- endmacro %}
 
+{# One tick box. Sent as "on" when ticked, absent otherwise. #}
+{% macro checkbox(name, label, checked=false, help='', error='', input_id='') -%}
+{% set cid = input_id or name %}
+<div class="field">
+  <label class="choice" for="{{ cid }}">
+    <input id="{{ cid }}" type="checkbox" name="{{ name }}" value="on"{% if checked %} checked{% endif %}
+      {% if help or error %}aria-describedby="{% if help %}{{ cid }}-help{% endif %}{% if help and error %} {% endif %}{% if error %}{{ cid }}-error{% endif %}"{% endif %}
+      {% if error %}aria-invalid="true"{% endif %}>
+    <span>{{ label }}</span>
+  </label>
+  {% if help %}<p class="field-help" id="{{ cid }}-help">{{ help }}</p>{% endif %}
+  {% if error %}<p class="field-error" id="{{ cid }}-error">{{ error|default('', true) }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{# options: (value, label) pairs; blank: label for an empty first choice, or none. #}
+{% macro select(name, label, options, selected='', error='', help='', blank=none) -%}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  {% if help %}<p class="field-help" id="{{ name }}-help">{{ help }}</p>{% endif %}
+  <select id="{{ name }}" name="{{ name }}"
+    {% if error %}aria-invalid="true"{% endif %}
+    {% if help or error %}aria-describedby="{% if help %}{{ name }}-help{% endif %}{% if help and error %} {% endif %}{% if error %}{{ name }}-error{% endif %}"{% endif %}>
+    {% if blank is not none %}<option value=""{% if not selected %} selected{% endif %}>{{ blank }}</option>{% endif %}
+    {% for value, text in options %}<option value="{{ value }}"{% if value == selected %} selected{% endif %}>{{ text }}</option>{% endfor %}
+  </select>
+  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error|default('', true) }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
 {# htmx must swap the inner <ul id="checklist-items"> (children, via checklist_items), never
    the aria-live <section> itself: replacing a live region stops screen readers announcing it. #}
 {% macro checklist_items(lines) -%}
