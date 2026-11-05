@@ -26,8 +26,8 @@ Read `AGENTS.md` first.
 |---|---|---|---|---|
 | 1 | Locks for setup, secret store and applies | most capable | done (`eb9eed9`, `01cea5e`) | Claude |
 | 2 | VPN provider list, Gluetun control server, unwritable folders | most capable | done (`d813622`) | Claude |
-| 3 | Wiring: removals, single-item tests, proxy message | standard | in progress | Claude |
-| 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | open | — |
+| 3 | Wiring: removals, single-item tests, proxy message | standard | done (`535a44b`) | Claude |
+| 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | in progress | Claude |
 | 5 | Web foundation and security | most capable | open | — |
 | 6 | Design system and base layout | standard | open | — |
 | 7 | Apply jobs with a live checklist | standard | open | — |
