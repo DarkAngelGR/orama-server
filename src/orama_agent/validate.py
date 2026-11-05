@@ -18,6 +18,7 @@ import re
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
 
@@ -332,6 +333,11 @@ def _validate_environment(name: str, spec: ServiceSpec, svc: dict, roots: Roots)
     if not isinstance(environment, dict):
         raise Refused(f"The settings list for {name} is not a mapping.")
     required, optional = _expected_environment(name, spec, roots)
+    if name in MEDIA_SERVERS and svc.get("deploy") == GPU_DEPLOY:
+        required.update(NVIDIA_VISIBLE_DEVICES="all",
+                        NVIDIA_DRIVER_CAPABILITIES="compute,video,utility")
+    if name == "plex":
+        optional["ADVERTISE_IP"] = re.compile(r"http://[0-9.]+:[0-9]+/")
     for key, value in environment.items():
         if not isinstance(key, str) or not isinstance(value, str):
             raise Refused(f"{name} has a setting whose name or value is not text.")
@@ -345,6 +351,16 @@ def _validate_environment(name: str, spec: ServiceSpec, svc: dict, roots: Roots)
         ok = rule.fullmatch(value) if isinstance(rule, re.Pattern) else value == rule
         if not ok:
             raise Refused(f"{name} has a value for {key} that Orama does not allow.")
+    if name == "plex" and "ADVERTISE_IP" in environment:
+        host, port = environment["ADVERTISE_IP"][7:-1].split(":")
+        try:
+            address = int(IPv4Address(host))
+        except ValueError:
+            raise Refused("Plex must advertise a private IPv4 address.") from None
+        private = (address >> 24 == 10 or address >> 20 == (172 << 4 | 1)
+                   or address >> 16 == (192 << 8 | 168))
+        if not private or svc.get("ports") != [f"{port}:{spec.container_port}"]:
+            raise Refused("Plex must advertise its private address and published port.")
     missing = set(required) - set(environment)
     if missing:
         raise Refused(f"{name} is missing required settings: {_names(missing)}.")

@@ -1158,3 +1158,11 @@ def test_plex_token_cannot_be_set_by_hand(capsys, monkeypatch, roots):
     assert code == 1
     assert "secret name" in out.err
     assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+@pytest.mark.parametrize("lan", ["none", ".".join(map(str, [192, 168, 1, 8]))])
+def test_bootstrap_stores_lan_address(roots, capsys, lan):
+    data, cfg = roots
+    assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": lan})) == 0
+    draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
+    assert (str(draft.lan_address) if draft.lan_address else "none") == lan

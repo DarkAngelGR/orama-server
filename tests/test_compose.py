@@ -75,7 +75,7 @@ def test_every_data_app_sees_same_data_mount():
 
 
 def test_env_conventions():
-    svcs = build_apps_compose(full())["services"]
+    svcs = build_apps_compose(full(nvidia=False))["services"]
     assert svcs["sonarr"]["environment"] == {
         "PUID": "1000", "PGID": "1000", "UMASK": "002", "TZ": "Etc/UTC"}
     assert svcs["plex"]["environment"] == {
@@ -505,3 +505,16 @@ def test_qbittorrent_password_never_in_compose_yaml(tmp_path):
     env = yaml.safe_load(text)["services"]["gluetun"]["environment"]
     assert "QBT_WEBUI_PASSWORD" not in env
     assert "$$QBT_WEBUI_PASSWORD" in env["VPN_PORT_FORWARDING_UP_COMMAND"]
+
+
+@pytest.mark.parametrize("nvidia", [False, True])
+@pytest.mark.parametrize("lan", [None, ".".join(map(str, [192, 168, 1, 8]))])
+def test_media_network_and_gpu_environment(nvidia, lan):
+    services = build_apps_compose(full(nvidia=nvidia, lan_address=lan))["services"]
+    env = services["plex"]["environment"]
+    assert env.get("ADVERTISE_IP") == (f"http://{lan}:{PORTS['plex']}/" if lan else None)
+    for app in ("plex", "jellyfin"):
+        env = services[app]["environment"]
+        assert env.get("NVIDIA_VISIBLE_DEVICES") == ("all" if nvidia else None)
+        assert env.get("NVIDIA_DRIVER_CAPABILITIES") == (
+            "compute,video,utility" if nvidia else None)

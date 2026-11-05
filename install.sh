@@ -432,7 +432,7 @@ run_bootstrap() {
     "$ORAMA_IMAGE" python -m orama.cli bootstrap
     --platform "$platform" --data-root "$DATA_ROOT" --config-root "$CONFIG_ROOT"
     --puid "$PUID" --pgid "$PGID" --docker-gid "$docker_gid" --render-gid "$render_gid"
-    --nvidia "$nvidia" --taken-ports "$taken"
+    --nvidia "$nvidia" --taken-ports "$taken" --lan-address "$(lan_address)"
     --orama-image "$ORAMA_IMAGE" --agent-image "$AGENT_IMAGE"
   )
   if is_dry_run; then
@@ -453,15 +453,34 @@ start_core() {
     fail "Orama did not start. To see why, run: sudo docker compose -p $CORE_PROJECT logs"
 }
 
-print_address() {
-  local port=$1 ip address=localhost
+detected_address() {
+  local ip address=localhost
   for ip in $(hostname -I 2> /dev/null || true); do
     if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$ip" != 127.* ]]; then
       address=$ip
       break
     fi
   done
-  say "✓ Orama is ready. Open http://$address:$port in your browser."
+  printf '%s\n' "$address"
+}
+
+lan_address() {
+  local address a b c d
+  address=$(detected_address)
+  IFS=. read -r a b c d <<< "$address"
+  if [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] &&
+     (( ${#a} <= 3 && ${#b} <= 3 && ${#c} <= 3 && ${#d} <= 3 )) &&
+     (( 10#$a <= 255 && 10#$b <= 255 && 10#$c <= 255 && 10#$d <= 255 )) &&
+     (( 10#$a == 10 || (10#$a == 172 && 10#$b >= 16 && 10#$b <= 31) ||
+        (10#$a == 192 && 10#$b == 168) )); then
+    printf '%s\n' "$address"
+  else
+    printf 'none\n'
+  fi
+}
+
+print_address() {
+  say "✓ Orama is ready. Open http://$(detected_address):$1 in your browser."
 }
 
 # ---------------------------------------------------------------- main

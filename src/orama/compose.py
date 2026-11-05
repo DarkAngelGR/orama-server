@@ -75,6 +75,11 @@ def _service(spec: ServiceSpec, setup: DesiredSetup, vpn_on: bool) -> dict[str, 
         "restart": "unless-stopped",
     }
     environment = _environment(spec, setup)
+    if spec.name == "plex" and setup.lan_address is not None:
+        environment["ADVERTISE_IP"] = f"http://{setup.lan_address}:{_host_port(spec, setup)}/"
+    if spec.name in ("plex", "jellyfin") and setup.nvidia:
+        environment.update(NVIDIA_VISIBLE_DEVICES="all",
+                           NVIDIA_DRIVER_CAPABILITIES="compute,video,utility")
     if environment:
         svc["environment"] = environment
     if spec.env_style == "jellyfin":
