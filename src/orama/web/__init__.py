@@ -7,6 +7,7 @@ POST/PUT/PATCH/DELETE) the CSRF check, before any page code runs.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -54,22 +55,24 @@ class SetupReader:
         self._setup: DesiredSetup | None = None
 
     def current(self) -> DesiredSetup | None:
-        for name in (SETUP_FILE, DRAFT_FILE):
-            path = self._state_dir / name
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            key = (name, st.st_ino, st.st_mtime_ns, st.st_size)
-            with self._lock:
+        with self._lock:  # the file check and the cache update happen together
+            for name in (SETUP_FILE, DRAFT_FILE):
+                path = self._state_dir / name
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                key = (name, st.st_ino, st.st_mtime_ns, st.st_size)
                 if key != self._key:
                     try:
-                        self._setup = DesiredSetup.load(path)
-                    except Exception:  # unreadable: answer to local names only  # noqa: BLE001
-                        self._setup = None
-                    self._key = key
+                        setup = DesiredSetup.load(path)
+                    except Exception:  # unreadable: local names only  # noqa: BLE001
+                        # Not cached: a file caught mid-write is read again next time.
+                        self._key, self._setup = None, None
+                        return None
+                    self._key, self._setup = key, setup
                 return self._setup
-        return None
+            return None
 
 
 @dataclass
@@ -101,6 +104,7 @@ def create_app(
     app.config.update(
         MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES,
         PROVIDE_AUTOMATIC_OPTIONS=False,
+        # Flask's own signed-cookie session is never used; keep its name off ours.
         SESSION_COOKIE_NAME="orama_flask_unused",
     )
     app.extensions["orama"] = WebState(
@@ -148,7 +152,7 @@ def _check_request():
     if request.method == "OPTIONS":
         return rejected(MESSAGES[405], 405)
     # 3. The session, from the cookie.
-    session = st.sessions.get(request.cookies.get(auth.COOKIE))
+    session = st.sessions.get(request.cookies.get(auth.COOKIE), request.remote_addr or "")
     if session is not None:
         g.session = session
         g.principal = session.principal
@@ -180,8 +184,6 @@ def _http_error(error: HTTPException):
 def _server_error(error: Exception):
     if isinstance(error, HTTPException):
         return _http_error(error)
-    import logging
-
     logging.getLogger("orama.web").exception("page failed")
     return rejected(GENERIC_MESSAGE, 500)
 
@@ -217,10 +219,14 @@ def _auth_pages() -> Blueprint:
             return render_template("signin.html")
         nxt = g.session.next  # the CSRF check guarantees a session
         address = request.remote_addr or ""
-        if st.limiter.blocked(address):
+        if not st.limiter.try_begin(address):
             return _signin_page(auth.RATE_MESSAGE, 429)
-        if not st.passwords.verify(request.form.get("password", "")):
-            st.limiter.fail(address)
+        ok = False
+        try:
+            ok = st.passwords.verify(request.form.get("password", ""))
+        finally:
+            st.limiter.finish(address, failed=not ok)
+        if not ok:
             return _signin_page("That password is not right.", 401)
         auth.start_session(auth.ADMIN)
         return redirect(nxt, 303)
@@ -242,10 +248,14 @@ def _auth_pages() -> Blueprint:
         # A code is checked (and counted when wrong) before the password form is shown,
         # and again when the form is sent.
         address = request.remote_addr or ""
-        if st.limiter.blocked(address):
+        if not st.limiter.try_begin(address):
             return render_template("first_run.html", error=auth.RATE_MESSAGE), 429
-        if not auth.code_matches(st.first_run_code, code):
-            st.limiter.fail(address)
+        ok = False
+        try:
+            ok = auth.code_matches(st.first_run_code, code)
+        finally:
+            st.limiter.finish(address, failed=not ok)
+        if not ok:
             return render_template(
                 "first_run.html",
                 error="This setup link is not valid. Open the link the installer printed.",
