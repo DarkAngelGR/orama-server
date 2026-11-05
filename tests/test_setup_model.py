@@ -260,3 +260,43 @@ def test_bad_indexer_values_are_refused(kw):
 def test_indexer_limits_are_inclusive():
     choice = _indexer(name="x" * 60, fields={f"k{i}": "v" * 512 for i in range(40)})
     assert len(choice.fields) == 40
+
+
+# Plan 2b playback preferences
+
+def test_playback_defaults_and_legacy_setup(tmp_path):
+    data = make_setup().to_json_dict()
+    for key in ("subtitle_languages", "device", "quality", "lan_address"):
+        data.pop(key, None)
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps(data))
+    setup = DesiredSetup.load(path)
+    assert setup.subtitle_languages == ("el", "en")
+    assert setup.device == "safest"
+    assert setup.quality == "mixed"
+    assert setup.lan_address is None
+
+
+def test_playback_roundtrip_keeps_language_order(tmp_path):
+    setup = make_setup(subtitle_languages=("en", "el"), device="samsung_s95f",
+                       quality="4k", lan_address="192.168.1.10")
+    path = tmp_path / "setup.json"
+    setup.save(path)
+    assert DesiredSetup.load(path) == setup
+    assert json.loads(path.read_text())["subtitle_languages"] == ["en", "el"]
+    assert "password" not in path.read_text()
+
+
+@pytest.mark.parametrize("languages", [(), ("el", "el"), ("en",) * 6,
+                                         ("EN",), ("english",), ("1a",)])
+def test_invalid_subtitle_languages(languages):
+    with pytest.raises(ValidationError):
+        make_setup(subtitle_languages=languages)
+
+
+@pytest.mark.parametrize("field,value", [("device", "unknown"), ("quality", "8k"),
+                                          ("lan_address", "8.8.8.8"),
+                                          ("lan_address", "2001:db8::1")])
+def test_invalid_playback_values(field, value):
+    with pytest.raises(ValidationError):
+        make_setup(**{field: value})
