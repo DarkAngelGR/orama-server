@@ -31,7 +31,10 @@ SECURITY_HEADERS = {
         "base-uri 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: with no-referrer browsers send "Origin: null" on
+    # same-origin form posts, which the Origin check refuses. Nothing (so no first-run
+    # code in a URL) is sent to other sites either way.
+    "Referrer-Policy": "same-origin",
     "X-Frame-Options": "DENY",
     "Cross-Origin-Opener-Policy": "same-origin",
 }
