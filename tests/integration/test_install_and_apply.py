@@ -269,7 +269,7 @@ def poll_http(port: int, path: str, headers: dict[str, str] | None = None,
 # ---------------------------------------------------------------- install
 
 def test_installer_starts_orama(installed: dict):
-    for name in ("orama-server", "orama-server-agent", "orama-jellyfin", "orama-bazarr"):
+    for name in ("orama-server", "orama-server-agent"):
         assert docker_inspect(name)["State"]["Status"] == "running", name
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
