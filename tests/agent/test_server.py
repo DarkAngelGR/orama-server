@@ -1009,3 +1009,19 @@ def test_bazarr_seed_refuses_unusual_layout_before_stopping(agent, roots):
     assert path.read_text() == text
     assert agent.runner.stops == [] and agent.runner.starts == []
     assert old not in str(error.value) and "cd" * 16 not in str(error.value)
+
+
+def test_bazarr_seed_refuses_alias_bomb_fast_before_stopping(agent, roots):
+    torrent_doc(agent, roots)
+    path = roots.config / "config/bazarr/config/config.yaml"
+    path.parent.mkdir(parents=True)
+    rows = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+    rows += [f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 10) + "]" for i in range(1, 12)]
+    text = "\n".join(rows) + "\nauth:\n  apikey: old\n"
+    path.write_text(text)
+    started = time.monotonic()
+    with pytest.raises(AgentError):
+        agent.client.seed_config("bazarr", {"api_key": "cd" * 16})
+    assert time.monotonic() - started < 5
+    assert path.read_text() == text
+    assert agent.runner.stops == [] and agent.runner.starts == []
