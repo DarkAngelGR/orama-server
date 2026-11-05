@@ -14,6 +14,16 @@ profile's name in the app, and the API keys, which the Agent reads from its own 
 - ``custom_formats: [{trash_ids, assign_scores_to: [{name, score}]}]`` sets Orama's device
   scores in Orama's profiles only; one entry per distinct score.
 - ``delete_old_custom_formats: false``: custom formats the owner made are never deleted.
+- ``reset_unmatched_scores`` resets only the scores inside the ``Orama`` profile: a custom
+  format score the owner set in that profile by hand is reset too, while the owner's own
+  profiles and custom formats are left alone.
+
+Recyclarr's guide data is pinned. The Agent also writes Recyclarr's ``settings.yml`` (fixed
+content, no secrets) whose ``resource_providers`` fetch the TRaSH guides and the config
+templates at the commits below, replacing Recyclarr's unpinned default copies (Recyclarr
+8.8.1: ``GitResourceProvider.reference`` is passed to ``git fetch --depth 1``, which accepts a
+commit). Every id in ``TEMPLATES`` and in ``orama/profiles/trash.yaml`` was checked against
+these commits. Updating them is a code change, and it changes the digest, so installs sync again.
 """
 
 from __future__ import annotations
@@ -24,12 +34,18 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import yaml
+
 from orama.catalog import CATALOG
 from orama_agent.validate import Refused
 
 CONFIG_FILE = "recyclarr.yml"  # in <config>/config/recyclarr, deleted after every run
 STATE_FILE = "recyclarr.state"  # in app-env: digest of the last config that synced
 CONTAINER_CONFIG = f"/config/{CONFIG_FILE}"
+SETTINGS_FILE = "settings.yml"  # Recyclarr's settings, in the same folder; deleted after
+SETTINGS_ALTERNATE = "settings.yaml"  # Recyclarr reads this spelling too (and refuses both)
+TRASH_GUIDES_COMMIT = "d0f1a6cb29bee8b53bd1d7f8c73333649972f21c"  # TRaSH-Guides/Guides master
+CONFIG_TEMPLATES_COMMIT = "89eebadd429952069182a22930af4d768cacda36"  # config-templates master
 MAX_SCORES = 200
 PROFILE_NAME = "Orama"  # the one quality profile Orama manages in each app
 MIN_SCORE, MAX_SCORE = -10000, 10000
@@ -94,7 +110,23 @@ TEMPLATES: dict[str, dict[str, Template]] = {
     },
 }
 
+SETTINGS: dict[str, Any] = {
+    "resource_providers": [
+        {"name": "orama-trash-guides", "type": "trash-guides",
+         "clone_url": "https://github.com/TRaSH-Guides/Guides.git",
+         "reference": TRASH_GUIDES_COMMIT, "replace_default": True},
+        {"name": "orama-config-templates", "type": "config-templates",
+         "clone_url": "https://github.com/recyclarr/config-templates.git",
+         "reference": CONFIG_TEMPLATES_COMMIT, "replace_default": True},
+    ],
+}
+
 Apps = dict[str, dict[str, Any]]  # {app: {"templates": [str], "scores": {trash_id: int}}}
+
+
+def settings_text() -> str:
+    """Recyclarr's settings.yml: fixed, and holding no secret."""
+    return yaml.safe_dump(SETTINGS, sort_keys=False)
 
 
 def _expect(value: Any, keys: set[str], what: str) -> None:
@@ -182,7 +214,10 @@ def render(apps: Apps, keys: dict[str, str]) -> dict[str, Any]:
 
 def digest(apps: Apps) -> str:
     """Identifies what a sync would do, without the keys: the rendered config with the
-    keys left out, and the pinned Recyclarr image."""
+    keys left out, the pinned guide commits and the pinned Recyclarr image."""
     doc = render(apps, {app: "" for app in apps})
-    text = json.dumps({"image": CATALOG["recyclarr"].image, "config": doc}, sort_keys=True)
+    text = json.dumps(
+        {"image": CATALOG["recyclarr"].image, "config": doc, "settings": SETTINGS},
+        sort_keys=True,
+    )
     return hashlib.sha256(text.encode()).hexdigest()

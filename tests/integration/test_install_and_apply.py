@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from orama.wiring.plex import WAITING_FOR_SIGN_IN
+from orama_agent import recyclarr
 
 from . import media_contracts
 from .conftest import REPO_ROOT, Host, docker_inspect, run
@@ -722,7 +723,16 @@ def test_second_install_and_apply_change_nothing(clean_host: Host, installed: di
     assert rerun["after"] == rerun["before"]
     # Recyclarr runs only as a one-shot: no container and no config with keys left behind.
     assert run(["docker", "inspect", "orama-recyclarr"]).returncode != 0
-    assert not (clean_host.config_root / "config/recyclarr/recyclarr.yml").exists()
+    folder = clean_host.config_root / "config/recyclarr"
+    assert not (folder / "recyclarr.yml").exists()
+    assert not (folder / "settings.yml").exists()
+    # Recyclarr fetched the guide data at Orama's pinned commits, not at their latest.
+    for kind, name, commit in (
+        ("trash-guides", "orama-trash-guides", recyclarr.TRASH_GUIDES_COMMIT),
+        ("config-templates", "orama-config-templates", recyclarr.CONFIG_TEMPLATES_COMMIT),
+    ):
+        fetched = (folder / "resources" / kind / "git" / name / ".git/FETCH_HEAD").read_text()
+        assert fetched.split()[0] == commit, (kind, fetched)
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
 

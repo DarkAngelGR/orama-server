@@ -437,8 +437,9 @@ class Agent:
         """Sync Sonarr's and Radarr's quality profiles with Recyclarr, once.
 
         The YAML is rendered here (``orama_agent.recyclarr``) with the API keys from the
-        Agent's own env files, written PUID:PGID 0600 into Recyclarr's config folder, and
-        deleted after the run whether it worked or not. When the config (keys left out) is
+        Agent's own env files, written PUID:PGID 0600 into Recyclarr's config folder next to
+        the fixed settings that pin the guide data, and both are deleted after the run
+        whether it worked or not. When the config (keys left out) is
         the one that last synced and ``force`` is not set, nothing runs.
         """
         apps, force = recyclarr.check(args)
@@ -456,15 +457,22 @@ class Agent:
             _unlink(env_fd, recyclarr.STATE_FILE)  # a failed run must not count as done
             folder = Path(app_config_dir(PurePosixPath(self.roots.config), "recyclarr"))
             dir_fd, _ = self._open_dirs(folder, self._shared)
+            def owned(fd: int) -> None:
+                self._chown(fd, self.roots.puid, self.roots.pgid)
+
             try:
                 try:
-                    _write_atomic(
-                        dir_fd, recyclarr.CONFIG_FILE, text, SEED_FILE_MODE,
-                        chown=lambda fd: self._chown(fd, self.roots.puid, self.roots.pgid),
-                    )
+                    # Only Orama's pinned settings are read: never another spelling of them.
+                    _unlink(dir_fd, recyclarr.SETTINGS_ALTERNATE)
+                    _write_atomic(dir_fd, recyclarr.SETTINGS_FILE,
+                                  recyclarr.settings_text().encode(), SEED_FILE_MODE,
+                                  chown=owned)
+                    _write_atomic(dir_fd, recyclarr.CONFIG_FILE, text, SEED_FILE_MODE,
+                                  chown=owned)
                     self.runner.recyclarr_sync()
                 finally:
                     _unlink(dir_fd, recyclarr.CONFIG_FILE)
+                    _unlink(dir_fd, recyclarr.SETTINGS_FILE)
             finally:
                 os.close(dir_fd)
             _write_atomic(env_fd, recyclarr.STATE_FILE, f"{wanted}\n".encode(), 0o600)

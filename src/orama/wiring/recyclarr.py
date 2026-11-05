@@ -8,6 +8,9 @@ profile named "Orama". Orama only reads here: Recyclarr does
 every write, so custom formats and profiles the owner made are never touched by Orama.
 Scores Orama stopped sending are cleared by Recyclarr (``reset_unmatched_scores``); they
 are not checked here, since a leftover block cannot be told apart from TRaSH's own score.
+That reset covers every score inside the "Orama" profile, so a score the owner changed by
+hand in that profile goes back to the guide's; the owner's other profiles are untouched.
+The guide data Recyclarr uses is pinned to fixed commits by the Agent.
 """
 
 from __future__ import annotations

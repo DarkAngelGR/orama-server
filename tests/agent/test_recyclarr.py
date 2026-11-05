@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -74,12 +75,18 @@ class Seen:
 
     def __init__(self, roots):
         self.path = roots.config / "config" / "recyclarr" / "recyclarr.yml"
+        self.settings_path = self.path.with_name("settings.yml")
         self.texts = []
         self.modes = []
+        self.settings = []  # (text, mode) of settings.yml while Recyclarr 'ran'
+        self.alternates = []  # whether a settings.yaml was there too
 
     def __call__(self):
         self.texts.append(self.path.read_text())
         self.modes.append(stat.S_IMODE(os.lstat(self.path).st_mode))
+        self.settings.append((self.settings_path.read_text(),
+                              stat.S_IMODE(os.lstat(self.settings_path).st_mode)))
+        self.alternates.append(os.path.lexists(self.path.with_name("settings.yaml")))
 
     @property
     def doc(self):
@@ -270,6 +277,33 @@ def test_digest_ignores_keys_but_follows_choices():
     assert SONARR_KEY not in recyclarr.digest(apps)
 
 
+def test_settings_pin_both_guide_repositories_to_commits():
+    providers = recyclarr.SETTINGS["resource_providers"]
+    assert set(recyclarr.SETTINGS) == {"resource_providers"}
+    assert [(p["type"], p["clone_url"]) for p in providers] == [
+        ("trash-guides", "https://github.com/TRaSH-Guides/Guides.git"),
+        ("config-templates", "https://github.com/recyclarr/config-templates.git"),
+    ]
+    assert [p["reference"] for p in providers] == [
+        recyclarr.TRASH_GUIDES_COMMIT, recyclarr.CONFIG_TEMPLATES_COMMIT]
+    for p in providers:
+        assert re.fullmatch(r"[0-9a-f]{40}", p["reference"])  # a commit, never a branch
+        assert p["replace_default"] is True  # the unpinned official copies are not used
+        assert re.fullmatch(r"[a-zA-Z0-9_-]+", p["name"])
+        assert set(p) == {"name", "type", "clone_url", "reference", "replace_default"}
+    assert len({p["name"] for p in providers}) == len(providers)
+    assert yaml.safe_load(recyclarr.settings_text()) == recyclarr.SETTINGS
+
+
+def test_digest_follows_the_pinned_commits(monkeypatch):
+    apps, _ = recyclarr.check({"apps": apps_for()})
+    before = recyclarr.digest(apps)
+    pinned = json.loads(json.dumps(recyclarr.SETTINGS))
+    pinned["resource_providers"][0]["reference"] = "0" * 40
+    monkeypatch.setattr(recyclarr, "SETTINGS", pinned)
+    assert recyclarr.digest(apps) != before
+
+
 # ---------------------------------------------------------------- the command
 
 
@@ -286,6 +320,11 @@ def test_sync_writes_private_yaml_runs_and_deletes_it(env, roots):
     chowned = {p for p, uid, gid in env.chowns.calls if (uid, gid) == (1000, 1001)}
     assert str(folder) in chowned  # the folder Recyclarr writes its state into
     assert any(p.startswith(str(folder) + "/.recyclarr.yml.") for p in chowned)
+    # The pinned guide settings: written for the run like the YAML, never holding a key.
+    assert env.seen.settings == [(recyclarr.settings_text(), 0o600)]
+    assert SONARR_KEY not in env.seen.settings[0][0]
+    assert any(p.startswith(str(folder) + "/.settings.yml.") for p in chowned)
+    assert not (folder / "settings.yml").exists()
     state = roots.config / "app-env" / "recyclarr.state"
     assert stat.S_IMODE(state.stat().st_mode) == 0o600
     assert SONARR_KEY not in state.read_text() and RADARR_KEY not in state.read_text()
@@ -298,6 +337,7 @@ def test_yaml_deleted_and_failure_reported_plainly(env, roots):
     assert resp["error"].startswith("Updating the quality profiles failed.")
     assert env.runner.recyclarr_calls == 1
     assert not yaml_path(roots).exists()
+    assert not yaml_path(roots).with_name("settings.yml").exists()
     # Nothing recorded as done: the same request runs Recyclarr again.
     assert env.call({"apps": apps_for()})["result"] == {"changed": True}
     assert env.runner.recyclarr_calls == 2
@@ -400,6 +440,22 @@ def test_planted_link_at_yaml_is_replaced_not_followed(env, roots, tmp_path):
     assert env.client.recyclarr_sync(apps_for()) is True
     assert target.read_text() == "keep"
     assert not os.path.lexists(folder / "recyclarr.yml")
+
+
+def test_planted_settings_are_replaced_not_followed(env, roots, tmp_path):
+    target = tmp_path / "target"
+    target.write_text("keep")
+    folder = roots.config / "config" / "recyclarr"
+    folder.mkdir(parents=True)
+    (folder / "settings.yml").symlink_to(target)
+    # Recyclarr refuses to start when both spellings exist, and would read this one instead.
+    (folder / "settings.yaml").write_text("resource_providers: []\n")
+    assert env.client.recyclarr_sync(apps_for()) is True
+    assert env.seen.settings == [(recyclarr.settings_text(), 0o600)]
+    assert env.seen.alternates == [False]
+    assert target.read_text() == "keep"
+    assert not os.path.lexists(folder / "settings.yml")
+    assert not os.path.lexists(folder / "settings.yaml")
 
 
 def test_keys_never_logged(env, caplog):
