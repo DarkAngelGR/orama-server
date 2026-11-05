@@ -204,3 +204,29 @@ def test_qbittorrent_keeps_localhost_auth_on():
     # localhost. The port-forward hook logs in instead.
     out = render("qbittorrent", "[WebUI]\nLocalHostAuth=false\n", QBT)
     assert "\nLocalHostAuth=true\n" in out and "LocalHostAuth=false" not in out
+
+
+BAZARR = {"api_key": hex_key("ab")}
+
+
+def test_bazarr_preserves_other_yaml():
+    old = "general:\n  port: 6767\nauth:\n  username: user\n  apikey: old\n  password: hashed\nother:\n  enabled: true\n"
+    updated = render("bazarr", old, BAZARR)
+    assert updated == old.replace("  apikey: old", f"  apikey: {BAZARR['api_key']}")
+    assert render("bazarr", updated, BAZARR) is None
+
+
+def test_bazarr_appends_missing_auth():
+    original = "general:\n  port: 6767\n"
+    result = render("bazarr", original, BAZARR)
+    assert result == original + f"auth:\n  apikey: {BAZARR['api_key']}\n"
+    assert render("bazarr", result, BAZARR) is None
+    assert config_file("bazarr") == ("config", "config.yaml")
+
+
+@pytest.mark.parametrize("bad", ["x" * 32, hex_key() + "\n", hex_key() + ":",
+                                   hex_key() + "#", "", None])
+def test_bazarr_rejects_bad_keys_without_echo(bad):
+    with pytest.raises(Refused) as error:
+        render("bazarr", None, {"api_key": bad})
+    assert not isinstance(bad, str) or bad not in str(error.value)
