@@ -563,12 +563,12 @@ def plex_sign_in(setup_path: Path) -> None:
             if time.time() >= sign_in.expires_at:
                 raise Failed("The Plex sign-in timed out — run plex-sign-in again.")
             time.sleep(PLEX_POLL_SECONDS)
-    except SignInError as e:  # plain, never holds the token
-        raise Failed(str(e)) from None
+    except SignInError as e:  # one of plex.py's fixed sentences, never response text
+        raise Failed(e.message) from None
     except KeyboardInterrupt:
         raise Failed("Cancelled; Plex is not signed in.") from None
-    except ValueError as e:  # e.g. the secret store cannot be decrypted; messages hold no values
-        raise Failed(f"Cannot use the secret store: {e}.") from None
+    except ValueError:  # e.g. the secret store cannot be decrypted
+        raise Failed("Orama's secret store cannot be read; Plex is not signed in.") from None
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
     print("✓ Plex signed in")

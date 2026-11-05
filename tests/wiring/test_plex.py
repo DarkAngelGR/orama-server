@@ -620,3 +620,73 @@ def test_plex_still_starting(store, token):
     results = run_steps(steps)
     assert results[0].status == "failed"
     assert results[0].message == "Plex is still starting — run apply again in a few minutes."
+
+
+def test_server_claimed_by_orama_is_ours_before_plex_tv_lists_it(store, token):
+    fake = FakePlex(token)
+    signed_in(store, token)
+    setup = make_setup()
+    first = run(fake, setup, store)
+    assert statuses(first)["plex:claim"] == "changed"
+    assert store.get(f"plex:claimed:{MACHINE}") == "1"
+    fake.owner = None  # plex.tv does not list the new server yet
+    second = run(fake, setup, store)
+    assert statuses(second)["plex:claim"] == "unchanged"
+
+
+def test_claim_marker_for_another_server_does_not_count(store, token):
+    fake = FakePlex(token)
+    fake.claimed = True
+    store.set("plex:claimed:" + "other-machine", "1")
+    results = run(fake, make_setup(), signed_in(store, token))
+    assert results[1].status == "failed" and results[1].message == OTHER_ACCOUNT
+
+
+def test_poll_rate_limited_keeps_waiting(store, token):
+    fake = FakePlex(token)
+    s = begin_sign_in(store, fake.http)
+    fake.pins[s.pin_id]["status"] = 429
+    assert poll_sign_in(store, fake.http, s.pin_id) == "waiting"
+
+
+def test_cli_plex_tv_unreachable_at_start(tmp_path, monkeypatch, capsys, token):
+    path, store = write_setup(tmp_path)
+    store.set(PLEX_CLIENT_ID_NAME, CLIENT_ID)
+    fake = FakePlex(token)
+    fake.http.unreachable = True
+    code, out, _ = run_cli(monkeypatch, capsys, fake, path)
+    assert code == 1
+    assert out.err.strip() == (
+        "✗ plex.tv could not be reached — check the internet connection and try again.")
+    assert out.out == ""
+    assert store.get(PLEX_TOKEN_NAME) is None
+
+
+def test_cli_ctrl_c_is_plain(tmp_path, monkeypatch, capsys, token):
+    path, store = write_setup(tmp_path)
+    store.set(PLEX_CLIENT_ID_NAME, CLIENT_ID)
+    fake = FakePlex(token)
+
+    def interrupt(seconds):
+        fake.approve(4100)  # even an approval in flight is not taken after Ctrl-C
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "Http", lambda: fake.http)
+    monkeypatch.setattr(cli.time, "sleep", interrupt)
+    code = cli.main(["plex-sign-in", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert out.err.strip() == "✗ Cancelled; Plex is not signed in."
+    assert token not in out.out + out.err
+    assert store.get(PLEX_TOKEN_NAME) is None
+
+
+def test_cli_unreadable_store_message_is_fixed(tmp_path, monkeypatch, capsys, token):
+    path, store = write_setup(tmp_path)
+    store.set(PLEX_CLIENT_ID_NAME, CLIENT_ID)
+    (tmp_path / "cfg" / "orama" / "secrets.key").write_bytes(b"0" * 44)  # wrong key
+    fake = FakePlex(token)
+    code, out, _ = run_cli(monkeypatch, capsys, fake, path)
+    assert code == 1
+    assert out.err.strip() == (
+        "✗ Orama's secret store cannot be read; Plex is not signed in.")

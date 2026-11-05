@@ -41,6 +41,8 @@ class StepResult:
     app: str
     status: Literal["changed", "unchanged", "failed", "skipped"]
     message: str
+    # True when the message is a StepSkipped reason (said once in the checklist)
+    self_skip: bool = False
 
 
 @dataclass
@@ -61,7 +63,9 @@ def run_steps(steps: list[Step]) -> list[StepResult]:
         blocker = next((n for n in step.needs if n in bad), None)
         if blocker is not None:
             reason = why.get(blocker, f"waiting for {display_name(bad[blocker])}")
-            results.append(StepResult(step.name, step.app, "skipped", reason))
+            results.append(
+                StepResult(step.name, step.app, "skipped", reason, self_skip=blocker in why)
+            )
             bad[step.name] = bad[blocker]
             if blocker in why:
                 why[step.name] = why[blocker]
@@ -69,7 +73,7 @@ def run_steps(steps: list[Step]) -> list[StepResult]:
         try:
             message = step.run()
         except StepSkipped as err:
-            results.append(StepResult(step.name, step.app, "skipped", str(err)))
+            results.append(StepResult(step.name, step.app, "skipped", str(err), self_skip=True))
             bad[step.name] = step.app
             why[step.name] = str(err)
         except StepError as err:
@@ -128,8 +132,9 @@ def format_checklist(results: list[StepResult]) -> list[str]:
             line = f"… {name}: skipped, {r.message}"
         else:
             continue
-        if line not in lines:  # one reason given for several skipped steps is said once
-            lines.append(line)
+        if r.self_skip and line in lines:  # one skip reason for several steps is said once
+            continue
+        lines.append(line)
     if not lines:
         return ["✓ Nothing to change"]
     return lines
