@@ -102,7 +102,7 @@ class Http:
             data = jsonlib.dumps(json).encode()
             send_headers.setdefault("Content-Type", "application/json")
         elif form is not None:
-            data = urllib.parse.urlencode(form).encode()
+            data = urllib.parse.urlencode(form, doseq=True).encode()
             send_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
         req = urllib.request.Request(url, data=data, headers=send_headers, method=method.upper())
         try:
