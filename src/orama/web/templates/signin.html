@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button %}
+{% block title %}Sign in · Orama{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<div class="entry-layout">
+  <section class="entry-intro">
+    <h1>Your media. Your place.</h1>
+    <p>Welcome back. Sign in to manage your home media setup.</p>
+  </section>
+  <section class="entry-panel" aria-labelledby="signin-title">
+    <h2 id="signin-title">Sign in to Orama</h2>
+    {% if error %}<div id="password-error">{{ notice('problem', error) }}</div>{% endif %}
+    <form action="/signin" method="post" class="form-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label for="password">Orama password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256"{% if error %} aria-invalid="true" aria-describedby="password-error"{% endif %}>
+      </div>
+      {{ button('Sign in') }}
+    </form>
+    <p class="entry-note">Use the password you created when you set up Orama.</p>
+  </section>
+</div>
+{% endblock %}

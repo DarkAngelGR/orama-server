@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyCacheSize":0}'>
+  <title>{% block title %}Orama{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='orama.css', v='1') }}">
+  <script src="{{ url_for('static', filename='htmx-2.0.11.min.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='orama.js', v='1') }}" defer></script>
+</head>
+<body hx-headers='{{ {"X-CSRF-Token": csrf_token()} | tojson }}' hx-history="false">
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="Orama home"><span class="brand-mark" aria-hidden="true"></span>Orama</a>
+      {% block nav %}
+      {% if g.principal %}
+      <nav aria-label="Main navigation">
+        <a href="/">Home</a><a href="/apps">Apps</a><a href="/settings">Settings</a>
+        <form action="/signout" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="button button-quiet" type="submit">Sign out</button>
+        </form>
+      </nav>
+      {% endif %}
+      {% endblock %}
+    </div>
+  </header>
+  <main id="content" class="page" tabindex="-1">{% block content %}{% endblock %}</main>
+  <footer class="site-footer">Orama <span aria-hidden="true">/</span> Your home media, together.</footer>
+</body>
+</html>

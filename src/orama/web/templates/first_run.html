@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button %}
+{% block title %}Welcome · Orama{% endblock %}
+{% block nav %}{% endblock %}
+{% block content %}
+<div class="entry-layout">
+  <section class="entry-intro">
+    <h1>A home for your media.</h1>
+    <p>Connect your apps, choose how you watch, and let Orama bring it all together.</p>
+  </section>
+  <section class="entry-panel" aria-labelledby="welcome-title">
+    <h2 id="welcome-title">Welcome to Orama</h2>
+    {% if error %}<div id="password-error">{{ notice('problem', error) }}</div>{% endif %}
+    {% if code %}
+    <p>First, create a password to keep your setup yours.</p>
+    <form action="/setup/password" method="post" class="form-stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="code" value="{{ code }}">
+      <div class="field">
+        <label for="password">Create your Orama password</label>
+        <p id="password-help" class="field-help">Use at least 12 characters. A few memorable words work well.</p>
+        <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required aria-describedby="password-help{% if error %} password-error{% endif %}"{% if error %} aria-invalid="true"{% endif %}>
+      </div>
+      {{ button('Create password') }}
+    </form>
+    {% else %}
+    <p>Open the link the installer printed to start setting up Orama.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

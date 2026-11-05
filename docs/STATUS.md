@@ -29,7 +29,7 @@ Read `AGENTS.md` first.
 | 3 | Wiring: removals, single-item tests, proxy message | standard | done (`535a44b`) | Claude |
 | 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | done (`f36c939`) | Claude |
 | 5 | Web foundation and security | most capable | in progress | Claude |
-| 6 | Design system and base layout | standard | in progress (owner-approved parallel work with Task 5) | Codex |
+| 6 | Design system and base layout | standard | in progress — shared UI checkpoint tested; integration waiting for Task 5 (see T06 report) | Codex |
 | 7 | Apply jobs with a live checklist | standard | open | — |
 | 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | open | — |
 | 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | open | — |
