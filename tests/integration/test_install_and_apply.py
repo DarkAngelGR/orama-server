@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from orama.wiring.plex import WAITING_FOR_SIGN_IN
+
 from . import media_contracts
 from .conftest import REPO_ROOT, Host, docker_inspect, run
 
@@ -117,6 +119,14 @@ def http_json(url: str, headers: dict[str, str] | None = None):
 
 def failure_lines(output: str) -> list[str]:
     return [line for line in output.splitlines() if line.startswith("✗")]
+
+
+def skip_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if line.startswith("…")]
+
+
+# CI has no Plex account: the only step skipped on every apply.
+PLEX_WAITING = ["… Plex: skipped, " + WAITING_FOR_SIGN_IN]
 
 
 def container_ids() -> dict[str, str]:
@@ -395,6 +405,8 @@ def test_plan2b_bazarr_configuration(clean_host: Host, applied: dict):
         assert settings[app]["ip"] == app
         if settings[app]["apikey"] != keys[f"apikey:{app}"]:
             pytest.fail("wrong link key (values withheld)")
+    for switch in ("ignore_ass_subs", "ignore_pgs_subs", "ignore_vobsub_subs"):
+        assert settings["general"][switch] is True, switch
     profiles = app_get(applied, keys, "bazarr", "/api/system/languages/profiles")
     mine = [p for p in profiles if p["name"] == "Orama"]
     assert len(mine) == 1
@@ -441,7 +453,12 @@ def test_plan2b_jellyfin_and_notifications(clean_host: Host, applied: dict):
         ("Movies", ("/data/media/movies",)), ("TV Shows", ("/data/media/tv",))}
     for app in ("sonarr", "radarr"):
         notifications = app_get(applied, keys, app, "/api/v3/notification")
-        assert len([n for n in notifications if n["name"] == "Jellyfin (Orama)"]) == 1
+        mine = [n for n in notifications if n["name"] == "Jellyfin (Orama)"]
+        assert len(mine) == 1
+        fields = {f["name"]: f.get("value") for f in mine[0]["fields"]}
+        assert (fields["host"], fields["updateLibrary"], fields["notify"]) == (
+            "jellyfin", True, False), app
+        assert all(mine[0][flag] is True for flag in ("onDownload", "onUpgrade", "onRename")), app
     assert "Plex is waiting for sign-in" in applied["output"]
 
 
@@ -701,7 +718,11 @@ def test_second_install_and_apply_change_nothing(clean_host: Host, installed: di
     failures = failure_lines(output)
     assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
     assert failure_lines(output) == failure_lines(rerun["first_apply"])
+    assert skip_lines(output) == PLEX_WAITING
     assert rerun["after"] == rerun["before"]
+    # Recyclarr runs only as a one-shot: no container and no config with keys left behind.
+    assert run(["docker", "inspect", "orama-recyclarr"]).returncode != 0
+    assert not (clean_host.config_root / "config/recyclarr/recyclarr.yml").exists()
     assert http_get(installed["port"], "/healthz") == (200, "ok")
 
 
@@ -730,6 +751,7 @@ def test_quality_and_device_changes_reuse_profile(clean_host: Host, applied: dic
         status, output = apply(clean_host, outputs, "apply-device-quality-again")
         assert status == 1
         assert [l for l in output.splitlines() if l.startswith("✓")] == ["✓ Folders ready"]
+        assert skip_lines(output) == PLEX_WAITING
     finally:
         path.write_text(original)
         status, output = apply(clean_host, outputs, "apply-restore-default-profile")
@@ -777,7 +799,8 @@ def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Ou
     values = [v for v in stored_secrets(clean_host).values() if len(v) >= 8]
     assert values, "the secret store is empty"
     texts = dict(outputs.texts)
-    for name in ("orama-server", "orama-server-agent", "orama-jellyfin", "orama-bazarr"):
+    for name in ("orama-server", "orama-server-agent", "orama-jellyfin", "orama-bazarr",
+                 "orama-sonarr", "orama-radarr"):
         texts[f"docker logs {name}"] = run(["docker", "logs", name]).stdout
     logs = clean_host.config_root / "config/recyclarr/logs"
     for path in logs.rglob("*"):
