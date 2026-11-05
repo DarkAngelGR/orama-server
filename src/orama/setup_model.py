@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from ipaddress import IPv4Address, IPv4Network
+from ipaddress import IPv4Address
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
@@ -140,10 +140,11 @@ class DesiredSetup(BaseModel):
     @field_validator("lan_address")
     @classmethod
     def _private_lan_address(cls, value: IPv4Address | None) -> IPv4Address | None:
-        if value is not None and not any(value in network for network in (
-            IPv4Network("10.0.0.0/8"), IPv4Network("172.16.0.0/12"),
-            IPv4Network("192.168.0.0/16"),
-        )):
+        if value is not None and not (
+            (int(value) >> 24 == 10)
+            or (int(value) >> 20 == (172 << 4 | 1))
+            or (int(value) >> 16 == (192 << 8 | 168))
+        ):
             raise ValueError("LAN address must be a private IPv4 address")
         return value
 
