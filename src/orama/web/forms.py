@@ -11,6 +11,7 @@ empty secret input keeps the stored value. Nothing here ever returns a secret.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from ipaddress import AddressValueError, IPv4Interface
 from typing import Any
@@ -25,7 +26,9 @@ from orama.secrets import (
     VPN_KEY_NAME,
     SecretStore,
 )
-from orama.setup_model import DesiredSetup, VpnConfig
+from orama.setup_model import DesiredSetup, IndexerChoice, UsenetServer, VpnConfig
+from orama.web.catalogue import IndexerDefinition, IndexerField
+from orama.wiring import prowlarr, sabnzbd
 
 OPENSUBTITLES_USER_NAME = "opensubtitles:username"
 OPENSUBTITLES_PASSWORD_NAME = "opensubtitles:password"
@@ -110,6 +113,120 @@ def _model_messages(e: ValidationError, default_field: str) -> dict[str, str]:
         text = text[:1].upper() + text[1:]
         errors.setdefault(field, text.rstrip(".") + ".")
     return errors
+
+
+# ---------------------------------------------------------------- indexers and Usenet
+
+
+def _new_slug(name: str, fallback: str, used: set[str], pending_prefix: str, store) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40].rstrip("-") or fallback
+    slug = base
+    suffix = 2
+    while slug in used or store.get(pending_prefix + slug):
+        tail = f"-{suffix}"
+        slug = base[:40 - len(tail)].rstrip("-") + tail
+        suffix += 1
+    return slug
+
+
+def _indexer_value(field: IndexerField, raw: str) -> str | int | bool:
+    if field.kind == "checkbox":
+        return raw in ("1", "on", "true")
+    if field.kind == "number":
+        return int(raw)
+    if field.kind == "select":
+        for value, _ in field.options:
+            if str(value) == raw:
+                return value
+        raise ValueError
+    return raw
+
+
+def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
+                form: Mapping[str, str], store) -> tuple[DesiredSetup, str]:
+    if definition.protocol not in setup.download_methods:
+        raise Invalid({"definition": "Choose an indexer for a download method you turned on."})
+    name = _text(form, "name") or definition.name
+    slug = _new_slug(name, "indexer", {item.slug for item in setup.indexers},
+                     prowlarr.REMOVE_PREFIX, store)
+    fields: dict[str, str | int | bool] = {}
+    secrets: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    for field in definition.fields:
+        key = f"field:{field.name}"
+        if field.kind == "info" or key not in form and field.kind != "checkbox":
+            continue
+        raw = form.get(key, "")
+        if field.kind == "secret":
+            if raw and not _printable_line(raw):
+                errors[key] = "Enter a shorter value on one line."
+            elif raw:
+                secrets[field.name] = raw
+            continue
+        if not raw and field.kind != "checkbox":
+            continue  # Leave the Prowlarr template default in place.
+        try:
+            fields[field.name] = _indexer_value(field, raw)
+        except ValueError:
+            errors[key] = "Enter a whole number." if field.kind == "number" else "Choose an option."
+    if errors:
+        raise Invalid(errors)
+    try:
+        item = IndexerChoice(slug=slug, name=name, definition=definition.definition,
+                             fields=fields, secret_fields=tuple(secrets))
+        updated = _rebuild(setup, indexers=(*setup.indexers, item))
+    except ValidationError:
+        raise Invalid({"name": "Check the indexer details and use a different name."}) from None
+    for field_name, value in secrets.items():
+        store.set(f"indexer:{slug}:{field_name}", value)
+    return updated, slug
+
+
+def add_usenet_server(setup: DesiredSetup, form: Mapping[str, str],
+                      store) -> tuple[DesiredSetup, str]:
+    if "usenet" not in setup.download_methods:
+        raise Invalid({"host": "Turn on Usenet before adding a server."})
+    host = _text(form, "host")
+    password = form.get("password", "")
+    if password and not _printable_line(password):
+        raise Invalid({"password": "Enter a shorter password on one line."})
+    slug = _new_slug(host, "usenet", {server.slug for server in setup.usenet_servers},
+                     sabnzbd.REMOVE_PREFIX, store)
+    try:
+        server = UsenetServer(slug=slug, host=host, port=_text(form, "port") or "563",
+                              ssl=_on(form, "ssl"), connections=_text(form, "connections") or "20",
+                              username=_text(form, "username"))
+        updated = _rebuild(setup, usenet_servers=(*setup.usenet_servers, server))
+    except ValidationError:
+        raise Invalid({"host": "Check the server address, port and number of connections."}) from None
+    if password:
+        store.set(f"usenet:{slug}:password", password)
+    return updated, slug
+
+
+def remove_indexer(setup: DesiredSetup, slug: str, store) -> DesiredSetup:
+    item = next((item for item in setup.indexers if item.slug == slug), None)
+    if item is None:
+        return setup
+    updated = _rebuild(setup, indexers=tuple(other for other in setup.indexers if other != item))
+    if store.get(prowlarr.sent_marker_name(f"indexer:{slug}")):
+        store.set(prowlarr.REMOVE_PREFIX + slug, item.name)
+    for field_name in item.secret_fields:
+        store.delete(f"indexer:{slug}:{field_name}")
+    store.delete(f"test-ok:indexer:{slug}")
+    return updated
+
+
+def remove_usenet_server(setup: DesiredSetup, slug: str, store) -> DesiredSetup:
+    remaining = tuple(server for server in setup.usenet_servers if server.slug != slug)
+    if len(remaining) == len(setup.usenet_servers):
+        return setup
+    updated = _rebuild(setup, usenet_servers=remaining)
+    if store.get(sabnzbd.sent_marker_name(slug)):
+        store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+    store.delete(f"usenet:{slug}:password")
+    store.delete(f"test-ok:usenet:{slug}")
+    return updated
 
 
 # ---------------------------------------------------------------- media
