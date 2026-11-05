@@ -441,13 +441,13 @@ def test_principal_without_permission_gets_403(state_dir, clock):
 
 def test_sessions_are_bounded(clock):
     sessions = auth.Sessions(clock)
-    anonymous = [sessions.new(None) for _ in range(auth.MAX_ANONYMOUS_SESSIONS + 10)]
-    assert sessions.get(anonymous[0].id) is None
-    assert sessions.get(anonymous[-1].id) is not None
-    admin = sessions.new(auth.ADMIN)
+    anonymous = [sessions.new(None, "a") for _ in range(auth.MAX_ANONYMOUS_SESSIONS + 10)]
+    assert sessions.get(anonymous[0].id, "a") is None
+    assert sessions.get(anonymous[-1].id, "a") is not None
+    admin = sessions.new(auth.ADMIN, "a")
     for _ in range(auth.MAX_ANONYMOUS_SESSIONS + 10):
-        sessions.new(None)
-    assert sessions.get(admin.id) is not None
+        sessions.new(None, "a")
+    assert sessions.get(admin.id, "a") is not None
 
 
 def test_main_serves_with_waitress(monkeypatch, state_dir: Path):
@@ -463,6 +463,7 @@ def test_main_serves_with_waitress(monkeypatch, state_dir: Path):
     assert calls["port"] == 8765
     assert calls["threads"] == 8
     assert calls["ident"] is None
+    assert calls["max_request_body_size"] == 1024 * 1024
     assert calls["app"].extensions["orama"].state_dir == state_dir
 
 
@@ -476,3 +477,161 @@ def test_first_run_link_with_wrong_code_shows_no_form_and_counts(client, first_r
     response = client.get(f"/setup/password?code={first_run_code}", **addr(3))
     assert response.status_code == 429
     assert 'name="password"' not in response.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+def test_cookie_replayed_from_another_address_is_refused(app, password):
+    owner = app.test_client()
+    signin(owner, password, **addr(1))
+    stolen = session_cookie(owner)
+    thief = app.test_client()
+    thief.set_cookie("orama_session", stolen)
+    response = thief.get("/", **addr(2))
+    assert response.status_code == 303
+    assert response.headers["Location"].startswith("/signin")
+    # The session is ended server-side: the owner is signed out too.
+    assert not signed_in(owner, **addr(1))
+
+
+def test_session_keeps_working_from_the_same_address(app, password):
+    owner = app.test_client()
+    signin(owner, password, **addr(1))
+    assert signed_in(owner, **addr(1))
+    assert signed_in(owner, **addr(1))
+    token = csrf_from(owner.get("/", **addr(1)))
+    assert owner.post("/signout", data={"csrf_token": token}, **addr(1)).status_code == 303
+    assert not signed_in(owner, **addr(1))
+
+
+def test_pre_signin_session_bound_to_address(app, password):
+    c = app.test_client()
+    token = csrf_from(c.get("/signin", **addr(1)))
+    response = c.post("/signin", data={"password": password, "csrf_token": token}, **addr(2))
+    assert response.status_code == 403
+    # Ended: the token no longer works from the first address either.
+    response = c.post("/signin", data={"password": password, "csrf_token": token}, **addr(1))
+    assert response.status_code == 403
+
+
+def test_password_change_still_works_with_address_binding(state_dir, clock):
+    app = create_app(state_dir, clock=clock)
+
+    @app.post("/test/change")
+    def change():
+        from flask import request
+
+        return ("changed" if auth.change_password(request.form["old"], request.form["new"])
+                else "refused"), 200
+
+    pw, new = new_password(), new_password()
+    app.extensions["orama"].passwords.create(pw)
+    c = app.test_client()
+    signin(c, pw, **addr(4))
+    token = csrf_from(c.get("/", **addr(4)))
+    response = c.post("/test/change", data={"old": pw, "new": new, "csrf_token": token},
+                      **addr(4))
+    assert response.data == b"changed"
+    assert signed_in(c, **addr(4))
+    assert not signed_in(c, **addr(5))
+
+
+def _concurrent(clients_and_calls):
+    import threading
+
+    barrier = threading.Barrier(len(clients_and_calls))
+    results = []
+
+    def run(call):
+        barrier.wait()
+        results.append(call())
+
+    threads = [threading.Thread(target=run, args=(call,)) for call in clients_and_calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return results
+
+
+def test_concurrent_wrong_passwords_verify_at_most_five(app, password, monkeypatch):
+    import threading
+    import time as _time
+
+    lock, count = threading.Lock(), []
+
+    def slow_wrong(self, pw):
+        with lock:
+            count.append(1)
+        _time.sleep(0.05)
+        return False
+
+    calls = []
+    for _ in range(20):
+        c = app.test_client()
+        token = csrf_from(c.get("/signin", **addr(7)))
+        calls.append(lambda c=c, token=token: c.post(
+            "/signin", data={"password": "wrong-" + token, "csrf_token": token}, **addr(7)
+        ).status_code)
+    monkeypatch.setattr(auth.PasswordFile, "verify", slow_wrong)
+    results = _concurrent(calls)
+    assert len(count) <= 5
+    assert sorted(set(results)) == [401, 429]
+    assert results.count(401) == len(count)
+
+
+def test_concurrent_wrong_codes_checked_at_most_five(app, first_run_code, monkeypatch):
+    import threading
+    import time as _time
+
+    lock, count = threading.Lock(), []
+
+    def slow_no(path, code):
+        with lock:
+            count.append(1)
+        _time.sleep(0.05)
+        return False
+
+    calls = []
+    for _ in range(20):
+        c = app.test_client()
+        token = csrf_from(c.get("/setup/password", **addr(8)))
+        calls.append(lambda c=c, token=token: c.post(
+            "/setup/password",
+            data={"code": "bad", "password": "p" * 20, "csrf_token": token}, **addr(8),
+        ).status_code)
+    monkeypatch.setattr(auth, "code_matches", slow_no)
+    results = _concurrent(calls)
+    assert len(count) <= 5
+    assert results.count(403) == len(count)
+
+
+def test_success_does_not_count_as_failure(clock):
+    limiter = auth.RateLimiter(clock)
+    a = ip(203, 0, 113, 9)
+    for _ in range(10):
+        assert limiter.try_begin(a)
+        limiter.finish(a, failed=False)
+    assert not limiter.blocked(a)
+    for _ in range(5):
+        assert limiter.try_begin(a)
+        limiter.finish(a, failed=True)
+    assert not limiter.try_begin(a)
+
+
+def test_setup_reader_retries_after_a_bad_file(state_dir, client):
+    from .conftest import LAN, write_setup
+
+    good = (state_dir / "setup.json").read_text()
+    with open(state_dir / "setup.json", "w") as f:  # same inode and size, not JSON
+        f.write("{" + "x" * (len(good.encode()) - 1))
+    assert client.get("/healthz", headers={"Host": LAN}).status_code == 400
+    # Same inode, mtime and size are possible on fast filesystems; content is re-read
+    # because a failed parse is never cached.
+    st = os.stat(state_dir / "setup.json")
+    with open(state_dir / "setup.json", "w") as f:
+        f.write(good)
+    os.utime(state_dir / "setup.json", ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert client.get("/healthz", headers={"Host": LAN}).status_code == 200
+    write_setup(state_dir)

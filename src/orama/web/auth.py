@@ -186,12 +186,20 @@ class Session:
     csrf: str
     created: float
     seen: float = field(default=0.0)
+    # The client address the session was started from (see Sessions).
+    address: str = ""
     # Pre-sign-in only: the local path to open after signing in.
     next: str = "/"
 
 
 class Sessions:
-    """Server-side sessions in memory, safe across waitress threads."""
+    """Server-side sessions in memory, safe across waitress threads.
+
+    Each session is bound to the client address it started from. Browsers send a cookie
+    to every port of a host, so the apps on this machine receive Orama's cookie too; an
+    app container that replays it reaches Orama from its own orama-net address. A session
+    used from any other address is ended at once and the request counts as signed out.
+    """
 
     def __init__(self, clock: Callable[[], float]) -> None:
         self._clock = clock
@@ -199,10 +207,10 @@ class Sessions:
         self._signed_in: dict[str, Session] = {}
         self._anonymous: OrderedDict[str, Session] = OrderedDict()
 
-    def new(self, principal: Principal | None) -> Session:
+    def new(self, principal: Principal | None, address: str) -> Session:
         now = self._clock()
         session = Session(secrets.token_urlsafe(32), principal, secrets.token_urlsafe(32),
-                          now, now)
+                          now, now, address)
         with self._lock:
             if principal is None:
                 self._anonymous[session.id] = session
@@ -213,8 +221,11 @@ class Sessions:
                 self._signed_in[session.id] = session
         return session
 
-    def get(self, session_id: str | None) -> Session | None:
-        """The live session, or None; touching it resets the idle timer."""
+    def get(self, session_id: str | None, address: str) -> Session | None:
+        """The live session, or None; touching it resets the idle timer.
+
+        A session used from an address other than its own is ended (see the class).
+        """
         if not session_id:
             return None
         now = self._clock()
@@ -222,7 +233,9 @@ class Sessions:
             session = self._signed_in.get(session_id) or self._anonymous.get(session_id)
             if session is None:
                 return None
-            if self._expired(session, now):
+            if self._expired(session, now) or not hmac.compare_digest(
+                session.address.encode(), address.encode()
+            ):
                 self._remove(session_id)
                 return None
             session.seen = now
@@ -256,7 +269,11 @@ class Sessions:
 
 class RateLimiter:
     """5 failures from one address in 15 minutes lock that address for 15 minutes; 30
-    failures from all addresses in 15 minutes lock everyone until the window clears."""
+    failures from all addresses in 15 minutes lock everyone until the window clears.
+
+    A check is ``try_begin`` (refused while locked) and then ``finish``. Checks still
+    running count against both limits, so parallel attempts cannot slip past them.
+    """
 
     def __init__(self, clock: Callable[[], float]) -> None:
         self._clock = clock
@@ -264,12 +281,37 @@ class RateLimiter:
         self._failures: dict[str, deque[float]] = {}
         self._locked_until: dict[str, float] = {}
         self._all: deque[float] = deque()
+        self._pending: dict[str, int] = {}
+        self._pending_all = 0
 
     def blocked(self, address: str) -> bool:
         now = self._clock()
         with self._lock:
             self._expire(now)
-            return address in self._locked_until or len(self._all) >= GLOBAL_FAILURES
+            return self._blocked(address)
+
+    def try_begin(self, address: str) -> bool:
+        """Start a check for ``address``: False (nothing recorded) while it is locked."""
+        now = self._clock()
+        with self._lock:
+            self._expire(now)
+            if self._blocked(address):
+                return False
+            self._pending[address] = self._pending.get(address, 0) + 1
+            self._pending_all += 1
+            return True
+
+    def finish(self, address: str, *, failed: bool) -> None:
+        """End a check started with ``try_begin``; only a failed one is counted."""
+        with self._lock:
+            left = self._pending.get(address, 0) - 1
+            if left > 0:
+                self._pending[address] = left
+            else:
+                self._pending.pop(address, None)
+            self._pending_all = max(0, self._pending_all - 1)
+        if failed:
+            self.fail(address)
 
     def fail(self, address: str) -> None:
         now = self._clock()
@@ -281,6 +323,13 @@ class RateLimiter:
             if len(times) >= PER_ADDRESS_FAILURES:
                 self._locked_until[address] = now + WINDOW
                 del self._failures[address]
+
+    def _blocked(self, address: str) -> bool:
+        if address in self._locked_until:
+            return True
+        mine = len(self._failures.get(address, ())) + self._pending.get(address, 0)
+        return (mine >= PER_ADDRESS_FAILURES
+                or len(self._all) + self._pending_all >= GLOBAL_FAILURES)
 
     def _expire(self, now: float) -> None:
         while self._all and now - self._all[0] >= WINDOW:
@@ -306,7 +355,7 @@ def current_session(*, create: bool = False) -> Session | None:
     """This request's session; with ``create`` a new pre-sign-in one when there is none."""
     session = g.get("session")
     if session is None and create:
-        session = web_state().sessions.new(None)
+        session = web_state().sessions.new(None, request.remote_addr or "")
         g.session = session
         g.set_cookie = session.id
     return session
@@ -318,7 +367,7 @@ def start_session(principal: Principal) -> Session:
     old = g.get("session")
     if old is not None:
         sessions.end(old.id)
-    session = sessions.new(principal)
+    session = sessions.new(principal, request.remote_addr or "")
     g.session = session
     g.principal = principal
     g.set_cookie = session.id

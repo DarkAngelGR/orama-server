@@ -167,9 +167,21 @@ def test_healthz_on_127_0_0_1(client):
 
 
 def _post_rules(app):
-    for rule in app.url_map.iter_rules():
-        if "POST" in (rule.methods or ()):
-            yield rule.rule.replace("<", "").replace(">", "")
+    """A URL for every POST rule, built by Flask with sample values for its arguments."""
+    from flask import url_for
+    from werkzeug.routing import BuildError
+
+    urls = []
+    with app.test_request_context():
+        for rule in app.url_map.iter_rules():
+            if "POST" not in (rule.methods or ()):
+                continue
+            try:
+                url = url_for(rule.endpoint, **{arg: "x" for arg in rule.arguments})
+            except BuildError:  # a number converter
+                url = url_for(rule.endpoint, **{arg: 1 for arg in rule.arguments})
+            urls.append(url)
+    return urls
 
 
 def test_post_without_token_refused(app, client, password):
@@ -320,7 +332,10 @@ def test_templates_have_no_inline_script_or_style(client, first_run_code):
 def served(app):
     from waitress import create_server
 
-    server = create_server(app, host="127.0.0.1", port=0, threads=2, ident=None)
+    from orama.__main__ import SERVE_OPTIONS
+
+    options = {**SERVE_OPTIONS, "host": "127.0.0.1", "port": 0, "threads": 2}
+    server = create_server(app, **options)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     try:
@@ -359,3 +374,17 @@ def test_waitress_two_host_headers_rejected(served):
 def test_waitress_missing_host_rejected(served):
     reply = _raw(served, b"GET /healthz HTTP/1.0\r\n\r\n")
     assert reply.startswith((b"HTTP/1.0 400", b"HTTP/1.1 400"))
+
+
+def test_waitress_refuses_oversize_body_before_flask(served, app, monkeypatch):
+    reached = []
+    monkeypatch.setattr(app, "wsgi_app", lambda environ, start: reached.append(1) or [])
+    size = 1024 * 1024 + 1
+    reply = _raw(
+        served,
+        b"POST /signin HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+        b"Content-Type: application/x-www-form-urlencoded\r\n"
+        + f"Content-Length: {size}\r\n\r\n".encode(),  # refused from the header alone
+    )
+    assert reply.startswith(b"HTTP/1.1 413")
+    assert reached == []

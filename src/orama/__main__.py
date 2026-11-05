@@ -14,11 +14,19 @@ from pathlib import Path
 import waitress
 
 from orama.secrets import SecretStore, install_redaction
-from orama.web import SECRETS_FILE, create_app
+from orama.web import MAX_REQUEST_BYTES, SECRETS_FILE, create_app
 
 HOST = "0.0.0.0"
 PORT = 8765
 THREADS = 8
+SERVE_OPTIONS = {
+    "host": HOST,
+    "port": PORT,
+    "threads": THREADS,
+    "ident": None,  # no Server header
+    # Waitress refuses a larger body itself, before buffering it or calling the app.
+    "max_request_body_size": MAX_REQUEST_BYTES,
+}
 
 
 def main() -> None:
@@ -28,7 +36,7 @@ def main() -> None:
     # The store may be created later (by apply); the filter reads it on each record.
     install_redaction(SecretStore(state_dir / SECRETS_FILE))
     app = create_app(state_dir)
-    waitress.serve(app, host=HOST, port=PORT, threads=THREADS, ident=None)
+    waitress.serve(app, **SERVE_OPTIONS)
 
 
 if __name__ == "__main__":
