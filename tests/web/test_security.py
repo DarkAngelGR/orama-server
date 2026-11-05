@@ -262,7 +262,7 @@ def _assert_security_headers(response, *, html: bool = True):
     h = response.headers
     assert h["Content-Security-Policy"] == CSP
     assert h["X-Content-Type-Options"] == "nosniff"
-    assert h["Referrer-Policy"] == "no-referrer"
+    assert h["Referrer-Policy"] == "same-origin"
     assert h["X-Frame-Options"] == "DENY"
     assert h["Cross-Origin-Opener-Policy"] == "same-origin"
     if html:
@@ -388,3 +388,42 @@ def test_waitress_refuses_oversize_body_before_flask(served, app, monkeypatch):
     )
     assert reply.startswith(b"HTTP/1.1 413")
     assert reached == []
+
+
+# ---------------------------------------------------------------- Origin from real browsers
+
+
+def test_referrer_policy_same_origin_on_every_response(client, password):
+    # With no-referrer, browsers send "Origin: null" on same-origin form posts, which
+    # the Origin check must refuse; same-origin makes them send the real origin.
+    signin(client, password)
+    for response in (
+        client.get("/"),
+        client.get("/signin"),
+        client.get("/healthz"),
+        client.get("/static/orama.css"),
+        client.get("/no-such-page"),
+        get_host(client, "evil.example"),
+        client.post("/signout"),
+        client.options("/"),
+    ):
+        assert response.headers["Referrer-Policy"] == "same-origin"
+
+
+def test_post_with_null_origin_still_refused(client, password):
+    token = csrf_from(client.get("/signin"))
+    response = client.post(
+        "/signin", data={"password": password, "csrf_token": token},
+        headers={"Origin": "null"},
+    )
+    assert response.status_code == 403
+    assert EXPIRED in response.get_data(as_text=True)
+
+
+def test_post_with_same_origin_works(client, password):
+    token = csrf_from(client.get("/signin", base_url="http://127.0.0.1:8765"))
+    response = client.post(
+        "/signin", data={"password": password, "csrf_token": token},
+        headers={"Origin": "http://127.0.0.1:8765"}, base_url="http://127.0.0.1:8765",
+    )
+    assert response.status_code == 303
