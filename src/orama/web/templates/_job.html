@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_macros.html" import checklist %}
+{% block title %}Applying · Orama{% endblock %}
+{% block content %}
+<h1>Your setup</h1>
+<div id="job-status">
+{%- include "_job_status.html" -%}
+</div>
+{# The poller lives outside the live region; it swaps only the list inside it. #}
+{% if running -%}
+<div id="job-poller" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+{%- else -%}
+<div id="job-poller"></div>
+{%- endif %}
+{{ checklist(job.lines if job else [], false) }}
+{% endblock %}
