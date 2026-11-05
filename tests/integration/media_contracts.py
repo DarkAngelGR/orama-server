@@ -72,7 +72,9 @@ def jellyfin():
         port = int(mapped.stdout.split()[0].rsplit(":", 1)[1])
         for _ in range(120):
             try:
-                if _request(port, "/System/Info/Public")[0] == 200:
+                status, raw = _request(port, "/System/Info/Public")
+                # Early answers can be 200 without the wizard flag: wait for the flag.
+                if status == 200 and "StartupWizardCompleted" in (_json(raw) or {}):
                     break
             except OSError:
                 pass
