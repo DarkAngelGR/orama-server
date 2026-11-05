@@ -27,6 +27,11 @@ def _load(*parts: str) -> dict:
     return data
 
 
+def load_trash() -> dict:
+    """``trash.yaml``: symbolic format name -> TRaSH ids per app, and templates per quality."""
+    return _load("trash.yaml")
+
+
 def device_names() -> list[str]:
     return sorted(
         p.name.removesuffix(".yaml")

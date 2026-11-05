@@ -6,9 +6,10 @@ profile's name in the app, and the API keys, which the Agent reads from its own 
 (never from the request). The YAML is Recyclarr 8.8.1's config schema (v8):
 
 - ``quality_profiles: [{trash_id, name, reset_unmatched_scores}]`` makes a guide-backed
-  profile (qualities and TRaSH scores from the guide), named "<guide name> (Orama)" so it
-  never clashes with a profile the owner made. Resetting unmatched scores is what TRaSH's
-  own templates do; it also clears a score Orama no longer sends (device switch).
+  profile (qualities and TRaSH scores from the guide). It is always named ``Orama``, one
+  per app, whatever the template: a quality change updates the same profile instead of
+  leaving an old one behind. Resetting unmatched scores is what TRaSH's own templates do;
+  it also clears a score Orama no longer sends (device or quality switch).
 - ``custom_format_groups.add`` lists the groups the TRaSH template lists.
 - ``custom_formats: [{trash_ids, assign_scores_to: [{name, score}]}]`` sets Orama's device
   scores in Orama's profiles only; one entry per distinct score.
@@ -31,7 +32,7 @@ STATE_FILE = "recyclarr.state"  # in app-env: digest of the last config that syn
 CONTAINER_CONFIG = f"/config/{CONFIG_FILE}"
 INSTANCE = "orama"
 MAX_SCORES = 200
-MAX_TEMPLATES = 3
+PROFILE_NAME = "Orama"  # the one quality profile Orama manages in each app
 MIN_SCORE, MAX_SCORE = -10000, 10000
 _TEMPLATE_NAME = re.compile(r"[a-z0-9-]{1,80}")
 _TRASH_ID = re.compile(r"[0-9a-f]{32}")
@@ -42,7 +43,6 @@ class Template:
     """One TRaSH config template as Recyclarr's config-templates repository defines it."""
 
     trash_id: str  # the guide quality profile
-    name: str  # the profile's name in the app
     groups: tuple[str, ...]  # custom format groups the template adds
 
 
@@ -64,31 +64,31 @@ APPS = {
 TEMPLATES: dict[str, dict[str, Template]] = {
     "radarr": {
         "hd-bluray-web": Template(
-            "d1d67249d3890e49bc12e275d989a7e9", "HD Bluray + WEB (Orama)",
+            "d1d67249d3890e49bc12e275d989a7e9",
             ("f8bf8eab4617f12dfdbd16303d8da245", "a3ac6af01d78e4f21fcb75f601ac96df"),
         ),
         "uhd-bluray-web": Template(
-            "64fb5f9858489bdac2af690e27c8f42f", "UHD Bluray + WEB (Orama)",
+            "64fb5f9858489bdac2af690e27c8f42f",
             ("ff204bbcecdd487d1cefcefdbf0c278d", "a3ac6af01d78e4f21fcb75f601ac96df"),
         ),
         "remux-web-2160p": Template(
-            "fd161a61e3ab826d3a22d53f935696dd", "Remux + WEB 2160p (Orama)",
+            "fd161a61e3ab826d3a22d53f935696dd",
             ("ff204bbcecdd487d1cefcefdbf0c278d", "a3ac6af01d78e4f21fcb75f601ac96df"),
         ),
     },
     "sonarr": {
         "web-1080p": Template(
-            "72dae194fc92bf828f32cde7744e51a1", "WEB-1080p (Orama)",
+            "72dae194fc92bf828f32cde7744e51a1",
             ("158188097a58d7687dee647e04af0da3", "74aff4168620ed49dcc67e92b2c2a5b4",
              "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
         ),
         "web-2160p": Template(
-            "d1498e7d189fbe6c7110ceaabb7473e6", "WEB-2160p (Orama)",
+            "d1498e7d189fbe6c7110ceaabb7473e6",
             ("e3f37512790f00d0e89e54fe5e790d1c", "74aff4168620ed49dcc67e92b2c2a5b4",
              "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
         ),
         "remux-web-2160p": Template(
-            "76a5053bdb2d1e4a8f16a69a37d46c12", "Remux + WEB 2160p (Orama)",
+            "76a5053bdb2d1e4a8f16a69a37d46c12",
             ("e3f37512790f00d0e89e54fe5e790d1c", "74aff4168620ed49dcc67e92b2c2a5b4",
              "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
         ),
@@ -126,15 +126,13 @@ def check(args: Any) -> tuple[Apps, bool]:
 
 
 def _check_templates(app: str, templates: Any) -> list[str]:
-    if not isinstance(templates, list) or not 1 <= len(templates) <= MAX_TEMPLATES:
-        raise Refused(f"Choose between 1 and {MAX_TEMPLATES} quality templates per app.")
+    if not isinstance(templates, list) or len(templates) != 1:
+        raise Refused("Choose exactly one quality template per app.")
     for name in templates:
         if not isinstance(name, str) or not _TEMPLATE_NAME.fullmatch(name):
             raise Refused("A quality template name is not valid.")
         if name not in TEMPLATES[app]:
             raise Refused(f"The quality template {name!r} is not one Orama uses for {app}.")
-    if len(set(templates)) != len(templates):
-        raise Refused("A quality template is listed twice.")
     return list(templates)
 
 
@@ -157,18 +155,18 @@ def render(apps: Apps, keys: dict[str, str]) -> dict[str, Any]:
     doc: dict[str, Any] = {}
     for app in sorted(apps):
         spec, fixed = apps[app], APPS[app]
-        templates = [TEMPLATES[app][name] for name in spec["templates"]]
-        groups = list(dict.fromkeys(g for t in templates for g in t.groups))
+        template = TEMPLATES[app][spec["templates"][0]]
         instance: dict[str, Any] = {
             "base_url": fixed.base_url,
             "api_key": keys[app],
             "delete_old_custom_formats": False,
             "quality_definition": {"type": fixed.quality_definition},
-            "quality_profiles": [
-                {"trash_id": t.trash_id, "name": t.name, "reset_unmatched_scores": {"enabled": True}}
-                for t in templates
-            ],
-            "custom_format_groups": {"add": [{"trash_id": g} for g in groups]},
+            "quality_profiles": [{
+                "trash_id": template.trash_id,
+                "name": PROFILE_NAME,
+                "reset_unmatched_scores": {"enabled": True},
+            }],
+            "custom_format_groups": {"add": [{"trash_id": g} for g in template.groups]},
         }
         by_score: dict[int, list[str]] = {}
         for trash_id, score in spec["scores"].items():
@@ -176,7 +174,7 @@ def render(apps: Apps, keys: dict[str, str]) -> dict[str, Any]:
         if by_score:
             instance["custom_formats"] = [
                 {"trash_ids": sorted(by_score[score]),
-                 "assign_scores_to": [{"name": t.name, "score": score} for t in templates]}
+                 "assign_scores_to": [{"name": PROFILE_NAME, "score": score}]}
                 for score in sorted(by_score)
             ]
         doc[app] = {INSTANCE: instance}

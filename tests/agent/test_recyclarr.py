@@ -174,6 +174,7 @@ def test_refuses_caller_yaml_and_unexpected_shapes(args):
     [], ["web-1080p"],  # a Sonarr template for Radarr
     ["HD-BLURAY-WEB"], ["hd bluray"], ["../hd-bluray-web"], ["a" * 81], ["sqp-1-1080p"],
     "hd-bluray-web", [7], ["hd-bluray-web", "hd-bluray-web"],
+    ["hd-bluray-web", "uhd-bluray-web"],  # exactly one template: one Orama profile per app
 ])
 def test_refuses_unknown_or_malformed_templates(templates):
     with pytest.raises(Refused):
@@ -235,7 +236,6 @@ def test_render_is_fixed_recyclarr_v8_config():
     }})
     doc = recyclarr.render(apps, {"radarr": RADARR_KEY, "sonarr": SONARR_KEY})
     radarr_profile = recyclarr.TEMPLATES["radarr"]["hd-bluray-web"]
-    assert radarr_profile.name.endswith(" (Orama)")
     assert doc["radarr"] == {"orama": {
         "base_url": "http://radarr:7878",
         "api_key": RADARR_KEY,
@@ -243,21 +243,22 @@ def test_render_is_fixed_recyclarr_v8_config():
         "quality_definition": {"type": "movie"},
         "quality_profiles": [{
             "trash_id": radarr_profile.trash_id,
-            "name": radarr_profile.name,
+            "name": "Orama",
             "reset_unmatched_scores": {"enabled": True},
         }],
         "custom_format_groups": {"add": [{"trash_id": g} for g in radarr_profile.groups]},
         "custom_formats": [
             {"trash_ids": [tid(1), tid(3)],
-             "assign_scores_to": [{"name": radarr_profile.name, "score": -10000}]},
+             "assign_scores_to": [{"name": "Orama", "score": -10000}]},
             {"trash_ids": [tid(2)],
-             "assign_scores_to": [{"name": radarr_profile.name, "score": 1500}]},
+             "assign_scores_to": [{"name": "Orama", "score": 1500}]},
         ],
     }}
     sonarr = doc["sonarr"]["orama"]
     assert sonarr["base_url"] == "http://sonarr:8989"
     assert sonarr["api_key"] == SONARR_KEY
     assert sonarr["quality_definition"] == {"type": "series"}
+    assert sonarr["quality_profiles"][0]["name"] == "Orama"
     assert "custom_formats" not in sonarr  # nothing for Orama to score
 
 
@@ -328,13 +329,27 @@ def test_device_switch_drops_old_orama_scores(env):  # [RF3]
             assert profile["reset_unmatched_scores"] == {"enabled": True}
 
 
+def test_quality_switch_keeps_the_one_orama_profile(env):  # [RF3]
+    env.client.recyclarr_sync(apps_for(quality="4k"))
+    old = env.seen.doc
+    assert env.client.recyclarr_sync(apps_for(quality="1080p")) is True
+    new = env.seen.doc
+    for app in ("radarr", "sonarr"):
+        (before,) = old[app]["orama"]["quality_profiles"]
+        (after,) = new[app]["orama"]["quality_profiles"]
+        assert before["trash_id"] != after["trash_id"]  # another TRaSH profile ...
+        assert before["name"] == after["name"] == "Orama"  # ... in the same app profile
+        for cf in new[app]["orama"].get("custom_formats", []):
+            assert cf["assign_scores_to"][0]["name"] == "Orama"
+
+
 def test_user_custom_formats_are_left_alone(env):
     env.client.recyclarr_sync(apps_for())
     for inst in env.seen.doc.values():
         cfg = inst["orama"]
         assert cfg["delete_old_custom_formats"] is False
         names = {p["name"] for p in cfg["quality_profiles"]}
-        assert all(n.endswith(" (Orama)") for n in names)
+        assert names == {"Orama"}
         for cf in cfg.get("custom_formats", []):
             assert {a["name"] for a in cf["assign_scores_to"]} <= names
 
@@ -400,14 +415,37 @@ def test_keys_never_logged(env, caplog):
 # ---------------------------------------------------------------- the docker run
 
 
+RM = ["docker", "rm", "-f", "orama-recyclarr"]
+
+
 class FakeRun:
-    def __init__(self, rc=0, stderr=""):
-        self.rc, self.stderr = rc, stderr
+    """Answers ``docker rm`` with ``rm`` and ``docker run`` with ``run``: (rc, stderr) or an
+    exception to raise."""
+
+    def __init__(self, run=(0, ""), rm=(0, "")):
+        self.results = {"rm": rm, "run": run}
         self.calls = []
 
     def __call__(self, argv, **kw):
         self.calls.append((argv, kw))
-        return subprocess.CompletedProcess(argv, self.rc, stdout="", stderr=self.stderr)
+        result = self.results[argv[1]]
+        if isinstance(result, Exception):
+            raise result
+        rc, stderr = result
+        return subprocess.CompletedProcess(argv, rc, stdout="", stderr=stderr)
+
+    def argvs(self):
+        return [argv for argv, _ in self.calls]
+
+
+def run_argv(roots):
+    return [
+        "docker", "run", "--rm", "--name", "orama-recyclarr",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--network", "orama-net", "--user", "1000:1001",
+        "-v", f"{roots.config}/config/recyclarr:/config",
+        CATALOG["recyclarr"].image, "sync", "--config", "/config/recyclarr.yml",
+    ]
 
 
 def test_docker_run_argv_is_pinned(roots, monkeypatch):
@@ -415,40 +453,67 @@ def test_docker_run_argv_is_pinned(roots, monkeypatch):
     monkeypatch.setenv("RECYCLARR_CONFIG_DIR", "/evil")
     run = FakeRun()
     ComposeRunner(roots, run=run).recyclarr_sync()
-    (argv, kw), = run.calls
-    assert argv == [
-        "docker", "run", "--rm", "--network", "orama-net", "--user", "1000:1001",
-        "-v", f"{roots.config}/config/recyclarr:/config",
-        CATALOG["recyclarr"].image, "sync", "--config", "/config/recyclarr.yml",
-    ]
-    assert kw["timeout"] == 900 and kw["shell"] is False
-    assert set(kw["env"]) <= {"PATH", "HOME", "DOCKER_HOST"}
+    assert run.argvs() == [RM, run_argv(roots)]  # a leftover container is removed first
+    rm_kw, run_kw = (kw for _, kw in run.calls)
+    assert rm_kw["timeout"] == 60 and run_kw["timeout"] == 900
+    for kw in (rm_kw, run_kw):
+        assert kw["shell"] is False
+        assert set(kw["env"]) <= {"PATH", "HOME", "DOCKER_HOST"}
+
+
+def test_no_leftover_container_is_fine(roots):
+    run = FakeRun(rm=(1, "Error response from daemon: No such container: orama-recyclarr"))
+    ComposeRunner(roots, run=run).recyclarr_sync()
+    assert run.argvs() == [RM, run_argv(roots)]
+
+
+def test_container_that_cannot_be_removed_stops_the_run(roots):
+    run = FakeRun(rm=(1, "Error response from daemon: permission denied"))
+    with pytest.raises(RunnerError, match="Updating the quality profiles failed"):
+        ComposeRunner(roots, run=run).recyclarr_sync()
+    assert run.argvs() == [RM]  # never started next to a keyed container
 
 
 def test_docker_run_failure_is_plain(roots):
+    run = FakeRun(run=(1, f"api_key: {RADARR_KEY}"))
     with pytest.raises(RunnerError) as err:
-        ComposeRunner(roots, run=FakeRun(rc=1, stderr=f"api_key: {RADARR_KEY}")).recyclarr_sync()
+        ComposeRunner(roots, run=run).recyclarr_sync()
     assert RADARR_KEY not in str(err.value)
     assert RADARR_KEY in err.value.detail  # only ever logged redacted
+    assert run.argvs() == [RM, run_argv(roots), RM]
 
 
-def test_docker_run_timeout_is_plain(roots):
-    def slow(argv, **kw):
-        raise subprocess.TimeoutExpired(argv, kw["timeout"], stderr=RADARR_KEY)
-
+def test_docker_run_timeout_removes_the_container(roots):
+    run = FakeRun(run=subprocess.TimeoutExpired(["docker"], 900, stderr=RADARR_KEY))
     with pytest.raises(RunnerError, match="did not finish in time") as err:
-        ComposeRunner(roots, run=slow).recyclarr_sync()
+        ComposeRunner(roots, run=run).recyclarr_sync()
     assert RADARR_KEY not in str(err.value)
+    # The killed CLI leaves the container running with the keys: it is removed.
+    assert run.argvs() == [RM, run_argv(roots), RM]
+
+
+def test_failed_cleanup_after_timeout_still_reports_the_timeout(roots):
+    class RmFailsLater(FakeRun):
+        def __call__(self, argv, **kw):
+            if argv == RM and self.calls:  # the clean-up after the run, not the first rm
+                self.results["rm"] = (1, "Cannot connect to the Docker daemon")
+            return super().__call__(argv, **kw)
+
+    run = RmFailsLater(run=subprocess.TimeoutExpired(["docker"], 900))
+    with pytest.raises(RunnerError, match="did not finish in time"):
+        ComposeRunner(roots, run=run).recyclarr_sync()
+    assert run.argvs() == [RM, run_argv(roots), RM]
 
 
 @pytest.fixture
 def fake_docker(tmp_path, monkeypatch):
-    """A `docker` that prints the YAML it was given (keys and all) and fails."""
+    """A `docker` whose run prints the YAML it was given (keys and all) and fails."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     script = bin_dir / "docker"
     script.write_text(
         "#!/usr/bin/env bash\n"
+        '[[ "$1" == rm ]] && exit 0\n'
         'for a in "$@"; do case "$a" in *:/config) dir="${a%:/config}";; esac; done\n'
         'cat "$dir/recyclarr.yml" >&2\n'
         "exit 3\n"

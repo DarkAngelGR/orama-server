@@ -9,8 +9,8 @@ from orama.agent_client import AgentError
 from orama.profiles.compile import UNPLAYABLE_SCORE, compile_profile
 from orama.wiring.engine import run_steps
 from orama.wiring.http import Call, Response
-from orama.wiring.recyclarr import format_names, recyclarr_steps
-from orama_agent.recyclarr import TEMPLATES
+from orama.wiring.recyclarr import PROFILE_NAME, format_names, recyclarr_steps
+from orama_agent import recyclarr as agent_recyclarr
 
 SONARR_KEY = "sonkey" * 4
 RADARR_KEY = "radkey" * 4
@@ -40,7 +40,8 @@ class FakeArr:
             {"format": 900, "name": "My Own Format", "score": 42}]}]
 
     def apply(self, spec):
-        """What a successful Recyclarr sync does: Orama's profile with exactly its scores."""
+        """What a successful Recyclarr sync does: the one "Orama" profile, exactly its scores
+        (any score it was not given reset), whatever the template."""
         names = format_names(self.app)
         by_name = {f["name"]: f["id"] for f in self.formats}
         for trash_id in sorted(names):
@@ -48,14 +49,15 @@ class FakeArr:
             if name not in by_name:
                 by_name[name] = len(self.formats) + 1
                 self.formats.append({"id": by_name[name], "name": name})
-        for template in spec["templates"]:
-            pname = TEMPLATES[self.app][template].name
-            items = [{"format": by_name[names[t]], "name": names[t], "score": s}
-                     for t, s in spec["scores"].items()]
-            items += [{"format": 900, "name": "My Own Format", "score": 0}]
-            self.profiles = [p for p in self.profiles if p["name"] != pname]
-            self.profiles.append({"id": len(self.profiles) + 10, "name": pname,
-                                  "formatItems": items})
+        items = [{"format": by_name[names[t]], "name": names[t], "score": s}
+                 for t, s in spec["scores"].items()]
+        items += [{"format": 900, "name": "My Own Format", "score": 0}]
+        mine = next((p for p in self.profiles if p["name"] == "Orama"), None)
+        if mine is None:
+            mine = {"id": 10, "name": "Orama"}
+            self.profiles.append(mine)
+        mine["formatItems"] = items
+        mine["template"] = spec["templates"][0]
 
     def route(self, call):
         assert call.headers == {"X-Api-Key": KEYS[self.app]}
@@ -166,43 +168,42 @@ def test_scores_lost_in_the_app_are_restored_with_force():
     assert agent.calls[-1][1] is True
 
 
-def test_device_switch_leaves_no_stale_orama_scores():  # [RF3]
+def test_device_and_quality_switch_use_the_one_orama_profile():  # [RF3]
     arrs, http, agent = world()
-    run_steps(steps_for(make_setup(device="samsung_s95f"), http, agent))
-    (result,) = run_steps(steps_for(make_setup(device="apple_tv"), http, agent))
+    run_steps(steps_for(make_setup(device="samsung_s95f", quality="4k"), http, agent))
+    setup = make_setup(device="apple_tv", quality="1080p")
+    (result,) = run_steps(steps_for(setup, http, agent))
     assert result.status == "changed"
-    wanted = compile_profile("apple_tv", "mixed")
+    assert result.message == "set the quality profiles for your playback device"
+    wanted = compile_profile("apple_tv", "1080p")
     for app, arr in arrs.items():
+        orama = [p for p in arr.profiles if p["name"] != "Any"]
+        assert [p["name"] for p in orama] == ["Orama"]  # no profile left behind
+        assert orama[0]["template"] == wanted[app]["templates"][0]
         names = format_names(app)
-        blocked = {names[t] for t, s in wanted[app]["scores"].items() if s == UNPLAYABLE_SCORE}
-        for p in arr.profiles:
-            if p["name"].endswith(" (Orama)"):
-                stale = {i["name"] for i in p["formatItems"] if i["score"] == UNPLAYABLE_SCORE}
-                assert stale == blocked
+        blocked = {i["name"] for i in orama[0]["formatItems"] if i["score"] == UNPLAYABLE_SCORE}
+        assert blocked == {names[t] for t, s in wanted[app]["scores"].items()
+                           if s == UNPLAYABLE_SCORE}
 
 
-def test_stale_block_left_by_recyclarr_fails_verification():  # [RF3]
+def test_verification_only_needs_the_scores_orama_sent():
     arrs, http, agent = world()
     run_steps(steps_for(make_setup(device="samsung_s95f"), http, agent))
-
-    old = compile_profile("samsung_s95f", "mixed")["radarr"]["scores"]
+    # A -10000 Orama no longer sends (or TRaSH's own score) does not fail the check:
+    # Recyclarr's reset_unmatched_scores owns clearing it.
     new = compile_profile("apple_tv", "mixed")["radarr"]["scores"]
-    dropped = next(t for t, s in old.items() if s == UNPLAYABLE_SCORE and t not in new)
-    name = format_names("radarr")[dropped]
+    names = format_names("radarr")
+    extra = next(t for t in names if t not in new)
+    fid = next(f["id"] for f in arrs["radarr"].formats if f["name"] == names[extra])
+    run_steps(steps_for(make_setup(device="apple_tv"), http, agent))
+    orama = next(p for p in arrs["radarr"].profiles if p["name"] == "Orama")
+    orama["formatItems"].append({"format": fid, "name": names[extra], "score": UNPLAYABLE_SCORE})
+    (result,) = run_steps(steps_for(make_setup(device="apple_tv"), http, agent))
+    assert result.status == "unchanged"
 
-    class KeepsOld(FakeAgent):
-        def recyclarr_sync(self, apps, force=False):
-            ran = super().recyclarr_sync(apps, force)
-            for p in self.arrs["radarr"].profiles:  # sets the new scores, keeps one old block
-                if p["name"].endswith(" (Orama)"):
-                    fid = next(f["id"] for f in self.arrs["radarr"].formats if f["name"] == name)
-                    p["formatItems"].append({"format": fid, "name": name, "score": -10000})
-            return ran
 
-    keeps = KeepsOld(arrs)
-    (result,) = run_steps(steps_for(make_setup(device="apple_tv"), http, keeps))
-    assert result.status == "failed"
-    assert result.message.startswith("Radarr does not have Orama's quality scores")
+def test_profile_name_matches_the_agents():
+    assert PROFILE_NAME == agent_recyclarr.PROFILE_NAME == "Orama"
 
 
 def test_user_formats_and_profiles_untouched():
