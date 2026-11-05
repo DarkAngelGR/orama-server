@@ -4,6 +4,9 @@ No shell is used and no string from a request reaches argv except an app name th
 an exact key of the catalogue. Every call pins the project directory, project name,
 compose file and an Agent-owned empty ``--env-file``, so no ``.env`` file and no
 ``COMPOSE_*`` variable can change what compose does.
+
+The one other command is Recyclarr's one-shot ``docker run``, whose argv is fixed from the
+Agent's own roots and the catalogue: nothing from a request reaches it at all.
 """
 
 from __future__ import annotations
@@ -18,8 +21,9 @@ from typing import Any
 import yaml
 
 from orama.catalog import CATALOG
-from orama.layout import app_env_dir
-from orama_agent.validate import PROJECT_NAME, Refused, Roots
+from orama.layout import app_config_dir, app_env_dir
+from orama_agent.recyclarr import CONTAINER_CONFIG
+from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots
 
 COMPOSE_FILE = "compose.yaml"
 AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
@@ -29,6 +33,7 @@ AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
 PULL_TIMEOUT = 3600  # a first install downloads every app image
 UP_TIMEOUT = 720  # up, restart, stop and start
 CALL_TIMEOUT = 60  # ps
+RECYCLARR_TIMEOUT = 900  # one sync of Sonarr and Radarr, including its guide download
 STDERR_TAIL_LINES = 40
 LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
 _WHAT = {
@@ -38,6 +43,7 @@ _WHAT = {
     "restart": "Restarting the app",
     "stop": "Stopping the app",
     "start": "Starting the app",
+    "recyclarr": "Updating the quality profiles",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -110,8 +116,9 @@ class ComposeRunner:
         ]
 
     def _compose(self, file: str, args: list[str], timeout: int) -> str:
-        argv = self._prefix(file) + args
-        what = _WHAT[args[0]]
+        return self._exec(self._prefix(file) + args, _WHAT[args[0]], timeout)
+
+    def _exec(self, argv: list[str], what: str, timeout: int) -> str:
         try:
             proc = self._run(
                 argv, env=_child_env(), capture_output=True, text=True, timeout=timeout,
@@ -172,6 +179,19 @@ class ComposeRunner:
     def _one_app(self, action: str, app: str) -> None:
         self._compose(str(project_file(self._roots)), [action, _checked_app(app)], UP_TIMEOUT)
 
+    def recyclarr_sync(self) -> None:
+        """Run Recyclarr once on the config the Agent wrote, as PUID:PGID on orama-net."""
+        folder = app_config_dir(PurePosixPath(self._roots.config), "recyclarr")
+        argv = [
+            "docker", "run", "--rm",
+            "--network", SHARED_NETWORK,
+            "--user", f"{self._roots.puid}:{self._roots.pgid}",
+            "-v", f"{folder}:/config",
+            CATALOG["recyclarr"].image,
+            "sync", "--config", CONTAINER_CONFIG,
+        ]
+        self._exec(argv, _WHAT["recyclarr"], RECYCLARR_TIMEOUT)
+
 
 class FakeRunner:
     """Test double: same methods, records calls, no Docker.
@@ -181,6 +201,9 @@ class FakeRunner:
     ``up`` returns every service the first time and ``[]`` while the compose file is
     unchanged since the last successful ``up``. ``fail_next_up`` makes the next ``up``
     raise once, without recording success.
+
+    ``recyclarr_sync`` counts calls and runs ``on_recyclarr`` (if set) while the config
+    file exists; ``fail_next_recyclarr`` makes the next one fail once.
     """
 
     def __init__(self) -> None:
@@ -193,6 +216,9 @@ class FakeRunner:
         self.fail_next_up = False
         self._last: str | None = None
         self._services: list[str] = []
+        self.recyclarr_calls = 0
+        self.on_recyclarr: Callable[[], None] | None = None
+        self.fail_next_recyclarr = False
 
     def up(self, project_file: str) -> list[str]:
         self.up_calls += 1
@@ -220,3 +246,11 @@ class FakeRunner:
     def start(self, app: str) -> None:
         self.starts.append(_checked_app(app))
         self._stopped.discard(app)
+
+    def recyclarr_sync(self) -> None:
+        self.recyclarr_calls += 1
+        if self.on_recyclarr is not None:
+            self.on_recyclarr()
+        if self.fail_next_recyclarr:
+            self.fail_next_recyclarr = False
+            raise RunnerError(f"{_WHAT['recyclarr']} failed. {LOG_HINT}", "exit code 1")

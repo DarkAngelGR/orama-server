@@ -1,0 +1,191 @@
+"""recyclarr-sync: the Agent renders Recyclarr's YAML itself from validated choices.
+
+Orama sends only template names and custom-format scores per app. Everything else in the
+file is fixed here: the base URLs, the quality profile each template stands for, the
+profile's name in the app, and the API keys, which the Agent reads from its own env files
+(never from the request). The YAML is Recyclarr 8.8.1's config schema (v8):
+
+- ``quality_profiles: [{trash_id, name, reset_unmatched_scores}]`` makes a guide-backed
+  profile (qualities and TRaSH scores from the guide), named "<guide name> (Orama)" so it
+  never clashes with a profile the owner made. Resetting unmatched scores is what TRaSH's
+  own templates do; it also clears a score Orama no longer sends (device switch).
+- ``custom_format_groups.add`` lists the groups the TRaSH template lists.
+- ``custom_formats: [{trash_ids, assign_scores_to: [{name, score}]}]`` sets Orama's device
+  scores in Orama's profiles only; one entry per distinct score.
+- ``delete_old_custom_formats: false``: custom formats the owner made are never deleted.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from orama.catalog import CATALOG
+from orama_agent.validate import Refused
+
+CONFIG_FILE = "recyclarr.yml"  # in <config>/config/recyclarr, deleted after every run
+STATE_FILE = "recyclarr.state"  # in app-env: digest of the last config that synced
+CONTAINER_CONFIG = f"/config/{CONFIG_FILE}"
+INSTANCE = "orama"
+MAX_SCORES = 200
+MAX_TEMPLATES = 3
+MIN_SCORE, MAX_SCORE = -10000, 10000
+_TEMPLATE_NAME = re.compile(r"[a-z0-9-]{1,80}")
+_TRASH_ID = re.compile(r"[0-9a-f]{32}")
+
+
+@dataclass(frozen=True)
+class Template:
+    """One TRaSH config template as Recyclarr's config-templates repository defines it."""
+
+    trash_id: str  # the guide quality profile
+    name: str  # the profile's name in the app
+    groups: tuple[str, ...]  # custom format groups the template adds
+
+
+@dataclass(frozen=True)
+class _App:
+    base_url: str
+    key_env: str
+    quality_definition: str
+
+
+APPS = {
+    "radarr": _App("http://radarr:7878", "RADARR__AUTH__APIKEY", "movie"),
+    "sonarr": _App("http://sonarr:8989", "SONARR__AUTH__APIKEY", "series"),
+}
+
+# Copied from recyclarr/config-templates (master, schema v8), templates/<name>.yml: the
+# quality profile trash_id and the uncommented `custom_format_groups.add` entries. These are
+# the Plan 2b notes' quality candidates. Public TRaSH ids, not secrets.
+TEMPLATES: dict[str, dict[str, Template]] = {
+    "radarr": {
+        "hd-bluray-web": Template(
+            "d1d67249d3890e49bc12e275d989a7e9", "HD Bluray + WEB (Orama)",
+            ("f8bf8eab4617f12dfdbd16303d8da245", "a3ac6af01d78e4f21fcb75f601ac96df"),
+        ),
+        "uhd-bluray-web": Template(
+            "64fb5f9858489bdac2af690e27c8f42f", "UHD Bluray + WEB (Orama)",
+            ("ff204bbcecdd487d1cefcefdbf0c278d", "a3ac6af01d78e4f21fcb75f601ac96df"),
+        ),
+        "remux-web-2160p": Template(
+            "fd161a61e3ab826d3a22d53f935696dd", "Remux + WEB 2160p (Orama)",
+            ("ff204bbcecdd487d1cefcefdbf0c278d", "a3ac6af01d78e4f21fcb75f601ac96df"),
+        ),
+    },
+    "sonarr": {
+        "web-1080p": Template(
+            "72dae194fc92bf828f32cde7744e51a1", "WEB-1080p (Orama)",
+            ("158188097a58d7687dee647e04af0da3", "74aff4168620ed49dcc67e92b2c2a5b4",
+             "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
+        ),
+        "web-2160p": Template(
+            "d1498e7d189fbe6c7110ceaabb7473e6", "WEB-2160p (Orama)",
+            ("e3f37512790f00d0e89e54fe5e790d1c", "74aff4168620ed49dcc67e92b2c2a5b4",
+             "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
+        ),
+        "remux-web-2160p": Template(
+            "76a5053bdb2d1e4a8f16a69a37d46c12", "Remux + WEB 2160p (Orama)",
+            ("e3f37512790f00d0e89e54fe5e790d1c", "74aff4168620ed49dcc67e92b2c2a5b4",
+             "85fae4a2294965b75710ef2989c850eb", "59c3af66780d08332fdc64e68297098f"),
+        ),
+    },
+}
+
+Apps = dict[str, dict[str, Any]]  # {app: {"templates": [str], "scores": {trash_id: int}}}
+
+
+def _expect(value: Any, keys: set[str], what: str) -> None:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise Refused(f"{what} must be an object with exactly: {', '.join(sorted(keys))}.")
+
+
+def check(args: Any) -> tuple[Apps, bool]:
+    """The request's apps (validated copy) and whether to run even if nothing changed."""
+    if not isinstance(args, dict) or not ({"apps"} <= set(args) <= {"apps", "force"}):
+        raise Refused("This command takes apps (and optionally force).")
+    force = args.get("force", False)
+    if not isinstance(force, bool):
+        raise Refused("force must be true or false.")
+    apps = args["apps"]
+    if not isinstance(apps, dict) or not apps:
+        raise Refused("apps must name Sonarr, Radarr or both.")
+    out: Apps = {}
+    for app, spec in apps.items():
+        if app not in APPS:
+            raise Refused("Recyclarr only manages Sonarr and Radarr.")
+        _expect(spec, {"templates", "scores"}, f"The {app} choice")
+        out[app] = {
+            "templates": _check_templates(app, spec["templates"]),
+            "scores": _check_scores(spec["scores"]),
+        }
+    return out, force
+
+
+def _check_templates(app: str, templates: Any) -> list[str]:
+    if not isinstance(templates, list) or not 1 <= len(templates) <= MAX_TEMPLATES:
+        raise Refused(f"Choose between 1 and {MAX_TEMPLATES} quality templates per app.")
+    for name in templates:
+        if not isinstance(name, str) or not _TEMPLATE_NAME.fullmatch(name):
+            raise Refused("A quality template name is not valid.")
+        if name not in TEMPLATES[app]:
+            raise Refused(f"The quality template {name!r} is not one Orama uses for {app}.")
+    if len(set(templates)) != len(templates):
+        raise Refused("A quality template is listed twice.")
+    return list(templates)
+
+
+def _check_scores(scores: Any) -> dict[str, int]:
+    if not isinstance(scores, dict):
+        raise Refused("Scores must be an object of custom format id to score.")
+    if len(scores) > MAX_SCORES:
+        raise Refused(f"At most {MAX_SCORES} scores per app.")
+    for trash_id, score in scores.items():
+        if not isinstance(trash_id, str) or not _TRASH_ID.fullmatch(trash_id):
+            raise Refused("A custom format id is not valid.")
+        if (not isinstance(score, int) or isinstance(score, bool)
+                or not MIN_SCORE <= score <= MAX_SCORE):
+            raise Refused(f"Scores must be whole numbers from {MIN_SCORE} to {MAX_SCORE}.")
+    return dict(scores)
+
+
+def render(apps: Apps, keys: dict[str, str]) -> dict[str, Any]:
+    """The whole Recyclarr config for ``apps``; ``keys`` are the apps' API keys."""
+    doc: dict[str, Any] = {}
+    for app in sorted(apps):
+        spec, fixed = apps[app], APPS[app]
+        templates = [TEMPLATES[app][name] for name in spec["templates"]]
+        groups = list(dict.fromkeys(g for t in templates for g in t.groups))
+        instance: dict[str, Any] = {
+            "base_url": fixed.base_url,
+            "api_key": keys[app],
+            "delete_old_custom_formats": False,
+            "quality_definition": {"type": fixed.quality_definition},
+            "quality_profiles": [
+                {"trash_id": t.trash_id, "name": t.name, "reset_unmatched_scores": {"enabled": True}}
+                for t in templates
+            ],
+            "custom_format_groups": {"add": [{"trash_id": g} for g in groups]},
+        }
+        by_score: dict[int, list[str]] = {}
+        for trash_id, score in spec["scores"].items():
+            by_score.setdefault(score, []).append(trash_id)
+        if by_score:
+            instance["custom_formats"] = [
+                {"trash_ids": sorted(by_score[score]),
+                 "assign_scores_to": [{"name": t.name, "score": score} for t in templates]}
+                for score in sorted(by_score)
+            ]
+        doc[app] = {INSTANCE: instance}
+    return doc
+
+
+def digest(apps: Apps) -> str:
+    """Identifies what a sync would do, without the keys: the rendered config with the
+    keys left out, and the pinned Recyclarr image."""
+    doc = render(apps, {app: "" for app in apps})
+    text = json.dumps({"image": CATALOG["recyclarr"].image, "config": doc}, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()

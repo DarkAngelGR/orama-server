@@ -27,10 +27,12 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import yaml
+
 from orama.catalog import CATALOG
 from orama.compose import dump_yaml
 from orama.layout import app_config_dir, app_env_dir, data_folders
-from orama_agent import seed
+from orama_agent import recyclarr, seed
 from orama_agent.runner import AGENT_ENV_FILE, COMPOSE_FILE, RunnerError, project_file
 from orama_agent.validate import (
     Refused,
@@ -55,6 +57,8 @@ AGENT_DIR_MODE = 0o755  # <config>/config, root-owned
 ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
+COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
+                      "recyclarr-sync"})
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -216,6 +220,7 @@ class Agent:
             "status": self.status,
             "restart": self.restart,
             "seed-config": self.seed_config,
+            "recyclarr-sync": self.recyclarr_sync,
         }[cmd]
         with self._lock:
             return handler(args)
@@ -426,6 +431,59 @@ class Agent:
             os.close(dir_fd)
         return {"changed": True}
 
+    # ------------------------------------------------------------ recyclarr-sync
+
+    def recyclarr_sync(self, args: dict[str, Any]) -> dict[str, bool]:
+        """Sync Sonarr's and Radarr's quality profiles with Recyclarr, once.
+
+        The YAML is rendered here (``orama_agent.recyclarr``) with the API keys from the
+        Agent's own env files, written PUID:PGID 0600 into Recyclarr's config folder, and
+        deleted after the run whether it worked or not. When the config (keys left out) is
+        the one that last synced and ``force`` is not set, nothing runs.
+        """
+        apps, force = recyclarr.check(args)
+        wanted = recyclarr.digest(apps)
+        config_fd = os.open(self.roots.config, _DIR_FLAGS)
+        try:
+            env_fd = self._open_env_dir(config_fd)
+        finally:
+            os.close(config_fd)
+        try:
+            if not force and _read_small(env_fd, recyclarr.STATE_FILE).strip() == wanted:
+                return {"changed": False}
+            text = yaml.safe_dump(recyclarr.render(apps, self._arr_keys(env_fd, apps)),
+                                  sort_keys=False).encode()
+            _unlink(env_fd, recyclarr.STATE_FILE)  # a failed run must not count as done
+            folder = Path(app_config_dir(PurePosixPath(self.roots.config), "recyclarr"))
+            dir_fd, _ = self._open_dirs(folder, self._shared)
+            try:
+                try:
+                    _write_atomic(
+                        dir_fd, recyclarr.CONFIG_FILE, text, SEED_FILE_MODE,
+                        chown=lambda fd: self._chown(fd, self.roots.puid, self.roots.pgid),
+                    )
+                    self.runner.recyclarr_sync()
+                finally:
+                    _unlink(dir_fd, recyclarr.CONFIG_FILE)
+            finally:
+                os.close(dir_fd)
+            _write_atomic(env_fd, recyclarr.STATE_FILE, f"{wanted}\n".encode(), 0o600)
+        finally:
+            os.close(env_fd)
+        return {"changed": True}
+
+    def _arr_keys(self, env_fd: int, apps: dict[str, Any]) -> dict[str, str]:
+        keys = {}
+        for app in apps:
+            name = recyclarr.APPS[app].key_env
+            values = _parse_env_file(_read_small(env_fd, f"{app}.env")) or {}
+            if not values.get(name):
+                raise Refused(
+                    f"{app.title()}'s API key is not set up yet; run apply first."
+                )
+            keys[app] = values[name]
+        return keys
+
     def _ensure_agent_env_file(self) -> bool:
         """Create the empty --env-file if missing; True if a compose file exists yet."""
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
@@ -483,6 +541,13 @@ def _read_regular(dir_fd: int, name: str, shown: Path) -> str | None:
     finally:
         os.close(fd)
     return b"".join(chunks).decode("utf-8", "surrogateescape")
+
+
+def _unlink(dir_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
 
 
 def _exists(dir_fd: int, name: str) -> bool:
@@ -621,7 +686,7 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         if cmd == "self-update":
             log.info("%s id=%s: not implemented", cmd, shown_id)
             return {"id": rid, "ok": False, "error": "not implemented in Plan 1"}
-        if cmd not in {"ensure-folders", "apply", "status", "restart", "seed-config"}:
+        if cmd not in COMMANDS:
             log.warning("unknown command %s id=%s", _show(cmd), shown_id)
             return {"id": rid, "ok": False, "error": "unknown command"}
         try:
