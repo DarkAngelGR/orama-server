@@ -98,3 +98,40 @@ def test_save_setup_waits_for_the_setup_lock(tmp_path):
         assert not path.exists()
     t.join(5)
     assert done.is_set() and path.exists()
+
+
+def test_update_setup_reloads_applies_and_saves(tmp_path):
+    path = tmp_path / "setup.json"
+    first = make_setup(data_root=str(tmp_path / "data"), config_root=str(tmp_path / "cfg"))
+    state.save_setup(path, first)
+    newer = first.model_copy(update={"timezone": "Europe/Amsterdam"})
+    state.save_setup(path, newer)  # someone else saved after we loaded `first`
+    seen = []
+
+    def add_port(current):
+        seen.append(current)
+        return current.model_copy(update={"ports": {**current.ports, "plex": 32401}})
+
+    result = state.update_setup(path, add_port)
+    assert seen == [newer]  # fn got the file as it is now, not a stale copy
+    assert result == DesiredSetup.load(path)
+    assert result.timezone == "Europe/Amsterdam"
+    assert result.ports["plex"] == 32401
+
+
+def test_update_setup_holds_the_setup_lock(tmp_path):
+    path = tmp_path / "setup.json"
+    setup = make_setup(data_root=str(tmp_path / "data"), config_root=str(tmp_path / "cfg"))
+    state.save_setup(path, setup)
+    held = []
+
+    def check(current):
+        try:
+            with state.locked(state.setup_lock(tmp_path), blocking=False):
+                held.append(False)
+        except state.Busy:
+            held.append(True)
+        return current
+
+    state.update_setup(path, check)
+    assert held == [True]
