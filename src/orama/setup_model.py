@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+from ipaddress import IPv4Address
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
@@ -106,6 +107,9 @@ class UsenetServer(BaseModel):
     username: Annotated[str, Field(max_length=256), AfterValidator(_printable)] = ""
 
 
+LanguageCode = Annotated[str, Field(pattern=r"^[a-z]{2}$", strict=True)]
+
+
 class DesiredSetup(BaseModel):
     media_servers: frozenset[Literal["plex", "jellyfin"]]
     download_methods: frozenset[Literal["usenet", "torrent"]]
@@ -121,6 +125,24 @@ class DesiredSetup(BaseModel):
     removed_apps: frozenset[str] = frozenset()
     indexers: tuple[IndexerChoice, ...] = ()
     usenet_servers: tuple[UsenetServer, ...] = ()
+    subtitle_languages: tuple[LanguageCode, ...] = ("el", "en")
+    device: Literal["samsung_s95f", "lg", "apple_tv", "nvidia_shield", "safest"] = "safest"
+    quality: Literal["4k", "1080p", "mixed"] = "mixed"
+    lan_address: IPv4Address | None = None
+
+    @field_validator("subtitle_languages")
+    @classmethod
+    def _subtitle_languages_valid(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not 1 <= len(value) <= 5 or len(set(value)) != len(value):
+            raise ValueError("subtitle languages must contain 1–5 unique language codes")
+        return value
+
+    @field_validator("lan_address")
+    @classmethod
+    def _private_lan_address(cls, value: IPv4Address | None) -> IPv4Address | None:
+        if value is not None and not value.is_private:
+            raise ValueError("LAN address must be a private IPv4 address")
+        return value
 
     @field_validator("media_servers", "download_methods")
     @classmethod
