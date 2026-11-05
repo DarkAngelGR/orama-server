@@ -635,3 +635,47 @@ def test_setup_reader_retries_after_a_bad_file(state_dir, client):
     os.utime(state_dir / "setup.json", ns=(st.st_atime_ns, st.st_mtime_ns))
     assert client.get("/healthz", headers={"Host": LAN}).status_code == 200
     write_setup(state_dir)
+
+
+class _HookLock:
+    """A lock that runs ``hook`` after every release (to look into the gaps between
+    locked steps, deterministically)."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self.hook = None
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+        hook, self.hook = self.hook, None  # once, and never from inside the hook
+        if hook is not None:
+            hook()
+            self.hook = hook
+        return False
+
+
+@pytest.mark.parametrize("scope", ["address", "global"])
+def test_finish_records_the_failure_with_no_gap(clock, scope):
+    limiter = auth.RateLimiter(clock)
+    a = ip(203, 0, 113, 30)
+    if scope == "address":
+        for _ in range(4):
+            limiter.fail(a)
+    else:
+        for n in range(29):
+            limiter.fail(ip(198, 51, 100, n))  # 29 failures overall, none locked here
+    assert limiter.try_begin(a)  # the 5th (or 30th) check is now running
+    lock = _HookLock()
+    limiter._lock = lock
+    seen = []
+    lock.hook = lambda: seen.append(limiter.try_begin(ip(203, 0, 113, 30)))
+    limiter.finish(a, failed=True)
+    lock.hook = None
+    # After every release inside finish, a parallel check must already be refused.
+    assert seen and not any(seen)

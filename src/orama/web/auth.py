@@ -302,7 +302,12 @@ class RateLimiter:
             return True
 
     def finish(self, address: str, *, failed: bool) -> None:
-        """End a check started with ``try_begin``; only a failed one is counted."""
+        """End a check started with ``try_begin``; only a failed one is counted.
+
+        The reservation is released and the failure recorded under one lock, so no
+        parallel ``try_begin`` can slip in between.
+        """
+        now = self._clock()
         with self._lock:
             left = self._pending.get(address, 0) - 1
             if left > 0:
@@ -310,19 +315,23 @@ class RateLimiter:
             else:
                 self._pending.pop(address, None)
             self._pending_all = max(0, self._pending_all - 1)
-        if failed:
-            self.fail(address)
+            if failed:
+                self._record_failure(address, now)
 
     def fail(self, address: str) -> None:
         now = self._clock()
         with self._lock:
-            self._expire(now)
-            self._all.append(now)
-            times = self._failures.setdefault(address, deque())
-            times.append(now)
-            if len(times) >= PER_ADDRESS_FAILURES:
-                self._locked_until[address] = now + WINDOW
-                del self._failures[address]
+            self._record_failure(address, now)
+
+    def _record_failure(self, address: str, now: float) -> None:
+        """Count a failure; the caller holds the lock."""
+        self._expire(now)
+        self._all.append(now)
+        times = self._failures.setdefault(address, deque())
+        times.append(now)
+        if len(times) >= PER_ADDRESS_FAILURES:
+            self._locked_until[address] = now + WINDOW
+            del self._failures[address]
 
     def _blocked(self, address: str) -> bool:
         if address in self._locked_until:
