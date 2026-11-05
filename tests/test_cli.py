@@ -1336,3 +1336,159 @@ def test_bootstrap_lan_address_none_leaves_a_kept_one_alone(roots, capsys):
                lan_address=_private(7)).save(cfg / "orama" / "setup.json")
     assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": "none"})) == 0
     assert str(DesiredSetup.load(cfg / "orama" / "setup.json").lan_address) == _private(7)
+
+
+# ---------------------------------------------------------------- locks (Plan 3)
+
+BUSY = "Orama is already applying the setup — wait for it to finish, then try again."
+
+
+def test_apply_refuses_while_another_apply_runs(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    before = path.read_bytes()
+    with cli.state.locked(cli.state.apply_lock(cfg / "orama"), blocking=False):
+        code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr()
+    assert code == 1
+    assert BUSY in out.err
+    assert out.out == ""
+    assert agent.up_calls == 0
+    assert path.read_bytes() == before
+    assert not (cfg / "orama" / "secrets.bin").exists()
+
+
+def test_apply_holds_the_apply_lock_until_it_returns(capsys, roots, agent, monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    busy = []
+    real = cli.run_steps
+
+    def steps_while_checking(steps):
+        try:
+            with cli.state.locked(cli.state.apply_lock(cfg / "orama"), blocking=False):
+                busy.append(False)
+        except cli.state.Busy:
+            busy.append(True)
+        return real(steps)
+
+    monkeypatch.setattr(cli, "run_steps", steps_while_checking)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert busy == [True]
+    with cli.state.locked(cli.state.apply_lock(cfg / "orama"), blocking=False):
+        pass  # released afterwards
+    assert stat.S_IMODE(os.lstat(cfg / "orama" / "apply.lock").st_mode) == 0o600
+
+
+def test_apply_saves_setup_under_lock(capsys, roots, agent, monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    saved = []
+    real_save_setup, real_save = cli.state.save_setup, DesiredSetup.save
+    inside = []
+
+    def spy(where, setup):
+        saved.append(where)
+        inside.append(True)
+        try:
+            real_save_setup(where, setup)
+        finally:
+            inside.pop()
+
+    def direct_save(self, where):
+        assert inside, "apply saved the setup without the setup lock"
+        real_save(self, where)
+
+    monkeypatch.setattr(cli.state, "save_setup", spy)
+    monkeypatch.setattr(DesiredSetup, "save", direct_save)
+    assert cli.main(["apply", "--setup", str(path)]) == 0, capsys.readouterr().err
+    assert saved == [path]
+
+
+def test_apply_unusable_state_folder_is_plain(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    (cfg / "orama" / "apply.lock").symlink_to(cfg.parent / "nowhere")
+    assert cli.main(["apply", "--setup", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("✗ Cannot use Orama's files")
+    assert agent.up_calls == 0
+    assert not (cfg.parent / "nowhere").exists()
+
+
+def test_bootstrap_makes_the_setup_lock_private_and_orama_owned(capsys, roots):
+    data, cfg = roots
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    lock = cfg / "orama" / "setup.lock"
+    assert stat.S_IMODE(os.lstat(lock).st_mode) == 0o600
+    assert chowns.owner(lock) == (1000, 1001)
+    # A second run reuses it.
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+
+
+def test_bootstrap_writes_the_setup_while_holding_the_setup_lock(capsys, roots, monkeypatch):
+    data, cfg = roots
+    held = []
+    real = cli._write_atomic
+
+    def spy(dir_fd, name, *a, **kw):
+        if name.startswith("setup"):
+            try:
+                with cli.state.locked(cfg / "orama" / "setup.lock", blocking=False):
+                    held.append(False)
+            except cli.state.Busy:
+                held.append(True)
+        return real(dir_fd, name, *a, **kw)
+
+    monkeypatch.setattr(cli, "_write_atomic", spy)
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    assert held == [True]
+
+
+def test_bootstrap_waits_for_the_setup_lock_then_gives_up_plainly(capsys, roots, monkeypatch):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    monkeypatch.setattr(cli, "SETUP_LOCK_WAIT", 0.3)
+    with cli.state.locked(cfg / "orama" / "setup.lock"):
+        code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert out.err.startswith("✗ ") and "busy" in out.err
+    assert not (cfg / "orama" / "setup.draft.json").exists()
+
+
+def test_bootstrap_refuses_a_symlinked_setup_lock(capsys, roots):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    target = cfg.parent / "target"
+    target.write_text("untouched")
+    (cfg / "orama" / "setup.lock").symlink_to(target)
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert out.err.startswith("✗ ") and "link" in out.err
+    assert target.read_text() == "untouched"
+    assert chowns.owner(target) == (0, 0)
+    assert not (cfg / "orama" / "setup.draft.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["hardlink", "fifo", "directory"])
+def test_bootstrap_refuses_an_odd_setup_lock(capsys, roots, kind):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    lock = cfg / "orama" / "setup.lock"
+    target = cfg.parent / "target"
+    target.write_text("untouched")
+    if kind == "hardlink":
+        os.link(target, lock)
+    elif kind == "fifo":
+        os.mkfifo(lock)
+    else:
+        lock.mkdir()
+    code, out, chowns = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 1
+    assert out.err.startswith("✗ ") and "setup.lock" in out.err
+    assert chowns.owner(target) == (0, 0)
+    assert target.read_text() == "untouched"
+    assert not (cfg / "orama" / "setup.draft.json").exists()
