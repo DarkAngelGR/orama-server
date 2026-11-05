@@ -6,9 +6,10 @@ import hashlib
 from typing import Any
 
 from orama.setup_model import DesiredSetup, UsenetServer
-from orama.wiring.engine import Step, StepError, wait_until
+from orama.wiring.engine import Step, StepError, run_steps, wait_until
 from orama.wiring.http import Http, Unreachable
 
+REMOVE_PREFIX = "remove:usenet:"
 BASE = "http://sabnzbd:8080/api"
 COMPLETE_DIR = "/data/downloads/usenet"
 INCOMPLETE_DIR = "/data/downloads/usenet/incomplete"
@@ -119,8 +120,8 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             password = store.get(_password_name(server.slug))
             if password is None:
                 raise StepError(
-                    f"No password is saved for the Usenet server {server.slug} — save it with "
-                    f"set-secret {_password_name(server.slug)}."
+                    f"No password is saved for the Usenet server {server.slug} — "
+                    "enter it in Settings, then run apply again."
                 )
             want = _server_values(server, password)
             have = next((s for s in client.config("servers") if s.get("name") == server.slug), None)
@@ -147,8 +148,8 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             password = store.get(_password_name(server.slug))
             if password is None:
                 raise StepError(
-                    f"No password is saved for the Usenet server {server.slug} — save it with "
-                    f"set-secret {_password_name(server.slug)}."
+                    f"No password is saved for the Usenet server {server.slug} — "
+                    "enter it in Settings, then run apply again."
                 )
             result = client.call(
                 mode="config", name="test_server", server=server.slug,
@@ -167,12 +168,59 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             needs=(f"sabnzbd:server:{server.slug}",),
         )
 
+    def remove_step(slug: str) -> Step:
+        def run() -> str | None:
+            client = api()
+            message = None
+            if any(s.get("name") == slug for s in client.config("servers")):
+                client.call(mode="del_config", section="servers", keyword=slug)
+                message = f"removed the Usenet server {slug}"
+            # only now, after the delete worked (or it was already gone)
+            store.delete(sent_marker_name(slug))
+            store.delete(f"test-ok:usenet:{slug}")
+            store.delete(f"{REMOVE_PREFIX}{slug}")
+            return message
+
+        return Step(f"sabnzbd:remove:{slug}", "sabnzbd", run, needs=("wait:sabnzbd",))
+
     steps = [
         Step("wait:sabnzbd", "sabnzbd", wait),
         Step("sabnzbd:folders", "sabnzbd", folders, needs=("wait:sabnzbd",)),
         Step("sabnzbd:categories", "sabnzbd", categories, needs=("wait:sabnzbd",)),
     ]
+    for entry in sorted(store.names()):
+        if entry.startswith(REMOVE_PREFIX):
+            slug = store.get(entry)
+            if slug:
+                steps.append(remove_step(slug))
     for server in setup.usenet_servers:
         steps.append(server_step(server))
         steps.append(test_step(server))
     return steps
+
+
+def test_usenet_server(setup: DesiredSetup, store: Any, http: Http, slug: str) -> str | None:
+    """Test one Usenet server from the setup, running nothing else.
+
+    Returns None when it passed (and records ``test-ok:usenet:<slug>``), else the plain
+    message of the step that failed or was skipped (and clears the record).
+    """
+    wanted = ("wait:sabnzbd", f"sabnzbd:server:{slug}", f"sabnzbd:test:{slug}")
+    steps = [s for s in sabnzbd_steps(setup, store, http) if s.name in wanted]
+    message: str | None = None
+    if len(steps) < 3:
+        message = "Orama does not know this Usenet server yet — save the settings first."
+    else:
+        for result in run_steps(steps):
+            if result.status in ("failed", "skipped"):
+                message = result.message
+                break
+    ok_name = f"test-ok:usenet:{slug}"
+    if message is None:
+        store.set(ok_name, "1")
+    else:
+        store.delete(ok_name)
+    return message
+
+
+test_usenet_server.__test__ = False  # type: ignore[attr-defined]  # not a pytest test

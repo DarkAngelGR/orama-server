@@ -10,7 +10,8 @@ from orama.secrets import GLUETUN_PROXY_PASSWORD_NAME, SecretStore
 from orama.setup_model import IndexerChoice, VpnConfig
 from orama.wiring.engine import run_steps
 from orama.wiring.http import FakeHttp, Response
-from orama.wiring.prowlarr import prowlarr_steps
+from orama.wiring.prowlarr import prowlarr_steps, sent_marker_name
+from orama.wiring.prowlarr import test_indexer as check_indexer
 
 PROWLARR_KEY = "prowlarrkey" * 3
 SONARR_KEY = "sonarrkey" * 3
@@ -125,7 +126,13 @@ class FakeProwlarr:
         store[item["id"]] = item
         put = lambda c, st=store: self.put(c, st)
         self.http.route("PUT", f"{API}/{kind}/{item['id']}", self.guard(put))
+        self.http.route("DELETE", f"{API}/{kind}/{item['id']}",
+                        self.guard(lambda c, st=store, i=item["id"]: self.delete(st, i)))
         return self.ok(item, 201)
+
+    def delete(self, store, item_id):
+        del store[item_id]
+        return Response(200, {}, b"{}")
 
     def put(self, call, store):
         assert call.params == {"forceSave": "true"}
@@ -146,6 +153,8 @@ class FakeProwlarr:
         self.next_id += 1
         self.indexers[item["id"]] = item
         self.http.route("PUT", f"{API}/indexer/{item['id']}", self.guard(lambda c: self.put(c, self.indexers)))
+        self.http.route("DELETE", f"{API}/indexer/{item['id']}",
+                        self.guard(lambda c, i=item["id"]: self.delete(self.indexers, i)))
         return item
 
 
@@ -278,7 +287,7 @@ def test_missing_secret_fails_with_exact_message(tmp_path):
     by = {r.name: r for r in run(setup, other, pw)}
     assert by["prowlarr:indexer:geek"].status == "failed"
     assert by["prowlarr:indexer:geek"].message == (
-        "The NZBGeek indexer has no API key or password yet — enter it, then run apply again.")
+        "The NZBGeek indexer has no API key or password yet — enter it in Settings, then run apply again.")
     assert by["prowlarr:sync"].status == "changed"  # the app connections were added
     assert pw.by_name(pw.indexers, "NZBGeek") is None
 
@@ -583,3 +592,107 @@ def test_missing_prowlarr_key_says_run_apply_again(tmp_path):
     empty = SecretStore(tmp_path / "empty.bin")
     by = {r.name: r for r in run(setup, empty, pw)}
     assert by["wait:prowlarr"].message == "The API key is missing — run apply again."
+
+
+# ---------------------------------------------------------------- removals, single tests
+
+def removal(tmp_path, name="NZBGeek"):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path, indexers=())
+    store.set("remove:indexer:geek", name)
+    store.set(sent_marker_name("indexer:geek"), "abc")
+    return pw, setup, store
+
+
+def test_removed_indexer_deleted_by_exact_name_only(tmp_path):
+    pw, setup, store = removal(tmp_path)
+    pw.add_user_indexer("NZBGeek")  # id 1
+    similar = pw.add_user_indexer("NZBGeek 2")
+    other = pw.add_user_indexer("nzbgeek")
+    results = {r.name: r for r in run(setup, store, pw)}
+    assert results["prowlarr:remove:geek"].status == "changed"
+    assert results["prowlarr:remove:geek"].message == "removed the NZBGeek indexer"
+    assert pw.by_name(pw.indexers, "NZBGeek") is None
+    assert similar["id"] in pw.indexers and other["id"] in pw.indexers
+    assert ("DELETE", f"{API}/indexer/1") in pw.writes
+    assert len(pw.commands) >= 1 and results["prowlarr:sync"].status == "changed"
+
+
+def test_removal_entry_cleared_after_delete(tmp_path):
+    pw, setup, store = removal(tmp_path)
+    pw.add_user_indexer("NZBGeek")
+    run(setup, store, pw)
+    assert store.get("remove:indexer:geek") is None
+    assert store.get(sent_marker_name("indexer:geek")) is None
+    assert pw.by_name(pw.indexers, "NZBGeek") is None
+
+
+def test_removal_entry_kept_when_delete_fails(tmp_path):
+    pw, setup, store = removal(tmp_path)
+    item = pw.add_user_indexer("NZBGeek")
+    pw.http.route("DELETE", f"{API}/indexer/{item['id']}",
+                  pw.guard(lambda c: Response(500, {}, b"{}")))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:remove:geek"].status == "failed"
+    assert store.get("remove:indexer:geek") == "NZBGeek"
+
+
+def test_removal_of_missing_indexer_is_quiet(tmp_path):
+    pw, setup, store = removal(tmp_path)
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:remove:geek"].status == "unchanged"
+    assert not any(m == "DELETE" for m, _ in pw.writes)
+    assert store.get("remove:indexer:geek") is None
+
+
+def test_removal_ignores_other_store_names(tmp_path):
+    pw, setup, store = removal(tmp_path)
+    store.set("remove:usenet:eweka", "eweka")
+    names = [s.name for s in prowlarr_steps(setup, store, pw.http)]
+    assert "prowlarr:remove:geek" in names and "prowlarr:remove:eweka" not in names
+
+
+def test_test_indexer_sets_and_clears_test_ok(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    assert check_indexer(setup, store, pw.http, "geek") is None
+    assert store.get("test-ok:indexer:geek") == "1"
+    assert pw.by_name(pw.apps, "Sonarr (Orama)") is None  # no other step ran
+    assert pw.commands == []
+    pw.test_status = 400
+    assert check_indexer(setup, store, pw.http, "geek") is not None
+    assert store.get("test-ok:indexer:geek") is None
+
+
+def test_test_indexer_reports_plain_failure(tmp_path):
+    pw = FakeProwlarr()
+    pw.test_status = 400
+    setup, store = make(tmp_path)
+    assert check_indexer(setup, store, pw.http, "geek") == (
+        "NZBGeek did not pass Prowlarr's test — check its address and API key.")
+
+
+def test_test_indexer_missing_key_and_unknown_slug(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    store.delete("indexer:geek:apikey")
+    assert "enter it in Settings" in check_indexer(setup, store, pw.http, "geek")
+    assert check_indexer(setup, store, pw.http, "nope")
+
+
+def test_proxy_400_says_vpn_still_connecting(tmp_path):
+    pw = FakeProwlarr()
+    pw.http.route("POST", f"{API}/indexerProxy", pw.guard(lambda c: Response(400, {}, b"[]")))
+    setup, store = make(tmp_path, vpn=VpnConfig(route_prowlarr=True))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:proxy"].message == (
+        "The VPN is still connecting, so Prowlarr could not test it — run apply again in a minute.")
+
+
+def test_messages_point_to_settings_not_set_secret(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    store.delete("indexer:geek:apikey")
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert "set-secret" not in by["prowlarr:indexer:geek"].message
+    assert "in Settings" in by["prowlarr:indexer:geek"].message

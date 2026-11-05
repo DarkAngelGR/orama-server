@@ -192,10 +192,10 @@ def test_completed_server_with_another_password_gets_the_plain_message(store, pa
     assert_hidden(fake, store, results, password, fake.password)
 
 
-def test_wrong_password_message_points_to_set_secret_and_never_to_deleting():
+def test_wrong_password_message_points_to_settings_and_never_to_deleting():
     assert WRONG_PASSWORD == (
-        "Jellyfin is already set up — enter its admin name and password with set-secret "
-        "user:jellyfin and password:jellyfin, then run apply again."
+        "Jellyfin is already set up — enter its admin name and password in Settings, "
+        "then run apply again."
     )
     assert "remove" not in WRONG_PASSWORD and "delete" not in WRONG_PASSWORD
     assert "folder" not in WRONG_PASSWORD
