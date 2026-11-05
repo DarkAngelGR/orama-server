@@ -237,3 +237,83 @@ def test_bazarr_missing_key_after_unterminated_line():
     updated = render("bazarr", original, BAZARR)
     assert updated == original + f"\n  apikey: {BAZARR['api_key']}\n"
     assert render("bazarr", updated, BAZARR) is None
+
+
+# A file shaped like the one Bazarr itself writes (trimmed). Built at runtime, no real key.
+def bazarr_file(apikey: str, ending: str = "\n") -> str:
+    lines = [
+        "---",
+        "# written by Bazarr",
+        "general:",
+        "  base_url: ''",
+        "  ip: '*'",
+        "  port: 6767",
+        "  enabled_providers:",
+        "  - opensubtitlescom",
+        "  - podnapisi",
+        "auth:",
+        "  type: null",
+        "  username: ''",
+        "  password: ''",
+        "  # a comment inside the section",
+        f"  apikey: {apikey}",
+        "",
+        "sonarr:",
+        "  ip: 127.0.0.1",
+        "  apikey: '0123'",
+    ]
+    return ending.join(lines) + ending
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+def test_bazarr_patches_a_normal_file_byte_for_byte(ending):
+    old_key = hex_key("cd")
+    old = bazarr_file(old_key, ending)
+    updated = render("bazarr", old, BAZARR)
+    assert updated == old.replace(f"apikey: {old_key}", f"apikey: {BAZARR['api_key']}")
+    assert render("bazarr", updated, BAZARR) is None
+
+
+def test_bazarr_patches_a_null_or_quoted_empty_apikey():
+    for empty in ["", "''", '""', "null"]:
+        old = f"auth:\n  username: u\n  apikey: {empty}\nother: 1\n"
+        assert render("bazarr", old, BAZARR) == (
+            f"auth:\n  username: u\n  apikey: {BAZARR['api_key']}\nother: 1\n")
+
+
+BAZARR_UNUSUAL = {
+    "comment after auth": "auth: # c\n  username: u\n  apikey: {old}\n",
+    "anchor on auth": "auth: &a\n  username: u\n  apikey: {old}\n",
+    "flow mapping": "auth: {{username: u, apikey: {old}}}\n",
+    "space before colon": "auth :\n  apikey: {old}\n",
+    "quoted auth key": '"auth":\n  apikey: {old}\n',
+    "two auth blocks": "auth:\n  apikey: {old}\nother: 1\nauth:\n  username: u\n  apikey: {old}\n",
+    "four-space children": "auth:\n    username: u\n    password: p\n",
+    "mixed indentation": "auth:\n  username: u\n    password: p\n",
+    "block scalar": "auth:\n  apikey: |\n    {old}\n  username: u\n",
+    "folded scalar": "auth:\n  apikey: >-\n    {old}\n",
+    "open quote": 'auth:\n  apikey: "{old}\n    rest"\n',
+    "single quote with more lines": "auth:\n  apikey: '{old}\n    rest'\n",
+    "plain continued": "auth:\n  apikey: {old}\n    rest\n",
+    "anchor value": "auth:\n  apikey: &k {old}\n",
+    "alias value": "keys:\n  k: &k {old}\nauth:\n  apikey: *k\n",
+    "tagged value": "auth:\n  apikey: !!str {old}\n",
+    "nested apikey": "auth:\n  apikey:\n    {old}\n",
+    "two apikeys": "auth:\n  apikey: {old}\n  apikey: {old}\n",
+    "not yaml": "general: [\nauth:\n  apikey: {old}\n",
+    "not a mapping": "- auth\n- {old}\n",
+    "auth not a mapping": "auth: \n  - {old}\n",
+    "complex key": "? auth\n: {{username: u, apikey: {old}}}\n",
+    "two documents": "auth:\n  apikey: {old}\n---\nauth:\n  apikey: {old}\n",
+}
+
+
+@pytest.mark.parametrize("name", sorted(BAZARR_UNUSUAL))
+def test_bazarr_refuses_unusual_layouts_without_showing_values(name):
+    old = hex_key("cd")
+    text = BAZARR_UNUSUAL[name].format(old=old)
+    with pytest.raises(Refused) as error:
+        render("bazarr", text, BAZARR)
+    message = str(error.value)
+    assert old not in message and BAZARR["api_key"] not in message
+    assert "Bazarr" in message

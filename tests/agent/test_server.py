@@ -995,3 +995,17 @@ def test_bazarr_seed_private_idempotent_and_redacted(agent, roots, caplog):
     assert agent.runner.stops == ["bazarr"]
     assert agent.runner.starts == ["bazarr"]
     assert value not in caplog.text and value not in str(error.value)
+
+
+def test_bazarr_seed_refuses_unusual_layout_before_stopping(agent, roots):
+    torrent_doc(agent, roots)
+    path = roots.config / "config/bazarr/config/config.yaml"
+    path.parent.mkdir(parents=True)
+    old = "ab" * 16
+    text = f"auth: {{username: u, apikey: {old}}}\n"
+    path.write_text(text)
+    with pytest.raises(AgentError) as error:
+        agent.client.seed_config("bazarr", {"api_key": "cd" * 16})
+    assert path.read_text() == text
+    assert agent.runner.stops == [] and agent.runner.starts == []
+    assert old not in str(error.value) and "cd" * 16 not in str(error.value)

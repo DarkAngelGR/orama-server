@@ -1,14 +1,15 @@
-"""What ``seed-config`` may write into SABnzbd's and qBittorrent's own config files.
+"""What ``seed-config`` may write into Bazarr's, SABnzbd's and qBittorrent's config files.
 
-SABnzbd and qBittorrent cannot take their credentials from the environment, so the
+These apps cannot take their credentials from the environment, so the
 Agent writes them into the apps' config files. Only the keys listed here are ever
 written, each value is checked against a fixed pattern, and the keys that make the apps
 reachable from Orama are fixed by the Agent itself, never taken from a request.
 
 Patching is line based: a ``key = value`` line (SABnzbd, configobj) or ``key=value`` line
 (qBittorrent, Qt ini) inside the named section is replaced, and a missing section or key
-is appended. Every other line is kept byte for byte. Refusal messages never contain
-values: they may be secrets.
+is appended. Bazarr's YAML gets only ``auth.apikey`` patched, and only in the layout
+Bazarr itself writes (see ``_render_bazarr``). Every other line is kept byte for byte.
+Refusal messages never contain values: they may be secrets.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+import yaml
 
 from orama.catalog import QBITTORRENT_WEBUI_USER
 from orama_agent.validate import Refused
@@ -177,28 +180,102 @@ def _line(fmt: _Format, key: str, value: str, ending: str) -> str:
     return f"{key}{fmt.separator}{shown}{ending}"
 
 
+_BAZARR_AUTH_LIKE = re.compile(r"[\"']?auth(?![\w-])")  # a top-level line about ``auth``
+_BAZARR_CHILD = re.compile(r"  [^\s#]")  # an entry of the auth block, two-space indented
+_BAZARR_APIKEY = re.compile(r"  apikey:(?:[ \t](.*))?")
+# apikey values Orama replaces: plain one-word text, or a closed one-line quoted string.
+_BAZARR_SIMPLE_VALUE = re.compile(r"[^\s'\"|>&*!{}\[\],#%@`][^\s#]*|'[^'\n]*'|\"[^\"\\\n]*\"")
+
+
+def _refuse_bazarr(why: str) -> Refused:
+    return Refused(f"Bazarr's settings file {why}, so Orama will not change it. "
+                   "Fix or remove config/config.yaml in Bazarr's config folder and try again.")
+
+
+def _load_bazarr(text: str) -> dict[Any, Any]:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raise _refuse_bazarr("is not valid YAML") from None
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise _refuse_bazarr("is not a set of named settings")
+    auth = data.get("auth")
+    if auth is not None and not isinstance(auth, dict):
+        raise _refuse_bazarr("has an auth section Orama does not recognise")
+    return data
+
+
 def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
-    """Patch only auth.apikey in Bazarr YAML, leaving unrelated bytes untouched."""
-    lines = _lines(current)
-    start = next((i for i, line in enumerate(lines) if line.rstrip("\r\n") == "auth:"), None)
+    """Patch only ``auth.apikey`` in Bazarr's YAML, keeping every other byte.
+
+    Only the layout Bazarr itself writes is patched: one top-level ``auth:`` line whose
+    entries are indented by two spaces, and a one-line ``apikey`` value. Anything else
+    (flow style, anchors, block scalars, a second ``auth``) is refused before anything
+    is stopped or written, and the result must read back with only the key changed.
+    """
     key = wanted["apikey"]
-    if start is None:
+    before = _load_bazarr(current)
+    if (before.get("auth") or {}).get("apikey") == key:
+        return None
+    lines = _lines(current)
+    starts = []
+    for i, line in enumerate(lines):
+        if line[:1].isspace() or line.startswith("#") or not _BAZARR_AUTH_LIKE.match(line):
+            continue
+        if line.rstrip() != "auth:":
+            raise _refuse_bazarr("writes its auth section in an unusual way")
+        starts.append(i)
+    if len(starts) > 1:
+        raise _refuse_bazarr("has more than one auth section")
+    if not starts:
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
         lines.extend(["auth:\n", f"  apikey: {key}\n"])
-        return "".join(lines)
-    end = next((i for i in range(start + 1, len(lines))
-                if lines[i] and not lines[i][0].isspace() and
-                not lines[i].lstrip().startswith("#")), len(lines))
-    for i in range(start + 1, end):
-        if lines[i].startswith("  apikey:"):
-            old = lines[i].partition(":")[2].strip().strip("\\\"'")
-            if old == key:
-                return None
-            ending = "\r\n" if lines[i].endswith("\r\n") else "\n"
+    else:
+        start = starts[0]
+        end = next((i for i in range(start + 1, len(lines))
+                    if lines[i][:1] and not lines[i][0].isspace() and
+                    not lines[i].startswith("#")), len(lines))
+        found = []
+        for i in range(start + 1, end):
+            text = lines[i].rstrip("\r\n")
+            if not text.strip() or text.lstrip().startswith("#"):
+                continue
+            if not _BAZARR_CHILD.match(text):
+                raise _refuse_bazarr("has auth settings that are not indented by two spaces")
+            match = _BAZARR_APIKEY.fullmatch(text)
+            if match:
+                value = (match.group(1) or "").strip()
+                if value and not _BAZARR_SIMPLE_VALUE.fullmatch(value):
+                    raise _refuse_bazarr("writes the API key in an unusual way")
+                found.append(i)
+        if len(found) > 1:
+            raise _refuse_bazarr("has more than one API key")
+        if found:
+            i = found[0]
+            ending = lines[i][len(lines[i].rstrip("\r\n")):] or "\n"
             lines[i] = f"  apikey: {key}{ending}"
-            return "".join(lines)
-    if end and not lines[end - 1].endswith("\n"):
-        lines[end - 1] += "\n"
-    lines.insert(end, f"  apikey: {key}\n")
-    return "".join(lines)
+        else:
+            if end and not lines[end - 1].endswith("\n"):
+                lines[end - 1] += "\n"
+            lines.insert(end, f"  apikey: {key}\n")
+    patched = "".join(lines)
+    _check_bazarr_round_trip(before, patched, key)
+    return patched
+
+
+def _check_bazarr_round_trip(before: dict[Any, Any], patched: str, key: str) -> None:
+    """The patched text must read back with only ``auth.apikey`` changed."""
+    try:
+        after = _load_bazarr(patched)
+    except Refused:
+        raise _refuse_bazarr("would not read back correctly after the change") from None
+    old_auth = dict(before.get("auth") or {})
+    new_auth = dict(after.get("auth") or {})
+    old_auth.pop("apikey", None)
+    if (new_auth.pop("apikey", None) != key or new_auth != old_auth
+            or {k: v for k, v in before.items() if k != "auth"}
+            != {k: v for k, v in after.items() if k != "auth"}):
+        raise _refuse_bazarr("would not read back correctly after the change")

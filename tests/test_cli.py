@@ -1166,3 +1166,12 @@ def test_bootstrap_stores_lan_address(roots, capsys, lan):
     assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": lan})) == 0
     draft = DesiredSetup.load(cfg / "orama" / "setup.draft.json")
     assert (str(draft.lan_address) if draft.lan_address else "none") == lan
+
+
+@pytest.mark.parametrize("lan", ["8.8.8.8", "not-an-address", "2001:db8::1"])
+def test_bootstrap_bad_lan_address_has_its_own_message(roots, capsys, lan):
+    data, cfg = roots
+    assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": lan})) == 1
+    err = capsys.readouterr().err
+    assert "LAN address" in err and "folders cannot be used" not in err
+    assert not (cfg / "orama" / "setup.draft.json").exists()

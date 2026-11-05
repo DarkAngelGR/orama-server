@@ -537,7 +537,8 @@ def test_prepare_data_root_refuses_a_file(tmp_path):
 ])
 def test_print_address(tmp_path, listing, expected):
     bin_dir = fake_bin(tmp_path, "hostname", f'[[ "$1" == "-I" ]] || exit 9\necho "{listing}"')
-    out = run_fn("print_address 8765", PATH=f"{bin_dir}:{os.environ['PATH']}")
+    out = run_fn("print_address 8765", PATH=f"{bin_dir}:{os.environ['PATH']}",
+                 IP_BIN="/nonexistent", PROC_NET_ROUTE=_route_table(tmp_path))
     assert out.returncode == 0
     assert f"Orama is ready. Open {expected} in your browser." in out.stdout
 
@@ -607,7 +608,93 @@ def test_bootstrap_detects_private_lan(tmp_path, parts, expected):
     bin_dir = fake_bin(tmp_path, "hostname", f"echo {address}")
     out = run_fn("CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
                  "run_bootstrap ubuntu 998 none 0 ''", DRY_RUN="1",
-                 PATH=f"{bin_dir}:{os.environ['PATH']}")
+                 PATH=f"{bin_dir}:{os.environ['PATH']}", IP_BIN="/nonexistent",
+                 PROC_NET_ROUTE=_route_table(tmp_path))
     assert out.returncode == 0
     args = shlex.split(next(line for line in out.stdout.splitlines() if "orama.cli" in line))
     assert args[args.index("--lan-address") + 1] == (address if expected else "none")
+
+
+# ---------------------------------------------------------------- lan address
+
+def _ip(*octets):
+    # Built at runtime: the repo must not hold private-address-shaped strings.
+    return ".".join(map(str, octets))
+
+
+def _le_hex(*octets):
+    """An address as /proc/net/route writes it (little-endian hex)."""
+    return "".join(f"{o:02X}" for o in reversed(octets))
+
+
+def _route_table(tmp_path, *rows):
+    """A fake /proc/net/route: rows of (iface, network octets, mask octets)."""
+    path = tmp_path / "route"
+    lines = ["Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT"]
+    for iface, net, mask in rows:
+        lines.append(f"{iface}\t{_le_hex(*net)}\t00000000\t0001\t0\t0\t0\t{_le_hex(*mask)}\t0\t0\t0")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+DOCKER_BRIDGE = _ip(172, 17, 0, 1)
+USER_BRIDGE = _ip(172, 18, 0, 1)
+LAN = _ip(192, 168, 1, 8)
+BRIDGE_ROUTES = (("docker0", (172, 17, 0, 0), (255, 255, 0, 0)),
+                 ("br-0a1b2c3d4e5f", (172, 18, 0, 0), (255, 255, 0, 0)),
+                 ("eth0", (192, 168, 1, 0), (255, 255, 255, 0)))
+
+
+def _fake_ip(tmp_path, source):
+    route = f"{_ip(192, 0, 2, 1)} via {_ip(192, 168, 1, 1)} dev eth0 src {source} uid 0"
+    return fake_bin(tmp_path, "ip", f'[[ "$1 $2 $3" == "-4 route get" && $# == 4 ]] || exit 9\n'
+                                    f'printf "%s\\n    cache\\n" "{route}"') / "ip"
+
+
+def _lan(tmp_path, *, ip_bin, listing, routes=BRIDGE_ROUTES):
+    bin_dir = fake_bin(tmp_path, "hostname", f'[[ "$1" == "-I" ]] || exit 9\necho "{listing}"')
+    return run_fn("lan_address", PATH=f"{bin_dir}:{os.environ['PATH']}", IP_BIN=ip_bin,
+                  PROC_NET_ROUTE=_route_table(tmp_path, *routes))
+
+
+def test_lan_address_is_the_default_route_source(tmp_path):
+    out = _lan(tmp_path, ip_bin=_fake_ip(tmp_path, LAN), listing=f"{DOCKER_BRIDGE} {LAN}")
+    assert out.returncode == 0 and out.stdout == f"{LAN}\n"
+
+
+def test_lan_address_public_route_source_is_none(tmp_path):
+    out = _lan(tmp_path, ip_bin=_fake_ip(tmp_path, _ip(203, 0, 113, 9)), listing=LAN)
+    assert out.returncode == 0 and out.stdout == "none\n"
+
+
+@pytest.mark.parametrize("ip_bin", ["/nonexistent", "failing"])
+def test_lan_address_without_ip_skips_docker_bridges(tmp_path, ip_bin):
+    if ip_bin == "failing":
+        ip_bin = fake_bin(tmp_path, "ip", "exit 2") / "ip"
+    out = _lan(tmp_path, ip_bin=ip_bin, listing=f"{DOCKER_BRIDGE} {USER_BRIDGE} {LAN}")
+    assert out.returncode == 0 and out.stdout == f"{LAN}\n"
+
+
+def test_lan_address_without_ip_or_route_table_uses_first_address(tmp_path):
+    bin_dir = fake_bin(tmp_path, "hostname", f'echo "{LAN} {DOCKER_BRIDGE}"')
+    out = run_fn("lan_address", PATH=f"{bin_dir}:{os.environ['PATH']}", IP_BIN="/nonexistent",
+                 PROC_NET_ROUTE=tmp_path / "missing")
+    assert out.returncode == 0 and out.stdout == f"{LAN}\n"
+
+
+def test_lan_address_only_docker_bridges_is_none(tmp_path):
+    out = _lan(tmp_path, ip_bin="/nonexistent", listing=f"{DOCKER_BRIDGE} {USER_BRIDGE}")
+    assert out.returncode == 0 and out.stdout == "none\n"
+
+
+def test_bootstrap_passes_the_default_route_source(tmp_path):
+    ip_bin = _fake_ip(tmp_path, LAN)
+    bin_dir = fake_bin(tmp_path, "hostname", f'echo "{DOCKER_BRIDGE} {LAN}"')
+    out = run_fn("CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
+                 "run_bootstrap ubuntu 998 none 0 ''; print_address 8765", DRY_RUN="1",
+                 PATH=f"{bin_dir}:{os.environ['PATH']}", IP_BIN=ip_bin,
+                 PROC_NET_ROUTE=_route_table(tmp_path, *BRIDGE_ROUTES))
+    assert out.returncode == 0, out.stdout
+    args = shlex.split(next(line for line in out.stdout.splitlines() if "orama.cli" in line))
+    assert args[args.index("--lan-address") + 1] == LAN
+    assert f"Open http://{LAN}:8765 in your browser." in out.stdout
