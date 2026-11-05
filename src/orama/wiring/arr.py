@@ -162,7 +162,7 @@ def arr_steps(
                 client = copy.deepcopy(template)
                 client["name"] = client_name
                 _enable(client)
-                _apply_fields(client, want)
+                _apply_fields(client, want, noun)
                 call("POST", kind, json=client, params={"forceSave": "true"})
                 store.set(marker, _digest(secret))
                 return f"added the {label} {noun}"
@@ -180,7 +180,7 @@ def arr_steps(
                 return None
             client = copy.deepcopy(have)
             _enable(client)
-            _apply_fields(client, want)
+            _apply_fields(client, want, noun)
             call("PUT", f"{kind}/{have['id']}", json=client, params={"forceSave": "true"})
             store.set(marker, _digest(secret))
             return f"restored the {label} {noun}"
@@ -191,12 +191,12 @@ def arr_steps(
     def _secret_names(want: dict[str, Any]) -> set[str]:
         return {n for n in ("apiKey", "password", "authToken") if n in want}
 
-    def _apply_fields(client: dict[str, Any], want: dict[str, Any]) -> None:
+    def _apply_fields(client: dict[str, Any], want: dict[str, Any], noun: str) -> None:
         present = {f.get("name"): f for f in client.get("fields", [])}
         for field, value in want.items():
             if field not in present:
                 raise StepError(
-                    f"{name} has no '{field}' setting for this download client — "
+                    f"{name} has no '{field}' setting for this {noun} — "
                     "it may be a different version than Orama expects."
                 )
             present[field]["value"] = value
@@ -236,7 +236,9 @@ def arr_steps(
         if not apikey:
             raise StepError("Jellyfin's API key is missing — run apply again.")
         return (
-            {"host": "jellyfin", "port": JELLYFIN_PORT, "apiKey": apikey, "updateLibrary": True},
+            # notify=False: refresh the library only, no pop-up on the screens playing.
+            {"host": "jellyfin", "port": JELLYFIN_PORT, "apiKey": apikey, "updateLibrary": True,
+             "notify": False},
             apikey,
         )
 
