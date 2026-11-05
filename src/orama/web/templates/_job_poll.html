@@ -1,5 +1,5 @@
 {#- Partial for htmx: the list (swapped into #checklist-items) plus out-of-band status and poller. -#}
-{% from "_macros.html" import checklist_items, notice %}
+{% from "_macros.html" import checklist_items %}
 {{ checklist_items(job.lines if job else []) }}
 <div id="job-status" hx-swap-oob="true">
 {%- include "_job_status.html" -%}

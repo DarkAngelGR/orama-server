@@ -257,6 +257,14 @@ class RedactingFilter(logging.Filter):
             record.stack_info = self._redact(record.stack_info, literals)
         return True
 
+    def redact(self, text: str) -> str:
+        """``text`` with stored secret values and secret-looking pairs replaced by ***."""
+        try:
+            literals = self._literals()
+        except Exception:  # unreadable store: the pattern rule alone  # noqa: BLE001
+            literals = []
+        return self._redact(text, literals)
+
     def _literals(self) -> list[str]:
         return [v for v in self.store.values() if len(v) >= _MIN_LITERAL_LEN]
 

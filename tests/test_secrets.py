@@ -481,3 +481,12 @@ def test_media_secrets_generated_once_and_never_overwritten(tmp_path):
     assert {name: st.get(name) for name in first} == first
     assert st.get("token:plex") is None
     assert st.get("apikey:jellyfin") is None
+
+
+def test_redacting_filter_public_redact(tmp_path):
+    st = SecretStore(tmp_path / "s.bin")
+    value = random_secret("v")
+    st.set("x", value)
+    flt = RedactingFilter(st)
+    assert flt.redact(f"hello {value} there") == "hello *** there"
+    assert "abc123" not in flt.redact("password: abc123")

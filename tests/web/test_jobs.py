@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import stat
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -205,3 +206,86 @@ def test_apply_post_htmx_returns_partial(app, signed):
 def test_no_job_yet(signed):
     text = signed.get("/jobs/current").get_data(as_text=True)
     assert "Apply" in text
+
+
+# ------------------------------------------------------------------ fix round 1
+
+
+def test_argv_error_fails_and_next_start_works(tmp_path: Path):
+    calls = {"n": 0}
+    seen: list[int] = []
+
+    def argv_for(p):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("embedded null byte")
+        return [sys.executable, "-c", "print('ok')"]
+
+    runner = JobRunner(tmp_path, argv_for)
+    job = runner.start(tmp_path / "setup.json", after=seen.append)
+    assert job.status == "failed" and runner.wait(1)
+    assert seen == [1]
+    runner.start(tmp_path / "setup.json")
+    assert wait(runner).status == "done"
+
+
+def test_reader_failure_reaches_final_state(tmp_path: Path, monkeypatch):
+    class Boom:
+        def __iter__(self):
+            raise RuntimeError("secret-ish detail")
+
+        def close(self):
+            raise OSError("close failed")
+
+    class FakeProc:
+        stdout = Boom()
+
+        def kill(self):
+            pass
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("orama.web.jobs.subprocess.Popen", lambda *a, **k: FakeProc())
+    runner = JobRunner(tmp_path, script_argv("pass"))
+    runner.start(tmp_path / "setup.json")
+    assert runner.wait(5)
+    job = runner.current()
+    assert job.status == "failed"
+    assert "secret-ish" not in " ".join(job.lines)
+
+
+def test_concurrent_starts_make_one_child(tmp_path: Path):
+    count = tmp_path / "count"
+    code = (
+        "import sys,time\nopen(sys.argv[1]+'.n','a').write('x')\ntime.sleep(0.5)\n"
+    )
+    runner = JobRunner(tmp_path, lambda p: [sys.executable, "-c", code, str(tmp_path / "count")])
+    threads = [threading.Thread(target=runner.start, args=(tmp_path / "setup.json",))
+               for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert runner.wait(10)
+    assert Path(str(count) + ".n").read_text() == "x"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"not json",
+        b"[]",
+        b'{"status": 5}',
+        b'{"status": "done", "lines": "abc", "started": 1}',
+        b'{"status": "done", "lines": {"a": 1}, "started": 1}',
+        b'{"status": "done", "lines": [], "started": 1e999999}',
+        b'{"status": "done", "lines": [], "started": ' + b"9" * 5000 + b"}",
+        b"\xff\xfe",
+        b'{"status": "done", "lines": ["' + b"a" * (2 * 1024 * 1024) + b'"]}',
+    ],
+)
+def test_hostile_record_is_ignored(tmp_path: Path, content: bytes):
+    (tmp_path / "last-apply.json").write_bytes(content)
+    runner = JobRunner(tmp_path, script_argv("pass"))
+    assert runner.current() is None

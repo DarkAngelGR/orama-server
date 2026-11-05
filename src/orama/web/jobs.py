@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import secrets
 import subprocess
@@ -23,11 +24,13 @@ from typing import Literal
 
 from flask import Blueprint, Flask, redirect, render_template, request, url_for
 
+from orama.secrets import RedactingFilter, SecretStore
 from orama.web import auth
 
 LAST_APPLY_FILE = "last-apply.json"
 MAX_LINES = 500
 MAX_LINE_CHARS = 500
+MAX_RECORD_BYTES = 1024 * 1024
 SETUP_FILE = "setup.json"
 
 Status = Literal["running", "done", "failed", "interrupted"]
@@ -86,29 +89,38 @@ class JobRunner:
             self._started = self._clock()
             self._finished = None
             self._idle.clear()
+            proc = None
             try:
                 proc = subprocess.Popen(
                     self._argv_for(Path(setup_path)),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    encoding="utf-8",
                     errors="replace",
                     bufsize=1,
-                    env=dict(os.environ),
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 )
-            except OSError:
+                self._save_locked()
+                threading.Thread(
+                    target=self._read, args=(proc, after), name="orama-apply-reader", daemon=True
+                ).start()
+            except Exception:  # noqa: BLE001  (any failure: never stay "running")
+                if proc is not None:
+                    try:
+                        proc.kill()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
                 self._lines.append("✗ Orama could not be started to apply the setup.")
                 self._status = "failed"
                 self._finished = self._clock()
                 self._save_locked()
                 self._idle.set()
+                failed = self._snapshot()
+            else:
                 return self._snapshot()  # type: ignore[return-value]
-            self._save_locked()
-            snapshot = self._snapshot()
-        threading.Thread(
-            target=self._read, args=(proc, after), name="orama-apply-reader", daemon=True
-        ).start()
-        return snapshot  # type: ignore[return-value]
+        self._run_after(after, 1)
+        return failed  # type: ignore[return-value]
 
     def wait(self, timeout: float | None = None) -> bool:
         """Block until no job is running (for tests and shutdown)."""
@@ -149,30 +161,45 @@ class JobRunner:
             except OSError:
                 pass
         finally:
-            if proc.stdout is not None:
-                proc.stdout.close()
             with self._lock:
                 self._status = "done" if code == 0 else "failed"
                 self._finished = self._clock()
                 self._save_locked()
                 self._idle.set()
+            try:
+                if proc.stdout is not None:
+                    proc.stdout.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        self._run_after(after, code)
+
+    @staticmethod
+    def _run_after(after: Callable[[int], None] | None, code: int) -> None:
         if after is not None:
             try:
                 after(code)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 log.error("the after-apply step failed")
 
     def _load(self) -> None:
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
+            with open(self._path, "rb") as f:
+                raw = f.read(MAX_RECORD_BYTES + 1)
+            if len(raw) > MAX_RECORD_BYTES:
+                return
+            data = json.loads(raw.decode("utf-8"))
             status = data["status"]
             if status not in _STATUSES:
+                return
+            if not isinstance(data.get("lines", []), list):
                 return
             lines = [str(x)[:MAX_LINE_CHARS] for x in data.get("lines", [])]
             started = float(data.get("started") or 0.0)
             finished = data.get("finished")
             finished = None if finished is None else float(finished)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            if not math.isfinite(started) or (finished is not None and not math.isfinite(finished)):
+                return
+        except Exception:  # noqa: BLE001  (garbled record: start as if none)
             return
         self._lines = deque(lines[-MAX_LINES:], maxlen=MAX_LINES)
         self._started, self._finished = started, finished
@@ -209,20 +236,12 @@ class JobRunner:
 # ---------------------------------------------------------------- web
 
 
-def store_redactor(store) -> Callable[[str], str]:
-    """A line redactor using the secret store's values and the key/value pattern."""
-    from orama.secrets import RedactingFilter
+def store_redactor(store: SecretStore) -> Callable[[str], str]:
+    """A line redactor using the secret store's values and the key/value pattern.
 
-    flt = RedactingFilter(store)
-
-    def redact(text: str) -> str:
-        try:
-            literals = flt._literals()
-        except Exception:  # noqa: BLE001
-            literals = []
-        return flt._redact(text, literals)
-
-    return redact
+    The store is read per line on purpose: it picks up secrets created in the middle of an apply.
+    """
+    return RedactingFilter(store).redact
 
 
 def register_jobs(app: Flask) -> None:
