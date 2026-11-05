@@ -1244,3 +1244,39 @@ def test_no_app_mount_reaches_app_env_dir(roots):
         for v in svc.get("volumes", []):
             src = type(env_dir)(v["source"])
             assert not src.is_relative_to(env_dir) and not env_dir.is_relative_to(src)
+
+
+def test_plex_advertisement_accepted(roots):
+    doc = good_doc(roots)
+    host = ".".join(map(str, [192, 168, 1, 8]))
+    doc["services"]["plex"]["environment"]["ADVERTISE_IP"] = f"http://{host}:{PORTS['plex']}/"
+    validate_compose(doc, roots)
+
+
+@pytest.mark.parametrize("variant", ["public", "port", "path", "dollar"])
+def test_plex_bad_advertisement_refused(roots, variant):
+    doc = good_doc(roots)
+    host = ".".join(map(str, [8, 8, 8, 8] if variant == "public" else [192, 168, 1, 8]))
+    port = PORTS["plex"] + (variant == "port")
+    suffix = "extra" if variant == "path" else "$x" if variant == "dollar" else ""
+    doc["services"]["plex"]["environment"]["ADVERTISE_IP"] = f"http://{host}:{port}/{suffix}"
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("app", ["plex", "jellyfin"])
+@pytest.mark.parametrize("variant", ["valid", "no_gpu", "bad_value", "missing"])
+def test_media_nvidia_pins(roots, app, variant):
+    doc = good_doc(roots)
+    svc = doc["services"][app]
+    svc["environment"].update(NVIDIA_VISIBLE_DEVICES="all",
+                              NVIDIA_DRIVER_CAPABILITIES="compute,video,utility")
+    if variant == "no_gpu":
+        del svc["deploy"]
+    elif variant == "bad_value":
+        svc["environment"]["NVIDIA_VISIBLE_DEVICES"] = "0"
+    elif variant == "missing":
+        del svc["environment"]["NVIDIA_DRIVER_CAPABILITIES"]
+    if variant == "valid":
+        validate_compose(doc, roots)
+    else:
+        refused(doc, roots)

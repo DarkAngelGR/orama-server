@@ -458,6 +458,8 @@ def test_run_bootstrap_dry_run_command(tmp_path):
     assert argv[:2] == ["docker", "run"]
     assert {"--rm", "--network"} <= set(argv) and argv[argv.index("--user") + 1] == "0:0"
     assert argv[argv.index("--network") + 1] == "none"
+    lan_index = argv.index("--lan-address")
+    del argv[lan_index:lan_index + 2]
     tail = argv[argv.index("orama:t") + 1:]
     assert tail == [
         "python", "-m", "orama.cli", "bootstrap", "--platform", "ubuntu",
@@ -596,3 +598,16 @@ def test_main_refuses_mismatched_setup_before_touching_docker(tmp_path):
                  ORAMA_DATA_ROOT="/srv/data")
     assert out.returncode == 1 and "different settings" in out.stdout
     _no_docker_install(out.stdout)
+
+
+@pytest.mark.parametrize("parts,expected", [([192, 168, 1, 8], True), ([127, 0, 0, 1], False),
+                                           ([203, 0, 113, 9], False)])
+def test_bootstrap_detects_private_lan(tmp_path, parts, expected):
+    address = ".".join(map(str, parts))
+    bin_dir = fake_bin(tmp_path, "hostname", f"echo {address}")
+    out = run_fn("CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
+                 "run_bootstrap ubuntu 998 none 0 ''", DRY_RUN="1",
+                 PATH=f"{bin_dir}:{os.environ['PATH']}")
+    assert out.returncode == 0
+    args = shlex.split(next(line for line in out.stdout.splitlines() if "orama.cli" in line))
+    assert args[args.index("--lan-address") + 1] == (address if expected else "none")

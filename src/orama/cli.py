@@ -119,6 +119,7 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--pgid", required=True, type=_uint)
     b.add_argument("--docker-gid", required=True, type=_uint)
     b.add_argument("--render-gid", required=True, type=_gid_or_none, metavar="GID|none")
+    b.add_argument("--lan-address", default="none")
     b.add_argument("--nvidia", required=True, type=_flag, metavar="0|1")
     b.add_argument("--taken-ports", default="", type=_port_list, metavar="P1,P2,...")
     b.add_argument("--orama-image")
@@ -189,6 +190,7 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             pgid=args.pgid,
             render_gid=args.render_gid,
             nvidia=args.nvidia,
+            lan_address=None if args.lan_address == "none" else args.lan_address,
         )
     except ValidationError as e:
         raise Failed("These folders cannot be used. " + _plain_errors(e)) from None
