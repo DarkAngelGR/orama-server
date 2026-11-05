@@ -9,6 +9,9 @@ lost. These are advisory ``fcntl.flock`` locks on small 0600 files in the state 
 - ``secrets.lock`` (next to ``secrets.bin``): every write of the secret store.
 - ``apply.lock``: one apply (or app test) at a time, across processes.
 
+``setup.lock`` and ``apply.lock`` live in the setup file's own folder (``setup_path.parent``),
+so the CLI and the web app always lock the same files for the same setup.
+
 Lock order, to avoid deadlocks: ``apply.lock`` before ``setup.lock`` or ``secrets.lock``;
 never wait for ``apply.lock`` while holding one of the others.
 
@@ -23,7 +26,7 @@ import errno
 import fcntl
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -90,7 +93,20 @@ def locked(path: Path, *, blocking: bool = True) -> Iterator[None]:
 
 
 def save_setup(path: Path, setup: DesiredSetup) -> None:
-    """Save ``setup`` to ``path`` while holding ``setup.lock`` in the same folder."""
+    """Save the whole ``setup`` to ``path`` while holding ``setup.lock`` in the same folder."""
     path = Path(path)
     with locked(setup_lock(path.parent)):
         setup.save(path)
+
+
+def update_setup(path: Path, fn: Callable[[DesiredSetup], DesiredSetup]) -> DesiredSetup:
+    """Change the saved setup in place: under ``setup.lock``, reload ``path``, apply ``fn``, save.
+
+    Use this instead of saving a copy loaded earlier, so changes others saved meanwhile stay.
+    Returns the saved setup.
+    """
+    path = Path(path)
+    with locked(setup_lock(path.parent)):
+        updated = fn(DesiredSetup.load(path))
+        updated.save(path)
+    return updated

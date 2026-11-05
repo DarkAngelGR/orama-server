@@ -1384,14 +1384,14 @@ def test_apply_saves_setup_under_lock(capsys, roots, agent, monkeypatch):
     data, cfg = roots
     path = write_setup(cfg, data)
     saved = []
-    real_save_setup, real_save = cli.state.save_setup, DesiredSetup.save
+    real_update, real_save = cli.state.update_setup, DesiredSetup.save
     inside = []
 
-    def spy(where, setup):
+    def spy(where, fn):
         saved.append(where)
         inside.append(True)
         try:
-            real_save_setup(where, setup)
+            return real_update(where, fn)
         finally:
             inside.pop()
 
@@ -1399,10 +1399,47 @@ def test_apply_saves_setup_under_lock(capsys, roots, agent, monkeypatch):
         assert inside, "apply saved the setup without the setup lock"
         real_save(self, where)
 
-    monkeypatch.setattr(cli.state, "save_setup", spy)
+    monkeypatch.setattr(cli.state, "update_setup", spy)
     monkeypatch.setattr(DesiredSetup, "save", direct_save)
     assert cli.main(["apply", "--setup", str(path)]) == 0, capsys.readouterr().err
     assert saved == [path]
+
+
+def test_apply_keeps_setup_changes_made_while_it_runs(capsys, roots, agent, monkeypatch):
+    data, cfg = roots
+    path = write_setup(cfg, data, ports={"plex": 32401})
+    lan = ".".join(map(str, [192, 168, 1, 23]))
+    real_apply = cli.AgentClient.apply
+
+    def deploy_while_someone_saves(self, compose, env_files):
+        # Bootstrap or the web app saves a change while the apps are deploying.
+        changed = DesiredSetup.load(path).model_copy(
+            update={"lan_address": lan, "timezone": "Europe/Amsterdam"}
+        )
+        cli.state.save_setup(path, changed)
+        return real_apply(self, compose, env_files)
+
+    monkeypatch.setattr(cli.AgentClient, "apply", deploy_while_someone_saves)
+    assert cli.main(["apply", "--setup", str(path)]) == 0, capsys.readouterr().err
+    after = DesiredSetup.load(path)
+    assert str(after.lan_address) == lan
+    assert after.timezone == "Europe/Amsterdam"
+    assert after.ports["plex"] == 32401
+    apps = enabled_apps(after)
+    assert {a for a in apps if CATALOG[a].default_host_port} <= set(after.ports)
+
+
+def test_apply_locks_in_the_setup_files_own_folder(capsys, roots, agent, tmp_path):
+    data, cfg = roots
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    path = elsewhere / "setup.json"
+    make_setup(data_root=str(data), config_root=str(cfg), puid=1000, pgid=1001).save(path)
+    with cli.state.locked(cli.state.apply_lock(elsewhere), blocking=False):
+        code = cli.main(["apply", "--setup", str(path)])
+    assert code == 1
+    assert BUSY in capsys.readouterr().err
+    assert agent.up_calls == 0
 
 
 def test_apply_unusable_state_folder_is_plain(capsys, roots, agent):

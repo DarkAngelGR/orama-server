@@ -462,7 +462,9 @@ def _write_all(fd: int, data: bytes) -> None:
 def apply(setup_path: Path) -> int:
     """Apply the saved setup through the Agent, wire the apps; print a checklist.
 
-    Returns 0, or 1 when a wiring step failed.
+    Returns 0, or 1 when a wiring step failed. Holds ``apply.lock`` in the setup file's own
+    folder (``setup_path.parent``, the lock the web app uses too) for the whole run, and saves
+    only its assigned ports through ``state.update_setup`` (under ``setup.lock`` there).
     """
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -476,9 +478,9 @@ def apply(setup_path: Path) -> int:
     except (OSError, ValueError):
         raise Failed(f"The setup at {setup_path} cannot be read.") from None
 
-    state_dir = Path(orama_state_dir(setup.config_root))
+    # In the setup file's own folder: the same lock the web app takes for this setup.
     try:
-        lock_fd = state.open_lock_file(state.apply_lock(state_dir))
+        lock_fd = state.open_lock_file(state.apply_lock(setup_path.parent))
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
     with ExitStack() as held:  # one apply at a time, held until this apply returns
@@ -486,11 +488,11 @@ def apply(setup_path: Path) -> int:
             held.enter_context(state.hold(lock_fd, blocking=False))
         except state.Busy:
             raise Failed(APPLY_BUSY) from None
-        return _apply_locked(setup_path, setup, state_dir)
+        return _apply_locked(setup_path, setup)
 
 
-def _apply_locked(setup_path: Path, setup: DesiredSetup, state_dir: Path) -> int:
-    store = SecretStore(state_dir / SECRETS_FILE)
+def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
+    store = SecretStore(Path(orama_state_dir(setup.config_root)) / SECRETS_FILE)
     install_redaction(store)
     apps = enabled_apps(setup)
     client = AgentClient(os.environ.get("ORAMA_AGENT_SOCKET", DEFAULT_SOCKET))
@@ -506,7 +508,11 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup, state_dir: Path) -> int
         client.ensure_folders(folders)
         print("✓ Folders ready", flush=True)
         changed = client.apply(build_apps_compose(setup), env_files_for(setup, store))
-        state.save_setup(setup_path, setup)
+        # Only the ports apply assigned: a setup change saved meanwhile (by bootstrap or the
+        # web app) is reloaded and kept.
+        state.update_setup(
+            setup_path, lambda saved: saved.model_copy(update={"ports": {**saved.ports, **ports}})
+        )
         for app in changed:
             print(f"✓ {app} started", flush=True)
         # After the deploy: the apps first write their own default config files.
