@@ -223,19 +223,57 @@ def test_stale_socket_replaced_but_regular_file_refused(roots):
 def test_ensure_folders_creates_with_owner_and_mode(agent, roots):
     doc, _ = doc_and_env(roots)
     wanted = all_folders(roots, doc)
-    created = agent.client.ensure_folders(wanted)
+    result = agent.client.ensure_folders(wanted)
+    created = result["created"]
     assert set(wanted) <= set(created)
+    assert result["not_writable"] == []  # new folders are the apps' own
     for p in wanted:
         assert stat.S_IMODE(os.lstat(p).st_mode) == 0o2775
         assert (p, roots.puid, roots.pgid) in agent.chowns.calls
     parent = roots.config / "config"
     assert stat.S_IMODE(os.lstat(parent).st_mode) == 0o755
     assert str(parent) not in agent.chowns.paths()
-    assert agent.client.ensure_folders(wanted) == []  # already there
+    assert agent.client.ensure_folders(wanted)["created"] == []  # already there
 
 def test_ensure_folders_creates_missing_data_parents(agent, roots):
-    created = agent.client.ensure_folders([str(roots.data / "media/movies")])
+    created = agent.client.ensure_folders([str(roots.data / "media/movies")])["created"]
     assert created == [str(roots.data / "media"), str(roots.data / "media/movies")]
+
+
+def test_ensure_folders_reports_existing_unwritable_folder(agent, roots):
+    locked = roots.data / "media"
+    locked.mkdir(mode=0o555)
+    os.chmod(locked, 0o555)
+    open_to_all = roots.data / "downloads"
+    open_to_all.mkdir()
+    os.chmod(open_to_all, 0o777)
+    before = {p: os.lstat(p) for p in (locked, open_to_all)}
+    new = open_to_all / "usenet"
+    wanted = [str(locked), str(open_to_all), str(new), str(locked)]
+    result = agent.call("ensure-folders", {"paths": wanted})
+    assert result["ok"] is True
+    assert result["result"] == {"created": [str(new)], "not_writable": [str(locked)]}
+    # Nothing about the existing folders was changed.
+    for p, st in before.items():
+        now = os.lstat(p)
+        assert (now.st_mode, now.st_uid, now.st_gid) == (st.st_mode, st.st_uid, st.st_gid)
+    assert str(locked) not in agent.chowns.paths()
+
+
+@pytest.mark.parametrize(("uid", "gid", "mode", "writable"), [
+    (1000, 5, 0o755, True),     # owned by the apps' user, u+w
+    (1000, 1001, 0o575, False), # the owner's own bits decide for the owner
+    (7, 1001, 0o775, True),     # the apps' group, g+w
+    (7, 1001, 0o755, False),    # the apps' group without g+w
+    (7, 5, 0o757, True),        # anyone may write
+    (7, 5, 0o2775, False),      # someone else's folder
+    (0, 0, 0o755, False),       # root's folder
+])
+def test_apps_can_write_follows_owner_group_other_bits(uid, gid, mode, writable):
+    from orama_agent.server import apps_can_write
+
+    st = os.stat_result((stat.S_IFDIR | mode, 0, 0, 2, uid, gid, 0, 0, 0, 0))
+    assert apps_can_write(st, puid=1000, pgid=1001) is writable
 
 @pytest.mark.parametrize(
     "which",

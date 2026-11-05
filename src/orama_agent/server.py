@@ -71,6 +71,20 @@ def _skip_chown(*_args: Any, **_kw: Any) -> None:
     """Not root: owners cannot be changed, and need not be (tests, development)."""
 
 
+def apps_can_write(st: os.stat_result, puid: int, pgid: int) -> bool:
+    """True if the apps (PUID:PGID) may write in a folder with this owner, group and mode.
+
+    The kernel's order: the owner's bits decide for the owner, else the group's bits for
+    the group, else the bits for everyone. ACLs and supplementary groups are not seen.
+    """
+    mode = st.st_mode
+    if st.st_uid == puid:
+        return bool(mode & stat.S_IWUSR)
+    if st.st_gid == pgid:
+        return bool(mode & stat.S_IWGRP)
+    return bool(mode & stat.S_IWOTH)
+
+
 def _show(value: Any) -> str:
     text = repr(value)
     return text if len(text) <= _ID_MAX else text[: _ID_MAX - 3] + "..."
@@ -227,7 +241,12 @@ class Agent:
 
     # ------------------------------------------------------------ ensure-folders
 
-    def ensure_folders(self, args: dict[str, Any]) -> list[str]:
+    def ensure_folders(self, args: dict[str, Any]) -> dict[str, list[str]]:
+        """Create the missing folders; list the existing ones the apps cannot write to.
+
+        Existing folders are only looked at (``fstat`` on the no-follow descriptor), never
+        changed: they are the owner's, and Orama manages only what it created.
+        """
         _expect_keys(args, {"paths"})
         paths = args["paths"]
         if not isinstance(paths, list) or len(paths) > MAX_PATHS:
@@ -236,14 +255,19 @@ class Agent:
             if not isinstance(p, str) or p not in self._shared:
                 raise Refused(f"The folder {_show(p)} is not one Orama may create.")
         created: list[str] = []
+        not_writable: list[str] = []
         for p in paths:
-            created += self._make_dirs(Path(p))
-        return created
-
-    def _make_dirs(self, target: Path) -> list[str]:
-        fd, created = self._open_dirs(target, self._shared)
-        os.close(fd)
-        return created
+            fd, made = self._open_dirs(Path(p), self._shared)
+            try:
+                existing = p not in made and p not in created and p not in not_writable
+                if existing and not apps_can_write(
+                    os.fstat(fd), self.roots.puid, self.roots.pgid
+                ):
+                    not_writable.append(p)
+            finally:
+                os.close(fd)
+            created += made
+        return {"created": created, "not_writable": not_writable}
 
     def _open_dirs(self, target: Path, shared: set[str]) -> tuple[int, list[str]]:
         """Open ``target`` (creating missing folders, never following a link) and return

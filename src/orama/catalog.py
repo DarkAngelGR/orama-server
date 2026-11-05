@@ -126,6 +126,40 @@ ENV_FILE_VALUE = re.compile(r"[A-Za-z0-9_+/=-]{1,512}")
 # qBittorrent's WebUI from "localhost" (qBittorrent still asks for its password there).
 GLUETUN_PROXY_USER = "orama"
 
+
+@dataclass(frozen=True)
+class VpnProvider:
+    """A VPN service Orama offers, with WireGuard, through Gluetun."""
+
+    name: str  # Gluetun's VPN_SERVICE_PROVIDER value
+    label: str  # as the service spells its own name
+    port_forwarding: bool  # Gluetun forwards a port for it (and keeps to servers that can)
+    needs_address: bool  # Gluetun needs WIREGUARD_ADDRESSES besides the private key
+
+
+# Checked against Gluetun v3.41.3's source (internal/configuration/settings):
+# - wireguard.go: all five take WireGuard; every one needs an interface address, and
+#   Gluetun fills one in only for nordvpn and protonvpn, so the others need the address
+#   from the provider's WireGuard configuration file.
+# - portforward.go / serverselection.go: of these five, only protonvpn can forward a port,
+#   and only it (with "private internet access") takes PORT_FORWARD_ONLY.
+# Shared by the setup model, the compose builder and the Agent's pins.
+VPN_PROVIDERS: dict[str, VpnProvider] = {
+    p.name: p
+    for p in (
+        VpnProvider("protonvpn", "Proton VPN", port_forwarding=True, needs_address=False),
+        VpnProvider("nordvpn", "NordVPN", port_forwarding=False, needs_address=False),
+        VpnProvider("mullvad", "Mullvad", port_forwarding=False, needs_address=True),
+        VpnProvider("ivpn", "IVPN", port_forwarding=False, needs_address=True),
+        VpnProvider("surfshark", "Surfshark", port_forwarding=False, needs_address=True),
+    )
+}
+
+# Gluetun's control server (its HTTP API) listens on every interface by default, so any
+# app on orama-net could reach it. Bound to localhost it is reachable only inside Gluetun's
+# own network namespace (Gluetun and qBittorrent), whatever its auth defaults are.
+GLUETUN_CONTROL_SERVER_ADDRESS = "127.0.0.1:8000"
+
 # UGOS Pro web UI ports (HTTP / HTTPS) plus common system ports.
 # verify on device
 UGOS_RESERVED_PORTS: frozenset[int] = frozenset({22, 80, 443, 9999, 9443})

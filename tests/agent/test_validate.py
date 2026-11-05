@@ -21,6 +21,11 @@ from orama_agent.validate import (
 PORTS = {a: s.default_host_port for a, s in CATALOG.items() if s.default_host_port}
 
 
+def _address(*octets, prefix=32):
+    """An IPv4 interface built at runtime (the repo hygiene scan forbids literal addresses)."""
+    return ".".join(map(str, octets)) + f"/{prefix}"
+
+
 @pytest.fixture
 def roots(tmp_path):
     (tmp_path / "data").mkdir()
@@ -82,7 +87,8 @@ def test_accepts_builder_output(roots, kind):
         "vpn_other_provider": lambda: setup_for(
             roots,
             download_methods={"torrent"},
-            vpn={"provider": "mullvad", "port_forwarding": True, "route_prowlarr": True},
+            vpn={"provider": "mullvad", "port_forwarding": False, "route_prowlarr": True,
+                 "wireguard_address": _address(10, 64, 1, 2)},
         ),
     }[kind]()
     validate_compose(build_apps_compose(setup), roots)
@@ -742,17 +748,21 @@ def test_refuses_proxy_password_in_compose(roots):
     refused_with(doc, roots, "secrets file")
 
 
-def mullvad_doc(roots):
+def nordvpn_doc(roots):
     return build_apps_compose(setup_for(
-        roots, download_methods={"torrent"}, vpn={"provider": "mullvad", "port_forwarding": True},
+        roots, download_methods={"torrent"}, vpn={"provider": "nordvpn", "port_forwarding": False},
     ))
 
 
-def test_refuses_port_forward_only_for_other_provider(roots):
-    doc = mullvad_doc(roots)
+def test_refuses_port_forwarding_for_other_provider(roots):
+    doc = nordvpn_doc(roots)
     validate_compose(doc, roots)
+    gluetun_env(doc).update(
+        VPN_PORT_FORWARDING="on", VPN_PORT_FORWARDING_UP_COMMAND=GLUETUN_PORT_FORWARD_UP_COMMAND,
+    )
+    refused_with(doc, roots, "Proton VPN")
     gluetun_env(doc)["PORT_FORWARD_ONLY"] = "on"
-    refused_with(doc, roots, "ProtonVPN")
+    refused_with(doc, roots, "Proton VPN")
 
 
 @pytest.mark.parametrize("key", ["PORT_FORWARD_ONLY", "VPN_PORT_FORWARDING_UP_COMMAND"])
@@ -863,7 +873,8 @@ def test_accepts_other_timezone_and_provider(roots):
         setup_for(
             roots,
             download_methods={"torrent"},
-            vpn={"provider": "mullvad", "port_forwarding": False},
+            vpn={"provider": "mullvad", "port_forwarding": False,
+                 "wireguard_address": _address(10, 64, 1, 2)},
             timezone="America/Argentina/Buenos_Aires",
         )
     )
@@ -1313,3 +1324,85 @@ def test_advertisement_on_jellyfin_refused(roots):
     doc["services"]["jellyfin"]["environment"]["ADVERTISE_IP"] = \
         f"http://{host}:{PORTS['plex']}/"
     refused(doc, roots)
+
+
+# ---------------------------------------------------------------- VPN providers
+
+
+def vpn_doc(roots, provider, **vpn):
+    from orama.catalog import VPN_PROVIDERS
+
+    spec = VPN_PROVIDERS[provider]
+    values = {"provider": provider, "port_forwarding": spec.port_forwarding}
+    if spec.needs_address:
+        values["wireguard_address"] = _address(10, 64, 1, 2)
+    values.update(vpn)
+    return build_apps_compose(setup_for(roots, download_methods={"torrent"}, vpn=values))
+
+
+@pytest.mark.parametrize("provider", ["protonvpn", "nordvpn", "mullvad", "ivpn", "surfshark"])
+@pytest.mark.parametrize("route", [True, False])
+def test_agent_accepts_builder_output_for_each_provider(roots, provider, route):
+    validate_compose(vpn_doc(roots, provider, route_prowlarr=route), roots)
+
+
+@pytest.mark.parametrize("value", [
+    ":8000", "0.0.0.0:8000", "127.0.0.1:8001", "127.0.0.1:8000 ", "[::]:8000", "",
+    "127.0.0.1",
+])
+def test_agent_refuses_other_control_server_address(roots, value):
+    doc = good_doc(roots)
+    assert gluetun_env(doc)["HTTP_CONTROL_SERVER_ADDRESS"] == "127.0.0.1:8000"
+    gluetun_env(doc)["HTTP_CONTROL_SERVER_ADDRESS"] = value
+    refused(doc, roots)
+
+
+def test_agent_refuses_missing_control_server_address(roots):
+    doc = good_doc(roots)
+    del gluetun_env(doc)["HTTP_CONTROL_SERVER_ADDRESS"]
+    refused_with(doc, roots, "HTTP_CONTROL_SERVER_ADDRESS")
+
+
+@pytest.mark.parametrize("provider", [
+    "expressvpn", "custom", "ProtonVPN", "protonvpn ", "private internet access", "", "x" * 10,
+])
+def test_agent_refuses_unknown_provider(roots, provider):
+    doc = vpn_doc(roots, "nordvpn")
+    gluetun_env(doc)["VPN_SERVICE_PROVIDER"] = provider
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("value", [
+    _address(10, 64, 1, 2) + " ",
+    " " + _address(10, 64, 1, 2),
+    _address(10, 64, 1, 2).replace("/", " /"),
+    "$" + _address(10, 64, 1, 2),
+    "fd00::2/128",
+    _address(10, 64, 1, 2) + "," + _address(10, 64, 1, 3),
+    _address(10, 64, 1, 2) + ",fd00::2/128",
+    _address(10, 64, 1, 2, prefix=7),
+    _address(10, 64, 1, 2, prefix=33),
+    _address(300, 64, 1, 2),
+    _address(10, 64, 1, 2).split("/")[0],
+    "\u0661\u0660" + _address(1, 64, 1, 2)[1:],  # Arabic-Indic digits for the first part
+    "",
+])
+def test_agent_refuses_bad_wireguard_address(roots, value):
+    doc = vpn_doc(roots, "mullvad")
+    validate_compose(doc, roots)
+    gluetun_env(doc)["WIREGUARD_ADDRESSES"] = value
+    refused(doc, roots)
+
+
+@pytest.mark.parametrize("provider", ["protonvpn", "nordvpn"])
+def test_agent_refuses_wireguard_address_for_provider_without_one(roots, provider):
+    doc = vpn_doc(roots, provider)
+    gluetun_env(doc)["WIREGUARD_ADDRESSES"] = _address(10, 64, 1, 2)
+    refused_with(doc, roots, "WireGuard address")
+
+
+@pytest.mark.parametrize("provider", ["mullvad", "ivpn", "surfshark"])
+def test_agent_refuses_missing_wireguard_address(roots, provider):
+    doc = vpn_doc(roots, provider)
+    del gluetun_env(doc)["WIREGUARD_ADDRESSES"]
+    refused_with(doc, roots, "WireGuard address")

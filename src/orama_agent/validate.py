@@ -18,20 +18,21 @@ import re
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Interface
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
 
 from orama.catalog import (
     CATALOG,
     ENV_FILE_VALUE,
+    GLUETUN_CONTROL_SERVER_ADDRESS,
     GLUETUN_PORT_FORWARD_UP_COMMAND,
     GLUETUN_PROXY_USER,
+    VPN_PROVIDERS,
     ServiceSpec,
 )
 from orama.compose import (
     NETWORK,
-    PORT_FORWARD_ONLY_PROVIDER,
     QBITTORRENT_WEBUI_PORT,
     SHARED_NETWORK,
 )
@@ -64,7 +65,10 @@ SECRET_ENV_NAMES = frozenset(name for spec in CATALOG.values() for name in spec.
 
 _DIGITS = re.compile(r"[0-9]+")
 _PORT = re.compile(r"([0-9]{1,5}):([0-9]{1,5})")
-_WORD = re.compile(r"[A-Za-z0-9_+./-]{1,64}")  # TZ and VPN provider names
+_WORD = re.compile(r"[A-Za-z0-9_+./-]{1,64}")  # time zone names
+# Exactly one IPv4 interface (Gluetun reads the value as a comma-separated list); ASCII
+# digits only (without re.ASCII, \d also matches other scripts' digits).
+_WIREGUARD_ADDRESS = re.compile(r"\d{1,3}(\.\d{1,3}){3}/\d{1,2}", re.ASCII)
 _SHOW_MAX = 80
 _MAX_DEPTH = 20  # the builder's deepest value (the GPU reservation) is about 10 levels down
 
@@ -317,8 +321,15 @@ def _expected_environment(
     if spec.env_style == "jellyfin":
         return {"TZ": _WORD}, {}
     if spec.env_style == "gluetun":
-        required = {"VPN_SERVICE_PROVIDER": _WORD, "VPN_TYPE": "wireguard", "TZ": _WORD}
+        required = {
+            # Checked against VPN_PROVIDERS in _validate_gluetun_options.
+            "VPN_SERVICE_PROVIDER": _WORD,
+            "VPN_TYPE": "wireguard",
+            "TZ": _WORD,
+            "HTTP_CONTROL_SERVER_ADDRESS": GLUETUN_CONTROL_SERVER_ADDRESS,
+        }
         return required, {
+            "WIREGUARD_ADDRESSES": _WIREGUARD_ADDRESS,
             "VPN_PORT_FORWARDING": "on",
             "VPN_PORT_FORWARDING_UP_COMMAND": GLUETUN_PORT_FORWARD_UP_COMMAND,
             "PORT_FORWARD_ONLY": "on",
@@ -370,15 +381,29 @@ def _validate_environment(name: str, spec: ServiceSpec, svc: dict, roots: Roots)
 
 def _validate_gluetun_options(name: str, environment: dict[str, str]) -> None:
     """Only the combinations the builder emits; each value is already pinned."""
+    provider = VPN_PROVIDERS.get(environment["VPN_SERVICE_PROVIDER"])
+    if provider is None:
+        raise Refused(f"{name} must use one of the VPN services Orama offers.")
     port_forwarding = "VPN_PORT_FORWARDING" in environment
     for key in ("VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY"):
         if key in environment and not port_forwarding:
             raise Refused(f"{name} may only set {key} when port forwarding is on.")
-    if (
-        "PORT_FORWARD_ONLY" in environment
-        and environment["VPN_SERVICE_PROVIDER"] != PORT_FORWARD_ONLY_PROVIDER
-    ):
-        raise Refused(f"{name} may only limit itself to port-forwarding servers with ProtonVPN.")
+    if port_forwarding and not provider.port_forwarding:
+        raise Refused(f"{name} may only forward a port with Proton VPN.")
+    address = environment.get("WIREGUARD_ADDRESSES")
+    if (address is not None) != provider.needs_address:
+        raise Refused(
+            f"{name} must set a WireGuard address for {provider.label}."
+            if provider.needs_address
+            else f"{name} may not set a WireGuard address for {provider.label}."
+        )
+    if address is not None:
+        try:
+            prefix = IPv4Interface(address).network.prefixlen
+        except ValueError:
+            prefix = -1
+        if not 8 <= prefix <= 32:
+            raise Refused(f"{name} has a WireGuard address that is not an IPv4 address.")
     # The proxy must ask for a password: without one any app could use it to reach
     # qBittorrent's web page as "localhost".
     if ("HTTPPROXY" in environment) != ("HTTPPROXY_USER" in environment):
