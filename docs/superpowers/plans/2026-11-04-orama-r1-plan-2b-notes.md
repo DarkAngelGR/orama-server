@@ -127,3 +127,33 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 - Play an S95F-compatible file in Plex and confirm the playback dashboard says Direct Play.
 - Other device profiles remain best effort; test the actual client before treating
   their compatibility as verified. CI has no Plex account or GPU.
+
+## Task 11 — real-app integration (ChatGPT/Codex)
+
+- Owner handed off Claude's work at `8d3bb0a`. Tasks 5–10 were implemented; CI failed
+  because neither Sonarr nor Radarr had an Orama quality profile.
+- Root cause: Recyclarr 8.8.1 filters duplicate instance names globally across app
+  types. Both instances were named `orama`, so both were skipped despite a successful
+  process exit. Agent rendering now uses `orama-sonarr` and `orama-radarr`; user-visible
+  profile names stay `Orama`. A regression test failed before this fix and passed after.
+  The rendered-config digest changes, so existing installs sync again automatically.
+- Observed on pinned real apps: Bazarr links and Greek/English profile plus defaults;
+  Orama quality scores in both apps; Jellyfin wizard, libraries and API key; both
+  Jellyfin notifications; Plex waiting for sign-in. Repeated install/apply changes
+  nothing and keeps container IDs. Device/quality changes reuse profile IDs, replace
+  device scores, and restore default scores correctly. Killing Jellyfin immediately
+  before library creation is recoverable; only the missing library changes on retry.
+- Secret checks now include Bazarr/Jellyfin container logs and Recyclarr's persisted
+  logs. Failed API-key comparisons withhold values instead of using pytest's rewritten
+  comparisons. New secret types are included through the existing secret-store scan.
+- Task review: installer ordering and assertion secret disclosure findings fixed;
+  final reviewer found no remaining Important/Critical issues. Deferred minor coverage:
+  explicitly assert allowed resolutions after quality changes; explicitly assert fake
+  Usenet is the only failure after each recovery apply (current checks assert changed
+  steps and API-key preservation, alongside the earlier whole-stack failure checks).
+- Verification: 1,267 local unit tests, Ruff and ShellCheck passed. All four CI jobs
+  passed at `4c84502` (run 41988527186). Final assertion-only follow-up `e2f4faa`: all four CI jobs passed in run
+  42015057875 on retry. First attempt hit a confirmed GHCR rate limit pulling Bazarr
+  before app startup; unchanged source passed on retry. Task 11 complete.
+- Plan 2b still requires its final whole-plan review/fix round and the owner's Claude
+  Security scan. Task review above is not a substitute for those gates.
