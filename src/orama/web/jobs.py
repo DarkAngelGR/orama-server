@@ -178,7 +178,7 @@ class JobRunner:
         if after is not None:
             try:
                 after(code)
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 log.error("the after-apply step failed")
 
     def _load(self) -> None:
