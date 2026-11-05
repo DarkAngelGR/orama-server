@@ -31,6 +31,7 @@ NO_ACCOUNT_PROVIDERS = (
     "embeddedsubtitles",
 )
 OPENSUBTITLES = "opensubtitlescom"
+IGNORED_SUBTITLE_SWITCHES = ("ignore_ass_subs", "ignore_pgs_subs", "ignore_vobsub_subs")
 OPENSUBTITLES_SENT_MARKER = "bazarr:opensubtitles:sent"
 
 
@@ -58,7 +59,7 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def key() -> str:
         value = store.get("apikey:bazarr")
         if value is None:
-            raise StepError("The API key is missing — run apply again.")
+            raise StepError("Bazarr's API key is missing — run apply again.")
         return value
 
     def call(method: str, path: str, *, form: dict[str, Any] | None = None) -> Response:
@@ -109,8 +110,11 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         data = settings()
         general = section(data, "general")
         form: dict[str, Any] = {}
+        linked: list[str] = []
+        unlinked: list[str] = []
         for app, port in ARRS.items():
             link = section(data, app)
+            before = len(form)
             if app in present:
                 arr_key = store.get(f"apikey:{app}")
                 if arr_key is None:
@@ -123,12 +127,20 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                     same = _same_path if field == "base_url" else _same
                     if not same(link.get(field), value):
                         form[f"settings-{app}-{field}"] = _text(value)
+                if len(form) > before:
+                    linked.append(app.title())
             elif _same(general.get(f"use_{app}"), True):
                 form[f"settings-general-use_{app}"] = "false"
+                unlinked.append(app.title())
         if not form:
             return None
         write(form)
-        return "linked Bazarr to Sonarr and Radarr"
+        said = []
+        if linked:
+            said.append(f"linked Bazarr to {' and '.join(linked)}")
+        if unlinked:
+            said.append(f"unlinked Bazarr from {' and '.join(unlinked)}")
+        return ", ".join(said)
 
     def languages() -> str | None:
         wanted = list(setup.subtitle_languages)
@@ -200,13 +212,18 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         return "turned on the subtitle providers"
 
     def subtitle_format() -> str | None:
-        # Bazarr has no "prefer SRT" switch; it saves SRT by default. The closest setting is
-        # to skip ASS subtitles, which some players cannot show.
+        # Bazarr has no "prefer SRT" switch; it saves SRT by default. The closest settings
+        # skip styled (ASS) and image (PGS, VobSub) subtitles, which some players cannot show.
         general = section(settings(), "general")
-        if _same(general.get("ignore_ass_subs"), True):
+        form = {
+            f"settings-general-{field}": "true"
+            for field in IGNORED_SUBTITLE_SWITCHES
+            if not _same(general.get(field), True)
+        }
+        if not form:
             return None
-        write({"settings-general-ignore_ass_subs": "true"})
-        return "skipped ASS subtitles so plain SRT files are used"
+        write(form)
+        return "skipped styled and image subtitles so plain SRT files are used"
 
     needs = ("wait:bazarr",)
     return [
