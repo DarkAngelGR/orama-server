@@ -13,7 +13,9 @@ never in one tool's memory.
    authority: what Orama is, the architecture and the security rules.
 4. Read the **notes** files in `docs/superpowers/plans/` (`*-notes.md`). They record how earlier plans
    were actually built and override the plan text where they differ.
-5. Read only the plan task you're doing (in the current plan file), plus that plan's
+5. Open **`docs/tasks/`**: its `README.md` explains the task board (who owns which task). Your task's
+   file says where its instructions are.
+6. Read only the plan task you're doing (in the current plan file), plus that plan's
    *Global Constraints*, *Fixed values* and *Review Focus* sections.
 
 ## How the owner works (spec §12)
@@ -28,7 +30,7 @@ never in one tool's memory.
 
 ## How to do a task
 
-1. Mark it *in progress* in `docs/STATUS.md` (name your tool), then commit and push that change.
+1. Mark it *in progress* in its `docs/tasks/<plan>/Tnn.md` file and on the `docs/STATUS.md` board (name your tool), then commit and push that change.
 2. TDD: write the task's tests first, run them and see them fail, then implement until they pass.
 3. Fast checks, which must all pass:
    ```bash
@@ -39,7 +41,7 @@ never in one tool's memory.
 4. Commit with the task's commit message, then push.
 5. CI (`.github/workflows/ci.yml`) runs `unit`, `images`, `integration` (real Docker install) and `publish`.
    Check it's green for your commit.
-6. Update `docs/STATUS.md`: mark the task done, record any decision you made that differs from the plan
+6. Fill in the task file's Report, then update `docs/STATUS.md`: mark the task done (or `needs review` if you aren't Claude), record any decision you made that differs from the plan
    (what, why, what it costs if wrong), then commit and push.
 
 ## Security rules you must not weaken
