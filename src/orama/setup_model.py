@@ -103,6 +103,20 @@ _LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 _HOSTNAME = rf"^{_LABEL}(?:\.{_LABEL})*$"
 
 
+def _lower_case(value: str) -> str:
+    if value != value.lower():
+        raise ValueError("must be written in lower case")
+    return value
+
+
+# A name this server answers to (its own short name, or one the owner added, like a
+# Tailscale name). Stored lower case; the web app compares Host headers lower case.
+HostName = Annotated[
+    StrictStr, Field(max_length=253, pattern=_HOSTNAME), AfterValidator(_lower_case)
+]
+MAX_EXTRA_HOST_NAMES = 10
+
+
 def _printable(value: str) -> str:
     # Shown in logs and messages: no control characters, nothing that redraws a terminal.
     if not value.isprintable():
@@ -172,6 +186,15 @@ class DesiredSetup(BaseModel):
     device: Literal["samsung_s95f", "lg", "apple_tv", "nvidia_shield", "safest"] = "safest"
     quality: Literal["4k", "1080p", "mixed"] = "mixed"
     lan_address: IPv4Address | None = None
+    host_name: HostName | None = None
+    extra_host_names: tuple[HostName, ...] = Field(default=(), max_length=MAX_EXTRA_HOST_NAMES)
+
+    @field_validator("extra_host_names")
+    @classmethod
+    def _unique_host_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("each extra address name may be listed only once")
+        return value
 
     @field_validator("subtitle_languages")
     @classmethod

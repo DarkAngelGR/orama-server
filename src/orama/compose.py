@@ -166,6 +166,8 @@ def build_core_compose(
                 "restart": "unless-stopped",
                 "user": f"{puid}:{pgid}",
                 "ports": [f"{orama_port}:{orama_spec.container_port}"],
+                # Where the web app keeps the setup, its password and the first-run code.
+                "environment": {"ORAMA_STATE_DIR": str(state_dir)},
                 # Reaches every app by service name (http://sonarr:8989).
                 "networks": [NETWORK],
                 # Only its own state dir: app config dirs and env files stay out of reach.

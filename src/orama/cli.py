@@ -3,7 +3,10 @@
 ``bootstrap`` runs as root (the installer starts it with ``docker run --rm`` and the config
 folder bind-mounted at the identical path). It writes the root-owned core compose file and
 a draft setup in Orama's state folder, which it hands to PUID:PGID. Orama itself can then
-never write anything the installer later runs as root.
+never write anything the installer later runs as root. It also records the graphics the
+installer found (``hardware.json``) and, until the owner has chosen a password, a fresh
+one-time code for the setup page (``first-run.code``). It prints two lines: the port, then
+the code or ``-``.
 
 ``apply`` runs inside the Orama container as PUID. It talks to the Agent over its socket
 and prints a plain-language checklist. Secret values are never printed.
@@ -67,6 +70,10 @@ CORE_COMPOSE_FILE = "core.compose.yaml"
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
 SECRETS_FILE = "secrets.bin"
+AUTH_FILE = "auth.json"
+FIRST_RUN_CODE_FILE = "first-run.code"
+HARDWARE_FILE = "hardware.json"
+NO_CODE = "-"
 RESTART_PENDING = "restart:gluetun-qbittorrent"
 QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
@@ -136,6 +143,7 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--docker-gid", required=True, type=_uint)
     b.add_argument("--render-gid", required=True, type=_gid_or_none, metavar="GID|none")
     b.add_argument("--lan-address", default="none")
+    b.add_argument("--host-name", default="none", metavar="NAME|none")
     b.add_argument("--nvidia", required=True, type=_flag, metavar="0|1")
     b.add_argument("--taken-ports", default="", type=_port_list, metavar="P1,P2,...")
     b.add_argument("--orama-image")
@@ -180,14 +188,16 @@ def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> in
             plex_sign_in(args.setup)
         elif args.command == "bootstrap":
             try:
-                port = bootstrap(args, chown or _default_chown())
+                port, code = bootstrap(args, chown or _default_chown())
             except OSError as e:
                 where = f" at {e.filename}" if isinstance(e.filename, str) else ""
                 raise Failed(
                     f"Orama could not prepare its folder{where} "
                     f"({e.strerror or type(e).__name__})."
                 ) from None
+            # The installer reads these two lines; the code goes nowhere else.
             print(port)
+            print(code or NO_CODE)
         else:
             return apply(args.setup)
     except Failed as e:
@@ -198,8 +208,12 @@ def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> in
 
 # ---------------------------------------------------------------- bootstrap
 
-def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
-    """Write the core compose file and the draft setup; return the Orama host port."""
+def bootstrap(args: argparse.Namespace, chown: Chown) -> tuple[int, str | None]:
+    """Write the core compose file, the draft setup, ``hardware.json`` and, while there is
+    no password yet, a fresh ``first-run.code``.
+
+    Returns the Orama host port and the first-run code (None once a password exists).
+    """
     default_data, default_config = default_roots(Platform(args.platform))
     data_root = PurePosixPath(os.path.realpath(args.data_root or default_data))
     config_root = PurePosixPath(os.path.realpath(args.config_root or default_config))
@@ -214,11 +228,15 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             render_gid=args.render_gid,
             nvidia=args.nvidia,
             lan_address=None if args.lan_address == "none" else args.lan_address,
+            host_name=None if args.host_name == "none" else args.host_name.lower(),
         )
     except ValidationError as e:
         if any(error["loc"][:1] == ("lan_address",) for error in e.errors()):
             raise Failed("The LAN address must be this server's private IPv4 address, "
                          "or none.") from None
+        if any(error["loc"][:1] == ("host_name",) for error in e.errors()):
+            raise Failed("The host name must be this server's short name (letters, digits "
+                         "and -, up to 63 characters), or none.") from None
         raise Failed("These folders cannot be used. " + _plain_errors(e)) from None
     state_name = orama_state_dir(PurePosixPath(".")).name
 
@@ -239,13 +257,18 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             try:
                 # Read, update and write the setup while no web save or apply can write it.
                 _lock_within(lock_fd, SETUP_LOCK_WAIT)
+                # Refuse a planted link, FIFO or folder before anything is written.
+                for file in (HARDWARE_FILE, FIRST_RUN_CODE_FILE):
+                    _refuse_odd_file(state_fd, file, config_root / state_name / file)
                 name, existing = _existing_setup(state_fd, config_root / state_name)
                 setup = existing or draft
-                # The installer detects the address on every run: a NAS that got a new
-                # address keeps advertising the right one. `none` (nothing detected) changes
-                # nothing.
-                if draft.lan_address is not None and setup.lan_address != draft.lan_address:
-                    setup = setup.model_copy(update={"lan_address": draft.lan_address})
+                # The installer detects the address and the host name on every run: a NAS
+                # that got a new address keeps answering to it. `none` (nothing detected)
+                # changes nothing.
+                for field in ("lan_address", "host_name"):
+                    found = getattr(draft, field)
+                    if found is not None and getattr(setup, field) != found:
+                        setup = setup.model_copy(update={field: found})
                 # A kept setup is Orama-writable: only sane ports survive, the rest are
                 # reassigned.
                 kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
@@ -254,6 +277,14 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
                 setup = setup.model_copy(update={"ports": {**kept, **ports}})
                 text = _setup_text(setup)
                 _write_atomic(state_fd, name, text, 0o600, owner=owner, chown=chown)
+                hardware = {"render_gid": args.render_gid, "nvidia": args.nvidia}
+                _write_atomic(state_fd, HARDWARE_FILE, _json_text(hardware), 0o644,
+                              owner=owner, chown=chown)
+                code = None
+                if not _password_exists(state_fd):
+                    code = secrets.token_urlsafe(16)
+                    _write_atomic(state_fd, FIRST_RUN_CODE_FILE, code.encode(), 0o600,
+                                  owner=owner, chown=chown)
             finally:
                 os.close(lock_fd)  # releases the lock
         finally:
@@ -266,7 +297,32 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
         _write_atomic(config_fd, CORE_COMPOSE_FILE, dump_yaml(core).encode(), 0o644)
     finally:
         os.close(config_fd)
-    return setup.ports["orama"]
+    return setup.ports["orama"], code
+
+
+def _password_exists(state_fd: int) -> bool:
+    """True when anything at all is named ``auth.json`` (even a link: never a fresh code)."""
+    try:
+        os.stat(AUTH_FILE, dir_fd=state_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _refuse_odd_file(dir_fd: int, name: str, shown: PurePosixPath) -> None:
+    """Stop unless ``name`` is missing or a regular file (it is replaced by a rename)."""
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(st.st_mode):
+        raise Failed(f"{shown} is a link; Orama will not write through it.")
+    if not stat.S_ISREG(st.st_mode):
+        raise Failed(f"{shown} is not a plain file; move it away and run again.")
+
+
+def _json_text(data: object) -> bytes:
+    return (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
 
 
 _FIELD_NAMES = {

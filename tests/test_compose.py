@@ -545,3 +545,7 @@ def test_wireguard_address_in_gluetun_env():
     assert env["VPN_SERVICE_PROVIDER"] == "mullvad"
     env = build_apps_compose(full())["services"]["gluetun"]["environment"]
     assert "WIREGUARD_ADDRESSES" not in env
+
+
+def test_core_compose_passes_state_dir():
+    assert core()["services"]["orama"]["environment"] == {"ORAMA_STATE_DIR": "/srv/orama/orama"}

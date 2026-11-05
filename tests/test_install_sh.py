@@ -458,8 +458,9 @@ def test_run_bootstrap_dry_run_command(tmp_path):
     assert argv[:2] == ["docker", "run"]
     assert {"--rm", "--network"} <= set(argv) and argv[argv.index("--user") + 1] == "0:0"
     assert argv[argv.index("--network") + 1] == "none"
-    lan_index = argv.index("--lan-address")
-    del argv[lan_index:lan_index + 2]
+    for flag in ("--lan-address", "--host-name"):
+        index = argv.index(flag)
+        del argv[index:index + 2]
     tail = argv[argv.index("orama:t") + 1:]
     assert tail == [
         "python", "-m", "orama.cli", "bootstrap", "--platform", "ubuntu",
@@ -471,7 +472,7 @@ def test_run_bootstrap_dry_run_command(tmp_path):
 
 
 def test_run_bootstrap_reads_port(tmp_path):
-    bin_dir = fake_bin(tmp_path, "docker", 'echo 8765')
+    bin_dir = fake_bin(tmp_path, "docker", 'printf "8765\\n-\\n"')
     out = run_fn(
         "CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
         "run_bootstrap ubuntu 998 none 0 ''; echo \"port=$ORAMA_PORT\"",
@@ -698,3 +699,77 @@ def test_bootstrap_passes_the_default_route_source(tmp_path):
     args = shlex.split(next(line for line in out.stdout.splitlines() if "orama.cli" in line))
     assert args[args.index("--lan-address") + 1] == LAN
     assert f"Open http://{LAN}:8765 in your browser." in out.stdout
+
+
+# ---------------------------------------------------------------- setup link, host name (Plan 3)
+
+def _first_run_code():
+    # Built at runtime: the shape of secrets.token_urlsafe(16).
+    import secrets
+
+    return secrets.token_urlsafe(16)
+
+
+def _bootstrap_then_print(tmp_path, docker_body, **env):
+    bin_dir = fake_bin(tmp_path, "docker", docker_body)
+    fake_bin(tmp_path, "hostname", f'[[ "$1" == "-I" ]] || exit 9\necho "{LAN}"')
+    return run_fn(
+        "CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
+        "run_bootstrap ubuntu 998 none 0 ''; print_address \"$ORAMA_PORT\" \"$ORAMA_CODE\"",
+        DOCKER_BIN=bin_dir / "docker", PATH=f"{bin_dir}:{os.environ['PATH']}",
+        IP_BIN="/nonexistent", PROC_NET_ROUTE=_route_table(tmp_path, *BRIDGE_ROUTES), **env,
+    )
+
+
+def test_installer_prints_setup_link_with_code(tmp_path):
+    code = _first_run_code()
+    out = _bootstrap_then_print(tmp_path, f'printf "8765\\n{code}\\n"')
+    assert out.returncode == 0, out.stdout
+    assert out.stdout.splitlines()[-1] == (
+        f"✓ Orama is ready. Open http://{LAN}:8765/setup?code={code} in your browser."
+    )
+    assert out.stdout.count(code) == 1  # only in the final line
+
+
+def test_installer_prints_plain_link_after_password(tmp_path):
+    out = _bootstrap_then_print(tmp_path, 'printf "8765\\n-\\n"')
+    assert out.returncode == 0, out.stdout
+    assert out.stdout.splitlines()[-1] == f"✓ Orama is ready. Open http://{LAN}:8765 in your browser."
+
+
+@pytest.mark.parametrize("body", [
+    'echo 8765',                                   # no code line
+    'printf "8765\\nshort\\n"',                    # too short
+    'printf "8765\\nabc def ghi jkl mno pq\\n"',   # spaces
+    'printf "8765\\n%s\\n" "$(printf "a%.0s" {1..65})"',  # too long
+    'printf "8765\\n<script>alert(1)</script>\\n"',
+    'printf "x\\n-\\n"',                           # no port
+])
+def test_installer_refuses_a_bad_bootstrap_reply(tmp_path, body):
+    out = _bootstrap_then_print(tmp_path, body)
+    assert out.returncode == 1
+    assert "Nothing was started" in out.stdout and "Orama is ready" not in out.stdout
+
+
+@pytest.mark.parametrize("short,expected", [
+    ("NAS-1", "nas-1"), ("nas", "nas"), ("a" * 63, "a" * 63), ("a" * 64, "none"),
+    ("bad_name", "none"), ("-nas", "none"), ("nas-", "none"), ("nas.lan", "none"),
+    ("ünï", "none"), ("", "none"), ("FAIL", "none"),
+])
+def test_bootstrap_passes_the_short_host_name(tmp_path, short, expected):
+    body = '[[ "$1" == "-s" ]] || exit 9\n'
+    body += "exit 3" if short == "FAIL" else f"printf '%s\\n' {shlex.quote(short)}"
+    bin_dir = fake_bin(tmp_path, "hostname", body)
+    out = run_fn("CONFIG_ROOT=/srv/c DATA_ROOT=/srv/d PUID=1 PGID=1 ORAMA_IMAGE=o AGENT_IMAGE=a; "
+                 "run_bootstrap ubuntu 998 none 0 ''", DRY_RUN="1",
+                 PATH=f"{bin_dir}:{os.environ['PATH']}", IP_BIN="/nonexistent",
+                 PROC_NET_ROUTE=_route_table(tmp_path))
+    assert out.returncode == 0, out.stdout
+    args = shlex.split(next(line for line in out.stdout.splitlines() if "orama.cli" in line))
+    assert args[args.index("--host-name") + 1] == expected
+
+
+def test_main_prints_the_link_with_the_code():
+    text = SCRIPT.read_text()
+    assert 'print_address "$ORAMA_PORT" "$ORAMA_CODE"' in text
+    assert "tee" not in text and ">> " not in text  # the code is never written to a log

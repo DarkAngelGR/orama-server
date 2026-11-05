@@ -47,7 +47,12 @@ DATA_SUBFOLDERS = [
     "downloads/usenet/movies", "downloads/usenet/tv",
     "downloads/torrents", "downloads/torrents/movies", "downloads/torrents/tv",
 ]
-ADDRESS = re.compile(r"Orama is ready\. Open http://\S+:(\d+) in your browser\.")
+# With a one-time setup code (until a password exists): .../setup?code=<code>.
+ADDRESS = re.compile(
+    r"Orama is ready\. Open http://\S+:(\d+)(?:/setup\?code=[A-Za-z0-9_-]{16,64})? "
+    r"in your browser\."
+)
+SETUP_CODE = re.compile(r"(/setup\?code=)[A-Za-z0-9_-]+")
 DOCKER_SOCKETS = {"/var/run/docker.sock", "/run/docker.sock"}
 SHARED_NETWORK = "orama-net"
 NEWZNAB = "orama-test-newznab"
@@ -65,7 +70,8 @@ class Outputs:
 
     def add(self, host: Host, name: str, text: str) -> None:
         self.texts[name] = text
-        host.save_log(f"{name}.log", text)
+        # The saved logs are CI artifacts: never keep the one-time setup code in them.
+        host.save_log(f"{name}.log", SETUP_CODE.sub(r"\1<hidden>", text))
 
 
 @pytest.fixture(scope="module")
