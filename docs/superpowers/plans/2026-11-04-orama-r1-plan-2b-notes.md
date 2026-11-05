@@ -69,3 +69,18 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 - Library create: `POST /library/sections?name=&type=movie&agent=tv.plex.agents.movie&scanner=Plex%20Movie&language=en-US&location=/data/media/movies` returned **201** with JSON `MediaContainer.Directory[]`. The query was percent-encoded (`%20` for spaces) and succeeded; the `+` encoding was not tested. Read back `GET /library/sections` shows `Directory[]{key, type, title, agent, scanner, language, uuid, Location[]{id, path}}`.
 - Prefs: `GET /:/prefs` lists 151 `Setting` entries. `HardwareAcceleratedCodecs` and `LanNetworksBandwidth` are **not in that list** (hidden prefs). `PUT /:/prefs?<key>=<value>` answers 200 for both, but the value cannot be read back through `/:/prefs` (observed `None`). Whether they take effect is *assumed* (Plex docs; hardware transcoding also needs Plex Pass): owner check.
 - Claiming and account sign-in (plex.tv, claim token) are owner-only and *assumed* from Plex docs; nothing in CI touches them.
+
+## Task 3 — continuation (ChatGPT/Codex, 2026-11-05)
+
+- Resumed from a clean checkout at `a8284c5`; Task 2 and the existing Task 3
+  implementation were already committed. CI for `a8284c5` passed (run 41942899479).
+- Added the missing Bazarr-specific Agent tests for symlinked directories/files,
+  FIFOs, oversized files, private file mode and ownership, stop/start behavior,
+  unchanged-file idempotence and secret redaction.
+- A regression test failed when an existing auth section had no API key and its
+  last line lacked a newline: the inserted API key joined the preceding setting.
+  Added the required separator before insertion; the regression now passes.
+  This is a Task 3 correctness fix, with no new command or broader allowlist.
+- Local verification at `26f4c02`: 981 unit tests passed (27 integration tests
+  deselected), Ruff passed, ShellCheck passed. CI run 41944049997 pending.
+- Next task after CI confirmation: Task 4 (Plex LAN and NVIDIA capabilities).
