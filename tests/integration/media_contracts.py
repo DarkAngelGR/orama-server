@@ -144,8 +144,21 @@ def bazarr(port):
     if response.returncode:
         raise AssertionError("Bazarr config was unavailable")
     key = yaml.safe_load(response.stdout)["auth"]["apikey"]
-    status, _ = _request(port, "/api/system/status", headers={"X-API-KEY": key})
-    assert status == 200
+    # Bazarr can briefly reset connections while finishing its first-start setup.
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            status, _ = _request(port, "/api/system/status", headers={"X-API-KEY": key})
+        except (ConnectionError, TimeoutError, OSError):
+            if time.monotonic() >= deadline:
+                raise AssertionError("Bazarr API did not become ready") from None
+            time.sleep(3)
+            continue
+        if status >= 500 and time.monotonic() < deadline:
+            time.sleep(3)
+            continue
+        assert status == 200, f"Bazarr authenticated status returned HTTP {status}"
+        break
     status, _ = _request(port, "/api/system/status")
     assert status == 401
     print("Contract Bazarr auth.apikey accepted via X-API-KEY; anonymous status 401")
