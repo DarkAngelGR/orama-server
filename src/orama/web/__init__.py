@@ -24,6 +24,7 @@ from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import auth, security
 from orama.web.assets import configure_assets
+from orama.web.jobs import JobRunner, register_jobs, store_redactor
 from orama.wiring.http import Http
 
 SETUP_FILE = "setup.json"
@@ -86,6 +87,7 @@ class WebState:
     limiter: auth.RateLimiter
     store: SecretStore
     setup: SetupReader
+    jobs: JobRunner
 
     @property
     def first_run_code(self) -> Path:
@@ -107,6 +109,7 @@ def create_app(
         # Flask's own signed-cookie session is never used; keep its name off ours.
         SESSION_COOKIE_NAME="orama_flask_unused",
     )
+    store = SecretStore(state_dir / SECRETS_FILE)
     app.extensions["orama"] = WebState(
         state_dir=state_dir,
         agent=agent or AgentClient(),
@@ -115,8 +118,9 @@ def create_app(
         passwords=auth.PasswordFile(state_dir / AUTH_FILE),
         sessions=auth.Sessions(clock),
         limiter=auth.RateLimiter(clock),
-        store=SecretStore(state_dir / SECRETS_FILE),
+        store=store,
         setup=SetupReader(state_dir),
+        jobs=JobRunner(state_dir, redact=store_redactor(store), clock=clock),
     )
     app.jinja_env.globals["csrf_token"] = security.csrf_token
 
@@ -126,6 +130,7 @@ def create_app(
     app.register_error_handler(HTTPException, _http_error)
     app.register_error_handler(Exception, _server_error)
     app.register_blueprint(_auth_pages())
+    register_jobs(app)
     return app
 
 

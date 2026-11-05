@@ -1,0 +1,18 @@
+{% from "_macros.html" import notice %}
+{% if job is none %}
+{{ notice('wait', 'Nothing has been applied yet.') }}
+{% elif job.status == 'running' %}
+{{ notice('wait', 'Applying your setup…') }}
+{% elif job.status == 'done' %}
+{{ notice('ok', 'All done') }}
+{% elif job.status == 'failed' %}
+{{ notice('problem', 'Something needs attention — see the ✗ lines, fix them, then apply again.') }}
+{% else %}
+{{ notice('problem', 'The last apply was interrupted. Apply again.') }}
+{% endif %}
+{% if not running %}
+<form action="/jobs/apply" method="post" hx-post="/jobs/apply" hx-target="#checklist-items" hx-swap="outerHTML">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="button button-primary">{{ 'Apply again' if job else 'Apply setup' }}</button>
+</form>
+{% endif %}

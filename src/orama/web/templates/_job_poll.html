@@ -1,0 +1,11 @@
+{#- Partial for htmx: the list (swapped into #checklist-items) plus out-of-band status and poller. -#}
+{% from "_macros.html" import checklist_items, notice %}
+{{ checklist_items(job.lines if job else []) }}
+<div id="job-status" hx-swap-oob="true">
+{%- include "_job_status.html" -%}
+</div>
+{% if running -%}
+<div id="job-poller" hx-swap-oob="true" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+{%- else -%}
+<div id="job-poller" hx-swap-oob="true"></div>
+{%- endif %}
