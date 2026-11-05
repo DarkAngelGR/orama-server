@@ -71,9 +71,17 @@ def test_failed_exit_marks_failed(tmp_path: Path):
 
 def test_after_callback_gets_exit_code(tmp_path: Path):
     seen: list[int] = []
+    called = threading.Event()
+
+    def after(code: int) -> None:
+        seen.append(code)
+        called.set()
+
     runner = JobRunner(tmp_path, script_argv("raise SystemExit(3)"))
-    runner.start(tmp_path / "setup.json", after=seen.append)
+    runner.start(tmp_path / "setup.json", after=after)
     wait(runner)
+    # The child can be idle before its callback finishes on the reader thread.
+    assert called.wait(10)
     assert seen == [3]
 
 
