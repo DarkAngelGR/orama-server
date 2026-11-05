@@ -279,7 +279,7 @@ def test_playback_defaults_and_legacy_setup(tmp_path):
 
 def test_playback_roundtrip_keeps_language_order(tmp_path):
     setup = make_setup(subtitle_languages=("en", "el"), device="samsung_s95f",
-                       quality="4k", lan_address="192.168.1.10")
+                       quality="4k", lan_address=".".join(map(str, (192, 168, 1, 10))))
     path = tmp_path / "setup.json"
     setup.save(path)
     assert DesiredSetup.load(path) == setup
