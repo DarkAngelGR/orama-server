@@ -30,8 +30,8 @@ Read `AGENTS.md` first.
 | 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | done (`f36c939`) | Claude |
 | 5 | Web foundation and security | most capable | done (`8f1ddce`..`147df8a`) | Claude |
 | 6 | Design system and base layout | standard | done (`655939e`..`73ba9e0`) | Codex + Claude |
-| 7 | Apply jobs with a live checklist | standard | in progress | Claude |
-| 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | open | — |
+| 7 | Apply jobs with a live checklist | standard | done (`a107a6b`..`43b9fa8`) | Claude |
+| 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | in progress | Claude |
 | 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | open | — |
 | 10 | Settings and Change setup | standard | open | — |
 | 11 | Apps page and Home | standard | open | — |
