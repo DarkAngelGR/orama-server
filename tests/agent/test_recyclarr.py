@@ -236,7 +236,7 @@ def test_render_is_fixed_recyclarr_v8_config():
     }})
     doc = recyclarr.render(apps, {"radarr": RADARR_KEY, "sonarr": SONARR_KEY})
     radarr_profile = recyclarr.TEMPLATES["radarr"]["hd-bluray-web"]
-    assert doc["radarr"] == {"orama": {
+    assert doc["radarr"] == {"orama-radarr": {
         "base_url": "http://radarr:7878",
         "api_key": RADARR_KEY,
         "delete_old_custom_formats": False,
@@ -254,7 +254,7 @@ def test_render_is_fixed_recyclarr_v8_config():
              "assign_scores_to": [{"name": "Orama", "score": 1500}]},
         ],
     }}
-    sonarr = doc["sonarr"]["orama"]
+    sonarr = doc["sonarr"]["orama-sonarr"]
     assert sonarr["base_url"] == "http://sonarr:8989"
     assert sonarr["api_key"] == SONARR_KEY
     assert sonarr["quality_definition"] == {"type": "series"}
@@ -279,8 +279,8 @@ def test_sync_writes_private_yaml_runs_and_deletes_it(env, roots):
     assert env.runner.recyclarr_calls == 1
     assert env.seen.modes == [0o600]
     doc = env.seen.doc
-    assert doc["sonarr"]["orama"]["api_key"] == SONARR_KEY
-    assert doc["radarr"]["orama"]["api_key"] == RADARR_KEY
+    assert doc["sonarr"]["orama-sonarr"]["api_key"] == SONARR_KEY
+    assert doc["radarr"]["orama-radarr"]["api_key"] == RADARR_KEY
     assert not yaml_path(roots).exists()
     folder = roots.config / "config" / "recyclarr"
     chowned = {p for p, uid, gid in env.chowns.calls if (uid, gid) == (1000, 1001)}
@@ -318,14 +318,14 @@ def test_device_switch_drops_old_orama_scores(env):  # [RF3]
     assert env.client.recyclarr_sync(apps_for("apple_tv")) is True
     new = env.seen.doc
     for app in ("radarr", "sonarr"):
-        new_ids = {t for cf in new[app]["orama"].get("custom_formats", [])
+        new_ids = {t for cf in new[app][f"orama-{app}"].get("custom_formats", [])
                    for t in cf["trash_ids"]}
         assert new_ids == set(apps_for("apple_tv")[app]["scores"])
-        old_ids = {t for cf in old[app]["orama"].get("custom_formats", [])
+        old_ids = {t for cf in old[app][f"orama-{app}"].get("custom_formats", [])
                    for t in cf["trash_ids"]}
         assert old_ids - new_ids  # S95F blocks formats Apple TV does not
         # Recyclarr resets every score in Orama's profile it was not given (TRaSH or 0).
-        for profile in new[app]["orama"]["quality_profiles"]:
+        for profile in new[app][f"orama-{app}"]["quality_profiles"]:
             assert profile["reset_unmatched_scores"] == {"enabled": True}
 
 
@@ -335,18 +335,18 @@ def test_quality_switch_keeps_the_one_orama_profile(env):  # [RF3]
     assert env.client.recyclarr_sync(apps_for(quality="1080p")) is True
     new = env.seen.doc
     for app in ("radarr", "sonarr"):
-        (before,) = old[app]["orama"]["quality_profiles"]
-        (after,) = new[app]["orama"]["quality_profiles"]
+        (before,) = old[app][f"orama-{app}"]["quality_profiles"]
+        (after,) = new[app][f"orama-{app}"]["quality_profiles"]
         assert before["trash_id"] != after["trash_id"]  # another TRaSH profile ...
         assert before["name"] == after["name"] == "Orama"  # ... in the same app profile
-        for cf in new[app]["orama"].get("custom_formats", []):
+        for cf in new[app][f"orama-{app}"].get("custom_formats", []):
             assert cf["assign_scores_to"][0]["name"] == "Orama"
 
 
 def test_user_custom_formats_are_left_alone(env):
     env.client.recyclarr_sync(apps_for())
     for inst in env.seen.doc.values():
-        cfg = inst["orama"]
+        cfg = next(iter(inst.values()))
         assert cfg["delete_old_custom_formats"] is False
         names = {p["name"] for p in cfg["quality_profiles"]}
         assert names == {"Orama"}
@@ -537,3 +537,10 @@ def test_real_runner_failure_logs_redacted_and_answers_plainly(roots, keys, fake
     for key in (SONARR_KEY, RADARR_KEY):
         assert key not in caplog.text and key not in err.value.message
     assert not yaml_path(roots).exists()
+
+
+def test_render_instance_names_are_globally_unique():
+    doc = recyclarr.render(compile_profile("safest", "mixed"),
+                           {"sonarr": SONARR_KEY, "radarr": RADARR_KEY})
+    names = [name.casefold() for instances in doc.values() for name in instances]
+    assert len(names) == len(set(names)) == 2

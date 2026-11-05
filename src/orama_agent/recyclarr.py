@@ -30,7 +30,6 @@ from orama_agent.validate import Refused
 CONFIG_FILE = "recyclarr.yml"  # in <config>/config/recyclarr, deleted after every run
 STATE_FILE = "recyclarr.state"  # in app-env: digest of the last config that synced
 CONTAINER_CONFIG = f"/config/{CONFIG_FILE}"
-INSTANCE = "orama"
 MAX_SCORES = 200
 PROFILE_NAME = "Orama"  # the one quality profile Orama manages in each app
 MIN_SCORE, MAX_SCORE = -10000, 10000
@@ -177,7 +176,7 @@ def render(apps: Apps, keys: dict[str, str]) -> dict[str, Any]:
                  "assign_scores_to": [{"name": PROFILE_NAME, "score": score}]}
                 for score in sorted(by_score)
             ]
-        doc[app] = {INSTANCE: instance}
+        doc[app] = {f"orama-{app}": instance}
     return doc
 
 
