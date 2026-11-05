@@ -1308,3 +1308,31 @@ def test_bootstrap_bad_lan_address_has_its_own_message(roots, capsys, lan):
     err = capsys.readouterr().err
     assert "LAN address" in err and "folders cannot be used" not in err
     assert not (cfg / "orama" / "setup.draft.json").exists()
+
+
+def _private(last):
+    return ".".join(map(str, [192, 168, 1, last]))
+
+
+@pytest.mark.parametrize("saved", [None, 7])
+@pytest.mark.parametrize("file", ["setup.json", "setup.draft.json"])
+def test_bootstrap_updates_a_kept_setups_lan_address(roots, capsys, saved, file):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    kept = make_setup(data_root=str(data), config_root=str(cfg),
+                      lan_address=_private(saved) if saved else None,
+                      ports={"jellyfin": 18096})
+    kept.save(cfg / "orama" / file)
+    assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": _private(9)})) == 0
+    again = DesiredSetup.load(cfg / "orama" / file)
+    assert str(again.lan_address) == _private(9)
+    assert again.ports["jellyfin"] == 18096  # nothing else in the kept setup changes
+
+
+def test_bootstrap_lan_address_none_leaves_a_kept_one_alone(roots, capsys):
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    make_setup(data_root=str(data), config_root=str(cfg),
+               lan_address=_private(7)).save(cfg / "orama" / "setup.json")
+    assert cli.main(bootstrap_args(cfg, data, **{"--lan-address": "none"})) == 0
+    assert str(DesiredSetup.load(cfg / "orama" / "setup.json").lan_address) == _private(7)
