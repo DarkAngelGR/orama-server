@@ -16,21 +16,21 @@ from __future__ import annotations
 import urllib.parse
 from typing import Any
 
-from orama.secrets import JELLYFIN_KEY_NAME, JELLYFIN_PASSWORD_NAME
+from orama.secrets import JELLYFIN_KEY_NAME, JELLYFIN_PASSWORD_NAME, JELLYFIN_USER_NAME
 from orama.setup_model import DesiredSetup
 from orama.wiring.engine import Step, StepError, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 BASE = "http://jellyfin:8096"
 START_TIMEOUT = 300.0
-ADMIN_USER = "orama-admin"
+ADMIN_USER = "orama-admin"  # unless the owner stored another name as user:jellyfin
 KEY_APP = "Orama"
 VAAPI_DEVICE = "/dev/dri/renderD128"
 
+# Never advise deleting anything: the owner's Jellyfin (users, watch history) is kept.
 WRONG_PASSWORD = (
-    "Jellyfin already has an admin account that Orama can't sign in to. Orama won't reset "
-    "it — restore its saved Jellyfin password, or remove Jellyfin's config folder and run "
-    "apply again."
+    "Jellyfin is already set up — enter its admin name and password with set-secret "
+    "user:jellyfin and password:jellyfin, then run apply again."
 )
 UNREADABLE = "Jellyfin gave an answer Orama could not read — run apply again."
 NOT_ACCEPTED = "Jellyfin did not accept Orama's sign-in — run apply again."
@@ -88,6 +88,9 @@ def jellyfin_steps(
             raise StepError("Jellyfin's admin password is missing — run apply again.")
         return value
 
+    def admin() -> str:
+        return store.get(JELLYFIN_USER_NAME) or ADMIN_USER
+
     def wait() -> str | None:
         def ready() -> bool:
             resp = http.request("GET", f"{BASE}/System/Info/Public")
@@ -110,8 +113,9 @@ def jellyfin_steps(
         call("POST", "/Startup/Configuration", json=config)
         user = read(call("GET", "/Startup/User"))
         # A retry after a failed finish finds the admin already made: leave it alone.
-        if not (isinstance(user, dict) and user.get("Name") == ADMIN_USER):
-            call("POST", "/Startup/User", json={"Name": ADMIN_USER, "Password": secret})
+        name = admin()
+        if not (isinstance(user, dict) and user.get("Name") == name):
+            call("POST", "/Startup/User", json={"Name": name, "Password": secret})
         call("POST", "/Startup/Complete", json={})
         return "finished Jellyfin's first-run setup and made its admin account"
 
@@ -121,7 +125,7 @@ def jellyfin_steps(
             resp = http.request(
                 "POST", f"{BASE}/Users/AuthenticateByName",
                 headers={"Accept": "application/json", "Authorization": f"MediaBrowser {_CLIENT}"},
-                json={"Username": ADMIN_USER, "Pw": secret},
+                json={"Username": admin(), "Pw": secret},
             )
         except Unreachable:
             raise StepError("Jellyfin could not be reached — run apply again.") from None
