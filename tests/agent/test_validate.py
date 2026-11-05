@@ -1280,3 +1280,36 @@ def test_media_nvidia_pins(roots, app, variant):
         validate_compose(doc, roots)
     else:
         refused(doc, roots)
+
+
+def test_builder_output_with_lan_address_and_nvidia_accepted(roots):
+    host = ".".join(map(str, [192, 168, 1, 8]))
+    setup = full_setup(roots).model_copy(update={"lan_address": host})
+    setup = type(setup).model_validate(setup.model_dump())
+    doc = build_apps_compose(setup)
+    assert doc["services"]["plex"]["environment"]["ADVERTISE_IP"] == \
+        f"http://{host}:{PORTS['plex']}/"
+    for app in ("plex", "jellyfin"):
+        assert doc["services"][app]["environment"]["NVIDIA_VISIBLE_DEVICES"] == "all"
+    validate_compose(doc, roots)
+
+
+@pytest.mark.parametrize("value", [
+    "http://plex.local:{port}/", "http://localhost:{port}/", "https://{host}:{port}/",
+    "http://{host}:{port}", "http://{host}/", "http://{host}:{port}//",
+    "http://{host}:0/", " http://{host}:{port}/",
+])
+def test_plex_advertisement_shapes_refused(roots, value):
+    doc = good_doc(roots)
+    host = ".".join(map(str, [192, 168, 1, 8]))
+    doc["services"]["plex"]["environment"]["ADVERTISE_IP"] = value.format(
+        host=host, port=PORTS["plex"])
+    refused(doc, roots)
+
+
+def test_advertisement_on_jellyfin_refused(roots):
+    doc = good_doc(roots)
+    host = ".".join(map(str, [192, 168, 1, 8]))
+    doc["services"]["jellyfin"]["environment"]["ADVERTISE_IP"] = \
+        f"http://{host}:{PORTS['plex']}/"
+    refused(doc, roots)

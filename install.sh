@@ -22,6 +22,8 @@ DOCKER_BIN="${DOCKER_BIN:-docker}"
 DOCKER_START_TRIES="${DOCKER_START_TRIES:-15}"
 NVIDIA_CDI_SPECS="${NVIDIA_CDI_SPECS:-/etc/cdi/nvidia.yaml /var/run/cdi/nvidia.yaml}"
 SS_BIN="${SS_BIN:-ss}"
+IP_BIN="${IP_BIN:-ip}"
+PROC_NET_ROUTE="${PROC_NET_ROUTE:-/proc/net/route}"
 DRY_RUN="${DRY_RUN:-0}"
 
 INSTALL_URL="https://raw.githubusercontent.com/DarkAngelGR/orama-server/main/install.sh"
@@ -453,10 +455,51 @@ start_core() {
     fail "Orama did not start. To see why, run: sudo docker compose -p $CORE_PROJECT logs"
 }
 
+is_ipv4() { [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; }
+
+# The address this server uses for its default route (the one other devices on the
+# network reach it by). Asks the kernel for a route to a documentation address
+# (TEST-NET-1); nothing is sent. Fails if `ip` is missing or there is no default route.
+route_source_address() {
+  local out i
+  local -a words
+  out=$("$IP_BIN" -4 route get 192.0.2.1 2> /dev/null) || return 1
+  read -r -a words <<< "${out%%$'\n'*}"
+  for ((i = 0; i + 1 < ${#words[@]}; i++)); do
+    if [[ "${words[i]}" == src ]] && is_ipv4 "${words[i + 1]}"; then
+      printf '%s\n' "${words[i + 1]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# True if the address is on a Docker bridge (docker0, docker_gwbridge, br-...), going by
+# the kernel's route table. Without a readable table, nothing counts as a bridge.
+on_docker_bridge() {
+  local a b c d ip iface dest mask _rest
+  IFS=. read -r a b c d <<< "$1"
+  ip=$(( 10#$a | 10#$b << 8 | 10#$c << 16 | 10#$d << 24 ))  # the table's byte order
+  [[ -f "$PROC_NET_ROUTE" && -r "$PROC_NET_ROUTE" ]] || return 1
+  while read -r iface dest _ _ _ _ _ mask _rest; do
+    [[ "$iface" == docker* || "$iface" == br-* ]] || continue
+    [[ "$dest" =~ ^[0-9A-Fa-f]{8}$ && "$mask" =~ ^[0-9A-Fa-f]{8}$ ]] || continue
+    (( 16#$mask != 0 )) || continue
+    if (( (ip & 16#$mask) == 16#$dest )); then
+      return 0
+    fi
+  done < "$PROC_NET_ROUTE"
+  return 1
+}
+
 detected_address() {
   local ip address=localhost
+  if ip=$(route_source_address) && [[ "$ip" != 127.* ]]; then
+    printf '%s\n' "$ip"
+    return 0
+  fi
   for ip in $(hostname -I 2> /dev/null || true); do
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$ip" != 127.* ]]; then
+    if is_ipv4 "$ip" && [[ "$ip" != 127.* ]] && ! on_docker_bridge "$ip"; then
       address=$ip
       break
     fi

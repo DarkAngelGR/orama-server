@@ -37,6 +37,7 @@ from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
+    BAZARR_KEY_NAME,
     QBITTORRENT_PASSWORD_NAME,
     SABNZBD_NZB_KEY_NAME,
     VPN_KEY_NAME,
@@ -193,6 +194,9 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             lan_address=None if args.lan_address == "none" else args.lan_address,
         )
     except ValidationError as e:
+        if any(error["loc"][:1] == ("lan_address",) for error in e.errors()):
+            raise Failed("The LAN address must be this server's private IPv4 address, "
+                         "or none.") from None
         raise Failed("These folders cannot be used. " + _plain_errors(e)) from None
     state_name = orama_state_dir(PurePosixPath(".")).name
 
@@ -446,7 +450,7 @@ def _seed_logins(client: AgentClient, store: SecretStore, apps: list[str]) -> li
     """Seed app credentials through the Agent; return apps whose files changed."""
     seeded = []
     if "bazarr" in apps and client.seed_config(
-        "bazarr", {"api_key": _required(store, "apikey:bazarr", "bazarr")}
+        "bazarr", {"api_key": _required(store, BAZARR_KEY_NAME, "bazarr")}
     ):
         seeded.append("bazarr")
     if "sabnzbd" in apps:

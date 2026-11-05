@@ -296,7 +296,19 @@ def test_invalid_subtitle_languages(languages):
 
 @pytest.mark.parametrize("field,value", [("device", "unknown"), ("quality", "8k"),
                                           ("lan_address", "8.8.8.8"),
-                                          ("lan_address", "2001:db8::1")])
+                                          ("lan_address", "2001:db8::1"),
+                                          ("lan_address", 3232235784),
+                                          ("lan_address", b"\xc0\xa8\x01\x08")])
 def test_invalid_playback_values(field, value):
     with pytest.raises(ValidationError):
         make_setup(**{field: value})
+
+
+def test_lan_address_json_integer_refused(tmp_path):
+    good = make_setup(lan_address=".".join(map(str, (192, 168, 1, 10))))
+    data = json.loads(good.model_dump_json())
+    data["lan_address"] = 3232235786  # the same address as a JSON number
+    with pytest.raises(ValidationError):
+        type(good).model_validate_json(json.dumps(data))
+    data["lan_address"] = ".".join(map(str, (192, 168, 1, 10)))
+    assert str(type(good).model_validate_json(json.dumps(data)).lan_address) == data["lan_address"]

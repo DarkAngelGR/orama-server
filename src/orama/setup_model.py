@@ -137,6 +137,15 @@ class DesiredSetup(BaseModel):
             raise ValueError("subtitle languages must contain 1–5 unique language codes")
         return value
 
+    @field_validator("lan_address", mode="before")
+    @classmethod
+    def _lan_address_is_text(cls, value: Any) -> Any:
+        # Pydantic would also take an integer or bytes as an address; a setup file holds
+        # the dotted text only.
+        if value is not None and not isinstance(value, str | IPv4Address):
+            raise ValueError("LAN address must be written as text, like a.b.c.d")
+        return value
+
     @field_validator("lan_address")
     @classmethod
     def _private_lan_address(cls, value: IPv4Address | None) -> IPv4Address | None:
