@@ -1,0 +1,52 @@
+{# Public interfaces for later wizard, Settings and Apps pages. Text stays escaped. #}
+{% macro field(name, label, value='', error='', help='', type='text') -%}
+<div class="field">
+  <label for="{{ name }}">{{ label }}</label>
+  {% if help %}<p class="field-help" id="{{ name }}-help">{{ help }}</p>{% endif %}
+  <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value if type != 'password' else '' }}"
+    {% if error %}aria-invalid="true"{% endif %}
+    {% if help or error %}aria-describedby="{% if help %}{{ name }}-help{% endif %}{% if help and error %} {% endif %}{% if error %}{{ name }}-error{% endif %}"{% endif %}>
+  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro secret_field(name, label, saved=false, error='', help='') -%}
+{{ field(name, label, '', error, (help ~ ' ' if help else '') ~ ('Saved — leave empty to keep.' if saved else ''), 'password') }}
+{%- endmacro %}
+
+{# options: sequence of (value, label) pairs. selected: one value. #}
+{% macro choice(name, label, options, selected='', error='') -%}
+<fieldset class="field choice-group"{% if error %} aria-describedby="{{ name }}-error"{% endif %}>
+  <legend>{{ label }}</legend>
+  <div class="choices">
+  {% for value, text in options %}
+    <label class="choice" for="{{ name }}-{{ loop.index }}">
+      <input id="{{ name }}-{{ loop.index }}" type="radio" name="{{ name }}" value="{{ value }}"{% if value == selected %} checked{% endif %}{% if error %} aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
+      <span>{{ text }}</span>
+    </label>
+  {% endfor %}
+  </div>
+  {% if error %}<p class="field-error" id="{{ name }}-error">{{ error }}</p>{% endif %}
+</fieldset>
+{%- endmacro %}
+
+{# lines: plain checklist strings from the job runner, already redacted server-side. #}
+{% macro checklist(lines, running=false) -%}
+<section class="checklist" aria-label="Setup progress" aria-live="polite" aria-relevant="additions text">
+  <p class="checklist-heading">{{ 'Applying your setup…' if running else 'Setup progress' }}</p>
+  <ul>{% for line in lines %}<li>{{ line }}</li>{% else %}<li>Waiting to start.</li>{% endfor %}</ul>
+  {% if running %}<p class="field-help">You can leave this page open while Orama connects your apps.</p>{% endif %}
+</section>
+{%- endmacro %}
+
+{% macro notice(kind, text) -%}
+{% set severity = kind if kind in ('ok', 'wait', 'problem') else 'wait' %}
+<div class="notice notice-{{ severity }}" role="{{ 'alert' if severity == 'problem' else 'status' }}">
+  <span class="notice-label">{{ {'ok': 'Done', 'wait': 'Please note', 'problem': 'Needs attention'}[severity] }}</span>
+  <p>{{ text }}</p>
+</div>
+{%- endmacro %}
+
+{% macro button(label, kind='primary') -%}
+<button type="submit" class="button button-{{ kind if kind in ('primary', 'secondary', 'quiet', 'danger') else 'primary' }}">{{ label }}</button>
+{%- endmacro %}
