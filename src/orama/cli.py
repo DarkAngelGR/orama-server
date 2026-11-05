@@ -37,8 +37,6 @@ from orama.layout import app_config_dir, data_folders, orama_state_dir
 from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
-    JELLYFIN_PASSWORD_NAME,
-    PLEX_TOKEN_NAME,
     QBITTORRENT_PASSWORD_NAME,
     SABNZBD_NZB_KEY_NAME,
     VPN_KEY_NAME,
