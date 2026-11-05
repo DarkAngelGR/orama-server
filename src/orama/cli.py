@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import errno
+import fcntl
 import getpass
 import json
 import logging
@@ -31,10 +32,12 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 
 from pydantic import ValidationError
 
+from orama import state
 from orama.agent_client import DEFAULT_SOCKET, AgentClient, AgentError
 from orama.catalog import CATALOG, ENV_FILE_VALUE, UGOS_RESERVED_PORTS
 from orama.compose import build_apps_compose, build_core_compose, dump_yaml
@@ -69,6 +72,8 @@ QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
 SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
 PLEX_POLL_SECONDS = 2
+SETUP_LOCK_WAIT = 30  # seconds bootstrap waits for a web or apply setup write to finish
+APPLY_BUSY = "Orama is already applying the setup — wait for it to finish, then try again."
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
 SECRET_NAME = re.compile(
     rf"(?:{re.escape(VPN_KEY_NAME)}"
@@ -229,19 +234,28 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
         try:
             chown(state_fd, args.puid, args.pgid)
             os.fchmod(state_fd, 0o700)
-            name, existing = _existing_setup(state_fd, config_root / state_name)
-            setup = existing or draft
-            # The installer detects the address on every run: a NAS that got a new address
-            # keeps advertising the right one. `none` (nothing detected) changes nothing.
-            if draft.lan_address is not None and setup.lan_address != draft.lan_address:
-                setup = setup.model_copy(update={"lan_address": draft.lan_address})
-            # A kept setup is Orama-writable: only sane ports survive, the rest are reassigned.
-            kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
-            apps = [a for a, s in CATALOG.items() if s.default_host_port] + ["orama"]
-            ports = assign_ports(apps, previous=kept, taken=args.taken_ports)
-            setup = setup.model_copy(update={"ports": {**kept, **ports}})
-            text = _setup_text(setup)
-            _write_atomic(state_fd, name, text, 0o600, owner=(args.puid, args.pgid), chown=chown)
+            owner = (args.puid, args.pgid)
+            lock_fd = _open_setup_lock(state_fd, config_root / state_name, owner, chown)
+            try:
+                # Read, update and write the setup while no web save or apply can write it.
+                _lock_within(lock_fd, SETUP_LOCK_WAIT)
+                name, existing = _existing_setup(state_fd, config_root / state_name)
+                setup = existing or draft
+                # The installer detects the address on every run: a NAS that got a new
+                # address keeps advertising the right one. `none` (nothing detected) changes
+                # nothing.
+                if draft.lan_address is not None and setup.lan_address != draft.lan_address:
+                    setup = setup.model_copy(update={"lan_address": draft.lan_address})
+                # A kept setup is Orama-writable: only sane ports survive, the rest are
+                # reassigned.
+                kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
+                apps = [a for a, s in CATALOG.items() if s.default_host_port] + ["orama"]
+                ports = assign_ports(apps, previous=kept, taken=args.taken_ports)
+                setup = setup.model_copy(update={"ports": {**kept, **ports}})
+                text = _setup_text(setup)
+                _write_atomic(state_fd, name, text, 0o600, owner=owner, chown=chown)
+            finally:
+                os.close(lock_fd)  # releases the lock
         finally:
             os.close(state_fd)
 
@@ -320,6 +334,58 @@ def _make_dir(parent_fd: int, name: str, shown: PurePosixPath, mode: int) -> int
     if made:
         os.fchmod(fd, mode)
     return fd
+
+
+def _open_setup_lock(
+    state_fd: int, shown_dir: PurePosixPath, owner: tuple[int, int], chown: Chown
+) -> int:
+    """Open ``setup.lock`` in the state folder; a new one is made 0600 and owned by PUID:PGID.
+
+    We run as root in a folder Orama (PUID) can write: never follow a link, never block on a
+    FIFO, and use only a regular file with one name. An existing file is never chowned (it
+    could be swapped for a link to a root file between the check and the chown).
+    """
+    shown = shown_dir / state.SETUP_LOCK
+    try:
+        fd = os.open(state.SETUP_LOCK, _NEW_FILE_FLAGS, state.LOCK_MODE, dir_fd=state_fd)
+    except FileExistsError:
+        pass
+    else:
+        try:
+            os.fchmod(fd, state.LOCK_MODE)
+            chown(fd, *owner)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        fd = os.open(state.SETUP_LOCK, flags, dir_fd=state_fd)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Failed(f"{shown} is a link; Orama will not use it.") from None
+        raise Failed(f"Cannot open {shown} ({e.strerror}).") from None
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        os.close(fd)
+        raise Failed(f"{shown} is not a plain file; move it away and run again.")
+    return fd
+
+
+def _lock_within(fd: int, seconds: float) -> None:
+    """Take the exclusive lock on ``fd``, waiting at most ``seconds``."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise Failed(
+                    "Orama is busy saving the setup — wait a minute, then run the installer "
+                    "again."
+                ) from None
+            time.sleep(0.1)
 
 
 def _existing_setup(state_fd: int, shown: PurePosixPath) -> tuple[str, DesiredSetup | None]:
@@ -410,7 +476,21 @@ def apply(setup_path: Path) -> int:
     except (OSError, ValueError):
         raise Failed(f"The setup at {setup_path} cannot be read.") from None
 
-    store = SecretStore(Path(orama_state_dir(setup.config_root)) / SECRETS_FILE)
+    state_dir = Path(orama_state_dir(setup.config_root))
+    try:
+        lock_fd = state.open_lock_file(state.apply_lock(state_dir))
+    except OSError as e:
+        raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
+    with ExitStack() as held:  # one apply at a time, held until this apply returns
+        try:
+            held.enter_context(state.hold(lock_fd, blocking=False))
+        except state.Busy:
+            raise Failed(APPLY_BUSY) from None
+        return _apply_locked(setup_path, setup, state_dir)
+
+
+def _apply_locked(setup_path: Path, setup: DesiredSetup, state_dir: Path) -> int:
+    store = SecretStore(state_dir / SECRETS_FILE)
     install_redaction(store)
     apps = enabled_apps(setup)
     client = AgentClient(os.environ.get("ORAMA_AGENT_SOCKET", DEFAULT_SOCKET))
@@ -426,7 +506,7 @@ def apply(setup_path: Path) -> int:
         client.ensure_folders(folders)
         print("✓ Folders ready", flush=True)
         changed = client.apply(build_apps_compose(setup), env_files_for(setup, store))
-        setup.save(setup_path)
+        state.save_setup(setup_path, setup)
         for app in changed:
             print(f"✓ {app} started", flush=True)
         # After the deploy: the apps first write their own default config files.

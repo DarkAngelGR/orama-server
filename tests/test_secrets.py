@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import logging
+import multiprocessing
 import re
 import stat
 
@@ -60,7 +61,7 @@ def test_no_temp_files_left_behind(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
     st.set("a", "valuevalue")
     st.set("a", "valuevalue2")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["s.bin", "s.key"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["s.bin", "s.key", "s.lock"]
 
 
 def test_key_file_not_overwritten(tmp_path):
@@ -69,6 +70,76 @@ def test_key_file_not_overwritten(tmp_path):
     key = (tmp_path / "s.key").read_bytes()
     SecretStore(p).set("b", "valuevalue")
     assert (tmp_path / "s.key").read_bytes() == key
+
+
+def _set_many(path, prefix, count, start):
+    store = SecretStore(path)
+    start.wait(60)  # both processes write at the same time
+    for i in range(count):
+        store.set(f"{prefix}:{i}", f"{prefix}-value-{i}")
+
+
+def test_parallel_secret_writes_keep_every_value(tmp_path):
+    path = tmp_path / "secrets.bin"
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Barrier(2)
+    workers = [
+        ctx.Process(target=_set_many, args=(path, p, 50, start)) for p in ("one", "two")
+    ]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(120)
+        assert w.exitcode == 0
+    names = SecretStore(path).names()
+    assert len(names) == 100
+    assert set(names) == {f"{p}:{i}" for p in ("one", "two") for i in range(50)}
+
+
+def test_store_writes_take_the_store_lock(tmp_path, monkeypatch):
+    from orama import secrets as secrets_module
+
+    seen = []
+    real = secrets_module.state.locked
+
+    def spy(path, **kw):
+        seen.append(path)
+        return real(path, **kw)
+
+    monkeypatch.setattr(secrets_module.state, "locked", spy)
+    st = SecretStore(tmp_path / "secrets.bin")
+    st.set("a", "valuevalue")
+    st.delete("a")
+    assert seen == [tmp_path / "secrets.lock"] * 2
+    assert mode(tmp_path / "secrets.lock") == 0o600
+
+
+def test_store_path_must_not_end_in_lock(tmp_path):
+    with pytest.raises(ValueError):
+        SecretStore(tmp_path / "secrets.lock")
+
+
+def test_delete_removes_one_name_only(tmp_path):
+    p = tmp_path / "secrets.bin"
+    st = SecretStore(p)
+    st.set("a", "one-value")
+    st.set("b", "two-value")
+    st.delete("a")
+    assert SecretStore(p).names() == ["b"]
+    assert SecretStore(p).get("b") == "two-value"
+    assert mode(p) == 0o600
+
+
+def test_delete_missing_is_noop(tmp_path):
+    p = tmp_path / "secrets.bin"
+    st = SecretStore(p)
+    st.delete("never-there")  # no store yet: nothing to do, nothing created
+    assert not p.exists()
+    st.set("a", "one-value")
+    before = p.read_bytes()
+    st.delete("never-there")
+    assert p.read_bytes() == before
+    assert st.names() == ["a"]
 
 
 def test_wrong_key_raises_clear_error(tmp_path):

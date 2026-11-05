@@ -3,7 +3,9 @@
 Secrets live in one Fernet-encrypted JSON blob. The key sits beside it in a
 ``.key`` file. Both files are created mode 0600 from the start (never
 chmod'ed afterwards) and written atomically via a temp file in the same
-directory.
+directory. Writes (``set``, ``delete``) reload and write while holding ``<store>.lock``
+(``secrets.lock`` next to ``secrets.bin``), so writers in other processes never lose each
+other's changes. Reads need no lock: every write is an atomic rename.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from orama import state
 from orama.catalog import CATALOG
 from orama.setup_model import DesiredSetup, enabled_apps
 
@@ -67,9 +70,10 @@ def _write_private(path: Path, data: bytes, *, exclusive: bool = False) -> None:
 class SecretStore:
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
-        if self._path.suffix == ".key":
-            raise ValueError(f"secret store path must not end in .key: {self._path}")
+        if self._path.suffix in (".key", ".lock"):
+            raise ValueError(f"secret store path must not end in .key or .lock: {self._path}")
         self._key_path = self._path.with_suffix(".key")
+        self._lock_path = self._path.with_suffix(".lock")
 
     def _fernet(self, *, create: bool = False) -> Fernet:
         try:
@@ -102,9 +106,25 @@ class SecretStore:
         return self._load().get(name)
 
     def set(self, name: str, value: str) -> None:
-        data = self._load()
-        data[name] = value
         self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with state.locked(self._lock_path):
+            data = self._load()
+            data[name] = value
+            self._save(data)
+
+    def delete(self, name: str) -> None:
+        """Remove ``name``; a name that is not stored is left alone (no write)."""
+        if not self._path.parent.is_dir():
+            return
+        with state.locked(self._lock_path):
+            data = self._load()
+            if name not in data:
+                return
+            del data[name]
+            self._save(data)
+
+    def _save(self, data: dict[str, str]) -> None:
+        """Encrypt and write ``data``; the caller holds the store lock."""
         token = self._fernet(create=True).encrypt(json.dumps(data).encode())
         _write_private(self._path, token)
 
