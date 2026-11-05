@@ -385,6 +385,53 @@ def app_get(applied: dict, secrets_: dict[str, str], app: str, path: str):
     return http_json(f"http://127.0.0.1:{port}{path}", {"X-Api-Key": secrets_[f"apikey:{app}"]})
 
 
+def test_plan2b_bazarr_configuration(clean_host: Host, applied: dict):
+    keys = stored_secrets(clean_host)
+    settings = app_get(applied, keys, "bazarr", "/api/system/settings")
+    for app in ("sonarr", "radarr"):
+        assert settings["general"][f"use_{app}"] is True
+        assert settings[app]["ip"] == app
+        assert bool(settings[app]["apikey"] == keys[f"apikey:{app}"]), "wrong link key"
+    profiles = app_get(applied, keys, "bazarr", "/api/system/languages/profiles")
+    mine = [p for p in profiles if p["name"] == "Orama"]
+    assert len(mine) == 1
+    assert [i["language"] for i in mine[0]["items"]] == ["el", "en"]
+    for kind in ("serie", "movie"):
+        assert settings["general"][f"{kind}_default_enabled"] is True
+        assert str(settings["general"][f"{kind}_default_profile"]) == str(mine[0]["profileId"])
+
+
+@pytest.mark.parametrize("app", ["sonarr", "radarr"])
+def test_plan2b_quality_scores(clean_host: Host, applied: dict, app):
+    keys = stored_secrets(clean_host)
+    profiles = app_get(applied, keys, app, "/api/v3/qualityprofile")
+    mine = [p for p in profiles if p["name"] == "Orama"]
+    assert len(mine) == 1, [(p["id"], p["name"]) for p in profiles]
+    scores = {i["name"]: i["score"] for i in mine[0]["formatItems"]}
+    wanted = {name: -10000 for name in (
+        "DV (Disk)", "DV Boost", "DV (w/o HDR fallback)", "DTS", "DTS-HD MA",
+        "DTS X", "DTS-HD HRA", "DTS-ES", "TrueHD", "TrueHD ATMOS", "PCM", "FLAC")}
+    wanted["HDR"] = 1500
+    assert {name: scores.get(name) for name in wanted} == wanted, scores
+
+
+def test_plan2b_jellyfin_and_notifications(clean_host: Host, applied: dict):
+    keys = stored_secrets(clean_host)
+    port = applied["setup"]["ports"]["jellyfin"]
+    base = f"http://127.0.0.1:{port}"
+    assert http_json(base + "/System/Info/Public")["StartupWizardCompleted"] is True
+    token = keys["apikey:jellyfin"]
+    headers = {"Authorization": f'MediaBrowser Client="Orama", Device="Orama", '
+               f'DeviceId="orama", Version="1", Token="{token}"'}
+    folders = http_json(base + "/Library/VirtualFolders", headers)
+    assert {(f["Name"], tuple(f["Locations"])) for f in folders} == {
+        ("Movies", ("/data/media/movies",)), ("TV Shows", ("/data/media/tv",))}
+    for app in ("sonarr", "radarr"):
+        notifications = app_get(applied, keys, app, "/api/v3/notification")
+        assert len([n for n in notifications if n["name"] == "Jellyfin (Orama)"]) == 1
+    assert "Plex is waiting for sign-in" in applied["output"]
+
+
 def test_pinned_notification_contracts(clean_host, applied, capsys):
     for app in ("sonarr", "radarr"):
         schemas = app_get(applied, stored_secrets(clean_host), app, "/api/v3/notification/schema")
@@ -636,7 +683,7 @@ def test_second_install_and_apply_change_nothing(clean_host: Host, installed: di
     status, output = rerun["apply"]
     assert status == 1, f"second apply: unexpected exit {status}:\n{output}"
     # Deploy and wiring both report nothing: the only ✓ is the always-printed folders line.
-    assert [l for l in output.splitlines() if l.startswith(("✓", "…"))] == ["✓ Folders ready"], (
+    assert [l for l in output.splitlines() if l.startswith("✓")] == ["✓ Folders ready"], (
         f"{output}\n{app_warnings(clean_host, WIRED_APPS)}")
     failures = failure_lines(output)
     assert len(failures) == 1 and FAKE_SERVER_HOST in failures[0], failures
