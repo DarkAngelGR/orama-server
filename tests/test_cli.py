@@ -474,7 +474,7 @@ def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, ro
     assert {f"✓ {a} started" for a in enabled_apps(setup)} <= set(lines)
 
     secrets = credential_values(cfg)
-    assert len(secrets) == 5  # sonarr, radarr, prowlarr api keys + sabnzbd api and nzb keys
+    assert len(secrets) == 6  # includes Bazarr API key
     for value in secrets:
         assert value not in out.out and value not in out.err and value not in caplog.text
 
