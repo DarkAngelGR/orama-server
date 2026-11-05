@@ -949,3 +949,49 @@ def test_agent_bounds_concurrent_connections_and_recovers(agent):
 
     # Releasing an idle slot must restore normal service.
     assert agent.client.status() == {}
+
+
+@pytest.mark.parametrize("kind", ["directory_link", "file_link", "fifo", "too_big"])
+def test_bazarr_seed_refuses_unsafe_file(agent, roots, tmp_path, kind):
+    path = roots.config / "config/bazarr/config/config.yaml"
+    path.parent.parent.mkdir(parents=True)
+    target = tmp_path / "victim"
+    target.mkdir()
+    if kind == "directory_link":
+        path.parent.symlink_to(target)
+    else:
+        path.parent.mkdir()
+        if kind == "file_link":
+            (target / "keep").write_text("untouched")
+            path.symlink_to(target / "keep")
+        elif kind == "fifo":
+            os.mkfifo(path)
+        else:
+            path.write_bytes(b"#" * (MAX_REQUEST + 1))
+    with pytest.raises(AgentError):
+        agent.client.seed_config("bazarr", {"api_key": "ab" * 16})
+    assert sorted(p.name for p in target.iterdir()) == (["keep"] if kind == "file_link" else [])
+    if kind == "file_link":
+        assert (target / "keep").read_text() == "untouched"
+    assert agent.runner.stops == []
+
+
+def test_bazarr_seed_private_idempotent_and_redacted(agent, roots, caplog):
+    torrent_doc(agent, roots)
+    path = roots.config / "config/bazarr/config/config.yaml"
+    value = "ab" * 16
+    with caplog.at_level(logging.DEBUG):
+        assert agent.client.seed_config("bazarr", {"api_key": value}) is True
+        assert yaml.safe_load(path.read_text())["auth"]["apikey"] == value
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert any(Path(p).name.startswith(".config.yaml.") and
+                   (uid, gid) == (roots.puid, roots.pgid)
+                   for p, uid, gid in agent.chowns.calls)
+        inode = path.stat().st_ino
+        assert agent.client.seed_config("bazarr", {"api_key": value}) is False
+        assert path.stat().st_ino == inode
+        with pytest.raises(AgentError) as error:
+            agent.client.seed_config("bazarr", {"api_key": value + "#"})
+    assert agent.runner.stops == ["bazarr"]
+    assert agent.runner.starts == ["bazarr"]
+    assert value not in caplog.text and value not in str(error.value)

@@ -230,3 +230,10 @@ def test_bazarr_rejects_bad_keys_without_echo(bad):
     with pytest.raises(Refused) as error:
         render("bazarr", None, {"api_key": bad})
     assert not isinstance(bad, str) or not bad or bad not in str(error.value)
+
+
+def test_bazarr_missing_key_after_unterminated_line():
+    original = "auth:\n  username: user"
+    updated = render("bazarr", original, BAZARR)
+    assert updated == original + f"\n  apikey: {BAZARR['api_key']}\n"
+    assert render("bazarr", updated, BAZARR) is None

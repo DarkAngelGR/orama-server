@@ -198,5 +198,7 @@ def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
             ending = "\r\n" if lines[i].endswith("\r\n") else "\n"
             lines[i] = f"  apikey: {key}{ending}"
             return "".join(lines)
+    if end and not lines[end - 1].endswith("\n"):
+        lines[end - 1] += "\n"
     lines.insert(end, f"  apikey: {key}\n")
     return "".join(lines)
