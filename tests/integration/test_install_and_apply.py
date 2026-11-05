@@ -407,8 +407,9 @@ def test_pinned_bazarr_contract(applied, capsys):
 
 
 def test_pinned_jellyfin_contract(applied, capsys):
+    # Runs on its own throwaway container; the installed Jellyfin stays untouched.
     with capsys.disabled():
-        media_contracts.jellyfin(applied["setup"]["ports"]["jellyfin"])
+        media_contracts.jellyfin()
 
 
 def test_pinned_recyclarr_contract(clean_host, applied, tmp_path, capsys):
