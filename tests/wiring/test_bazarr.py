@@ -25,7 +25,8 @@ class FakeBazarr:
                 "use_sonarr": False, "use_radarr": False, "enabled_providers": [],
                 "serie_default_enabled": False, "serie_default_profile": "",
                 "movie_default_enabled": False, "movie_default_profile": "",
-                "ignore_ass_subs": False, "minimum_score": 90,
+                "ignore_ass_subs": False, "ignore_pgs_subs": False,
+                "ignore_vobsub_subs": False, "minimum_score": 90,
             },
             "sonarr": {"ip": "127.0.0.1", "port": 8989, "base_url": "/", "apikey": "", "ssl": False},
             "radarr": {"ip": "127.0.0.1", "port": 7878, "base_url": "/", "apikey": "", "ssl": False},
@@ -128,6 +129,10 @@ def test_first_run_writes_each_once_then_second_run_unchanged(tmp_path):
     assert s["general"]["movie_default_profile"] == profile["profileId"]
     assert set(s["general"]["enabled_providers"]) == set(NO_ACCOUNT_PROVIDERS)
     assert s["general"]["ignore_ass_subs"] is True
+    assert s["general"]["ignore_pgs_subs"] is True
+    assert s["general"]["ignore_vobsub_subs"] is True
+    assert next(r for r in first if r.name == "bazarr:apps").message == (
+        "linked Bazarr to Sonarr and Radarr")
     assert len(bz.writes) == 4  # apps, languages, providers, format: one write each
     second = run(bz, setup, store)
     assert all(v == "unchanged" for v in statuses(second).values())
@@ -190,6 +195,8 @@ def test_disabled_sonarr_turns_the_link_off_and_is_not_waited_for(tmp_path):
     assert bz.settings["general"]["use_sonarr"] is False
     assert bz.settings["general"]["use_radarr"] is True
     assert bz.fields_written()[-1] == ["settings-general-use_sonarr"]
+    assert next(r for r in results if r.name == "bazarr:apps").message == (
+        "unlinked Bazarr from Sonarr")
     again = run_steps(bazarr_steps(no_sonarr, store, bz.http))
     assert statuses(again)["bazarr:apps"] == "unchanged"
 
@@ -211,6 +218,22 @@ def test_user_edit_to_the_link_is_put_back(tmp_path):
     assert statuses(results)["bazarr:apps"] == "changed"
     assert bz.settings["radarr"]["port"] == 7878
     assert bz.fields_written()[n:] == [["settings-radarr-port"]]
+    assert next(r for r in results if r.name == "bazarr:apps").message == (
+        "linked Bazarr to Radarr")
+
+
+def test_format_writes_only_the_image_subtitle_switches_that_differ(tmp_path):
+    bz = FakeBazarr()
+    bz.settings["general"]["ignore_ass_subs"] = True
+    bz.settings["general"]["ignore_vobsub_subs"] = True
+    setup, store = make(tmp_path)
+    results = run(bz, setup, store)
+    assert statuses(results)["bazarr:format"] == "changed"
+    assert bz.fields_written()[-1] == ["settings-general-ignore_pgs_subs"]
+    assert bz.settings["general"]["ignore_pgs_subs"] is True
+    n = len(bz.writes)
+    assert statuses(run(bz, setup, store))["bazarr:format"] == "unchanged"
+    assert len(bz.writes) == n
 
 
 def test_without_opensubtitles_credentials_it_is_not_enabled_and_no_error(tmp_path):
@@ -273,7 +296,7 @@ def test_missing_bazarr_key_fails_plainly(tmp_path):
     empty = SecretStore(tmp_path / "empty.bin")
     results = run_steps(bazarr_steps(setup, empty, bz.http))
     assert statuses(results)["wait:bazarr"] == "failed"
-    assert "key is missing" in results[0].message
+    assert results[0].message == "Bazarr's API key is missing — run apply again."
 
 
 def test_unreachable_and_bad_key_are_plain_failures(tmp_path):
