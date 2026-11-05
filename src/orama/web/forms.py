@@ -294,13 +294,13 @@ def apply_downloads(
             if not text:
                 errors["vpn_address"] = (
                     f"{provider.label} needs the Address line from its WireGuard file, "
-                    "like 10.64.12.34/32."
+                    "it ends in /32."
                 )
             else:
                 try:
                     address = IPv4Interface(text)
                 except (AddressValueError, ValueError):
-                    errors["vpn_address"] = ("Write the address like 10.64.12.34/32, as in "
+                    errors["vpn_address"] = ("Write the address as it appears in the file, ending in /32, as in "
                                              "the Address line of the WireGuard file.")
         if provider is not None and "vpn_address" not in errors and "vpn_key" not in errors:
             try:

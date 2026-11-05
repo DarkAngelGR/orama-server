@@ -24,7 +24,7 @@
     {{ secret_field('vpn_key', 'WireGuard private key', values.key_saved, errors.vpn_key, 'From the WireGuard file your VPN service gives you (the PrivateKey line).') }}
     {% set current = values.providers|selectattr('value', 'equalto', values.provider)|first %}
     <div data-feature="address"{% if not current.needs_address %} hidden{% endif %}>
-      {{ field('vpn_address', 'WireGuard address', values.address, errors.vpn_address, 'The Address line from the same file, like 10.64.12.34/32. If you leave off the /32 at the end, Orama adds it. Mullvad, IVPN and Surfshark need this; other services do not.', 'text', 'off') }}
+      {{ field('vpn_address', 'WireGuard address', values.address, errors.vpn_address, 'The Address line from the same file, it ends in /32. If you leave off the /32 at the end, Orama adds it. Mullvad, IVPN and Surfshark need this; other services do not.', 'text', 'off') }}
     </div>
     <div data-feature="port_forwarding"{% if not current.port_forwarding %} hidden{% endif %}>
       {{ checkbox('port_forwarding', 'Use port forwarding', values.port_forwarding, 'Lets other people connect to you, so torrents download faster. Only Proton VPN offers it here.', '', 'port_forwarding') }}
