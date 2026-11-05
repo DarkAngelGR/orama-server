@@ -1,0 +1,4 @@
+name: Apple TV 4K
+verified: false
+unplayable: [dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, truehd, truehd_atmos, pcm_multichannel, flac]
+preferred: [dv, hdr10]

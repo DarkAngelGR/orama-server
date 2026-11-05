@@ -1,0 +1,4 @@
+name: Safest (plays on almost anything)
+verified: true
+unplayable: [dv, dv_no_fallback, dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, pcm_multichannel, flac, truehd, truehd_atmos]
+preferred: [hdr10]
