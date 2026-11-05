@@ -87,12 +87,13 @@ def test_generated_key_format():
 def test_ensure_app_keys_is_idempotent(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
     ensure_app_keys(st, ["sonarr", "radarr", "prowlarr", "bazarr", "plex"])
-    assert sorted(st.names()) == ["apikey:prowlarr", "apikey:radarr", "apikey:sonarr"]
+    assert sorted(st.names()) == ["apikey:bazarr", "apikey:prowlarr", "apikey:radarr", "apikey:sonarr", "plex:client_id"]
     before = {n: st.get(n) for n in st.names()}
     ensure_app_keys(st, ["sonarr", "radarr", "prowlarr"])
     assert {n: st.get(n) for n in st.names()} == before
-    for v in before.values():
-        assert re.fullmatch(r"[0-9a-f]{32}", v)
+    for name, value in before.items():
+        if name != "plex:client_id":
+            assert re.fullmatch(r"[0-9a-f]{32}", value)
 
 
 def test_ensure_app_keys_never_overwrites_existing(tmp_path):
@@ -392,3 +393,20 @@ def test_generated_secrets_fit_the_env_file_allowlist():
     for _ in range(500):
         assert ENV_FILE_VALUE.fullmatch(generate_api_key())
         assert ENV_FILE_VALUE.fullmatch(new_password())
+
+
+def test_media_secrets_generated_once_and_never_overwritten(tmp_path):
+    from uuid import UUID
+
+    st = SecretStore(tmp_path / "s.bin")
+    ensure_app_keys(st, ["bazarr", "jellyfin", "plex"])
+    first = {name: st.get(name) for name in (
+        "apikey:bazarr", "password:jellyfin", "plex:client_id"
+    )}
+    assert re.fullmatch(r"[0-9a-f]{32}", first["apikey:bazarr"])
+    assert len(first["password:jellyfin"]) >= 24
+    assert str(UUID(first["plex:client_id"])) == first["plex:client_id"]
+    ensure_app_keys(st, ["bazarr", "jellyfin", "plex"])
+    assert {name: st.get(name) for name in first} == first
+    assert st.get("token:plex") is None
+    assert st.get("apikey:jellyfin") is None
