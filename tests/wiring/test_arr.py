@@ -451,9 +451,47 @@ def test_schema_without_expected_field_fails_plainly(tmp_path, app):
     by = {r.name: r for r in run_steps(arr_steps(app, setup, store, arr.http))}
     assert by[f"{app}:client:sabnzbd"].status == "failed"
     assert "different version" in by[f"{app}:client:sabnzbd"].message
+    assert "for this download client" in by[f"{app}:client:sabnzbd"].message
 
 
 # ---------------------------------------------------------------- media server refresh
+
+def test_jellyfin_notification_does_not_pop_up_on_screens(tmp_path, app):
+    arr = FakeArr(app)
+    templates = notify_schema()
+    next(f for f in templates[1]["fields"] if f["name"] == "notify")["value"] = True
+    arr.http.route("GET", f"{arr.api}/notification/schema", lambda c: arr.ok(templates))
+    setup, store = make(tmp_path, app, media=("jellyfin",))
+    run_steps(arr_steps(app, setup, store, arr.http))
+    assert arr.field(notified(arr, "Jellyfin (Orama)"), "notify") is False
+
+
+def test_jellyfin_notification_pop_ups_turned_on_by_hand_are_turned_off(tmp_path, app):
+    arr = FakeArr(app)
+    setup, store = make(tmp_path, app, media=("jellyfin",))
+    run_steps(arr_steps(app, setup, store, arr.http))
+    mine = notified(arr, "Jellyfin (Orama)")
+    next(f for f in mine["fields"] if f["name"] == "notify")["value"] = True
+    by = {r.name: r for r in run_steps(arr_steps(app, setup, store, arr.http))}
+    assert by[f"{app}:notify:jellyfin"].status == "changed"
+    assert arr.field(notified(arr, "Jellyfin (Orama)"), "notify") is False
+    again = {r.name: r for r in run_steps(arr_steps(app, setup, store, arr.http))}
+    assert again[f"{app}:notify:jellyfin"].status == "unchanged"
+
+
+def test_notification_schema_without_expected_field_names_the_library_update(tmp_path, app):
+    arr = FakeArr(app)
+    arr.http.route(
+        "GET", f"{arr.api}/notification/schema",
+        lambda c: arr.ok([dict(s, fields=[]) for s in notify_schema()]),
+    )
+    setup, store = make(tmp_path, app, media=("jellyfin",))
+    by = {r.name: r for r in run_steps(arr_steps(app, setup, store, arr.http))}
+    message = by[f"{app}:notify:jellyfin"].message
+    assert by[f"{app}:notify:jellyfin"].status == "failed"
+    assert "library update" in message and "download client" not in message
+    assert "different version" in message
+
 
 def notified(arr, name):
     n = arr.notification(name)
