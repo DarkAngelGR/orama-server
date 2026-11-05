@@ -14,13 +14,22 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 from conftest import make_setup, random_secret
-from wiring import test_arr, test_prowlarr, test_qbittorrent, test_sabnzbd
+from wiring import (
+    test_arr,
+    test_bazarr,
+    test_jellyfin,
+    test_plex,
+    test_prowlarr,
+    test_qbittorrent,
+    test_recyclarr,
+    test_sabnzbd,
+)
 
 from orama import cli
 from orama.__main__ import make_server
 from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 from orama.layout import app_config_dir, data_folders
-from orama.secrets import VPN_KEY_NAME, SecretStore, ensure_app_keys
+from orama.secrets import PLEX_CLIENT_ID_NAME, VPN_KEY_NAME, SecretStore, ensure_app_keys
 from orama.setup_model import DesiredSetup, IndexerChoice, VpnConfig, enabled_apps
 from orama.wiring.http import Http
 from orama_agent.runner import FakeRunner
@@ -365,6 +374,10 @@ def test_bootstrap_empty_taken_ports(capsys, roots):
 
 # ---------------------------------------------------------------- apply
 
+PLEX_WAITING = (
+    "… Plex: skipped, Plex is waiting for sign-in — run `python -m orama.cli plex-sign-in`"
+)
+
 class Fleet(Http):
     """All five download apps behind one Http: each request goes to that host's fake.
 
@@ -380,6 +393,13 @@ class Fleet(Http):
         self.sonarr = test_arr.FakeArr("sonarr")
         self.radarr = test_arr.FakeArr("radarr")
         self.prowlarr = test_prowlarr.FakeProwlarr()
+        self.bazarr = test_bazarr.FakeBazarr()
+        self.plex = test_plex.FakePlex(random_secret("tok", 10))
+        self.jellyfin = test_jellyfin.FakeJellyfin(random_secret("pw"))
+        # Recyclarr's work: its own fake *arr quality profiles and a stand-in for the Agent call.
+        self.profiles = {app: test_recyclarr.FakeArr(app) for app in test_recyclarr.PORTS}
+        self.profile_http = test_recyclarr.FakeHttp(self.profiles)
+        self.recyclarr = test_recyclarr.FakeAgent(self.profiles)
         self.requests = 0
 
     def request(self, method, url, **kw):
@@ -394,8 +414,20 @@ class Fleet(Http):
             mp.setattr(test_qbittorrent, "PASSWORD", store.get("password:qbittorrent"))
             return self.qbt.http.request(method, url, **kw)
         if host in ("sonarr", "radarr"):
+            if "/customformat" in url or "/qualityprofile" in url:
+                mp.setitem(test_recyclarr.KEYS, host, store.get(f"apikey:{host}"))
+                return self.profile_http.request(method, url, **kw)
             mp.setattr(test_arr, "APP_KEY", store.get(f"apikey:{host}"))
             return getattr(self, host).http.request(method, url, **kw)
+        if host == "bazarr":
+            mp.setattr(test_bazarr, "KEY", store.get("apikey:bazarr"))
+            return self.bazarr.http.request(method, url, **kw)
+        if host in ("plex", "plex.tv"):
+            return self.plex.http.request(method, url, **kw)
+        if host == "jellyfin":
+            if not self.jellyfin.completed:
+                self.jellyfin.password = store.get("password:jellyfin")
+            return self.jellyfin.http.request(method, url, **kw)
         assert host == "prowlarr", url
         mp.setattr(test_prowlarr, "PROWLARR_KEY", store.get("apikey:prowlarr"))
         return self.prowlarr.http.request(method, url, **kw)
@@ -417,6 +449,10 @@ def agent(roots, monkeypatch):
     monkeypatch.setenv("ORAMA_AGENT_SOCKET", socket_path)
     runner.fleet = Fleet(monkeypatch, cfg / "orama" / "secrets.bin")
     monkeypatch.setattr(cli, "Http", lambda: runner.fleet)
+    monkeypatch.setattr(
+        cli.AgentClient, "recyclarr_sync",
+        lambda _self, apps, force=False: runner.fleet.recyclarr.recyclarr_sync(apps, force),
+    )
     try:
         yield runner
     finally:
@@ -488,7 +524,7 @@ def test_apply_second_run_reports_nothing_to_change(capsys, roots, agent):
     ports = DesiredSetup.load(path).ports
     assert cli.main(["apply", "--setup", str(path)]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out == ["✓ Folders ready", "✓ Nothing to change"]
+    assert out == ["✓ Folders ready", PLEX_WAITING]
     assert store_values(cfg) == keys
     assert DesiredSetup.load(path).ports == ports
 
@@ -713,9 +749,80 @@ def test_apply_second_run_changes_nothing(capsys, roots, agent):
     keys = store_values(cfg)
     assert cli.main(["apply", "--setup", str(path)]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out == ["✓ Folders ready", "✓ Nothing to change"]
+    assert out == ["✓ Folders ready", PLEX_WAITING]
     assert store_values(cfg) == keys
     assert agent.up_calls == 2 and agent.restarts == []
+
+
+def test_apply_plex_pending_sign_in_skips_only_plex_steps(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)  # Plex only, nobody has signed in
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    fleet = agent.fleet
+    assert out.count(PLEX_WAITING) == 1  # said once, not once per skipped step
+    assert not [line for line in out if line.startswith("✗")]
+    assert fleet.bazarr.profiles and fleet.bazarr.settings["general"]["use_sonarr"] is True
+    assert fleet.recyclarr.calls and fleet.profiles["sonarr"].profiles[-1]["name"] == "Orama"
+    assert fleet.sonarr.notifications == {} and fleet.radarr.notifications == {}
+    assert fleet.plex.sections == []  # libraries wait for the owner too
+
+
+def test_apply_jellyfin_only_wires_it_and_tells_the_arrs(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data, media_servers={"jellyfin"})
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    first = capsys.readouterr().out
+    assert "Plex" not in first and "✗" not in first
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    fleet = agent.fleet
+    for arr in (fleet.sonarr, fleet.radarr):
+        note = arr.notification("Jellyfin (Orama)")
+        assert arr.field(note, "apiKey") == store.get("apikey:jellyfin")
+        assert arr.notification("Plex (Orama)") is None
+    assert fleet.jellyfin.folders
+    assert store.get("apikey:jellyfin") not in first
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert capsys.readouterr().out.splitlines() == ["✓ Folders ready", "✓ Nothing to change"]
+
+
+def test_apply_both_servers_then_deselecting_jellyfin_removes_only_its_notification(
+    capsys, roots, agent
+):
+    data, cfg = roots
+    path = write_setup(cfg, data, media_servers={"plex", "jellyfin"})
+    store = SecretStore(cfg / "orama" / "secrets.bin")
+    token = agent.fleet.plex.token
+    store.set("token:plex", token)  # the owner signed in
+    agent.fleet.plex.claimed, agent.fleet.plex.owner = True, "me"
+    store.set(f"{test_plex.plex.CLAIMED_MARKER}{test_plex.MACHINE}", "1")
+    store.set(PLEX_CLIENT_ID_NAME, test_plex.CLIENT_ID)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    first = capsys.readouterr().out
+    fleet = agent.fleet
+    for arr in (fleet.sonarr, fleet.radarr):
+        assert sorted(n["name"] for n in arr.notifications.values()) == [
+            "Jellyfin (Orama)", "Plex (Orama)"]
+        assert arr.field(arr.notification("Plex (Orama)"), "authToken") == token
+    assert token not in first and store.get("apikey:jellyfin") not in first
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    assert capsys.readouterr().out.splitlines() == ["✓ Folders ready", "✓ Nothing to change"]
+    path = write_setup(cfg, data, media_servers={"plex"}, ports=DesiredSetup.load(path).ports)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    capsys.readouterr()
+    for arr in (fleet.sonarr, fleet.radarr):
+        assert [n["name"] for n in arr.notifications.values()] == ["Plex (Orama)"]
+
+
+def test_apply_plex_failure_is_a_failure_but_a_waiting_plex_is_not(capsys, roots, agent):
+    data, cfg = roots
+    path = write_setup(cfg, data)
+    agent.fleet.recyclarr.error = "Updating the quality profiles failed."
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 1
+    assert "✗ Recyclarr: Updating the quality profiles failed." in out
+    assert PLEX_WAITING in out
 
 
 def test_apply_failing_indexer_exits_1_but_finishes_the_rest(capsys, roots, agent):
@@ -825,7 +932,7 @@ def test_apply_qbittorrent_second_run_is_identical(capsys, roots, agent):
     capsys.readouterr()
     restarts = list(agent.restarts)
     assert cli.main(["apply", "--setup", str(path)]) == 0
-    assert capsys.readouterr().out.splitlines() == ["✓ Folders ready", "✓ Nothing to change"]
+    assert capsys.readouterr().out.splitlines() == ["✓ Folders ready", PLEX_WAITING]
     assert store.get("qbhash:qbittorrent") == first
     assert agent.restarts == restarts
 

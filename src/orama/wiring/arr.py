@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from orama.catalog import QBITTORRENT_WEBUI_USER
+from orama.secrets import JELLYFIN_KEY_NAME, PLEX_TOKEN_NAME
 from orama.setup_model import DesiredSetup, enabled_apps
 from orama.wiring.engine import Step, StepError, display_name, wait_until
 from orama.wiring.http import Http, Response, Unreachable
@@ -20,6 +21,8 @@ START_TIMEOUT = 600.0  # the first start migrates its database
 MASK = "********"
 SAB_PORT = 8080
 QBITTORRENT_PORT = 8090
+PLEX_PORT = 32400
+JELLYFIN_PORT = 8096
 
 
 @dataclass(frozen=True)
@@ -118,26 +121,37 @@ def arr_steps(
     def client_step(
         slug: str, label: str, implementation: str, enabled: bool,
         needs: tuple[str, ...], values: Any,
+        *, kind: Literal["downloadclient", "notification"] = "downloadclient",
     ) -> Step:
         client_name = f"{label} (Orama)"
+        noun = "download client" if kind == "downloadclient" else "library update"
+        # Flags Orama keeps switched on: a download client's `enable`, and the events a
+        # notification fires on (an import, an upgrade, a rename tell the media server).
+        flags = (
+            ("enable",) if kind == "downloadclient" else ("onDownload", "onUpgrade", "onRename")
+        )
 
         def find(clients: list[dict[str, Any]]) -> dict[str, Any] | None:
             return next((c for c in clients if c.get("name") == client_name), None)
 
+        def _enable(client: dict[str, Any]) -> None:
+            for flag in flags:
+                client[flag] = True
+
         def run() -> str | None:
-            clients = read("downloadclient")
+            clients = read(kind)
             have = find(clients)
             if not enabled:
                 if have is None:
                     return None
-                call("DELETE", f"downloadclient/{have['id']}")
+                call("DELETE", f"{kind}/{have['id']}")
                 store.set(sent_marker_name(app, slug), "")
-                return f"removed the {label} download client"
+                return f"removed the {label} {noun}"
             want, secret = values()  # managed fields, and the secret behind the marker
             marker = sent_marker_name(app, slug)
             if have is None:
                 template = next(
-                    (s for s in read("downloadclient/schema")
+                    (s for s in read(f"{kind}/schema")
                      if s.get("implementation") == implementation),
                     None,
                 )
@@ -147,14 +161,14 @@ def arr_steps(
                     )
                 client = copy.deepcopy(template)
                 client["name"] = client_name
-                client["enable"] = True
+                _enable(client)
                 _apply_fields(client, want)
-                call("POST", "downloadclient", json=client, params={"forceSave": "true"})
+                call("POST", kind, json=client, params={"forceSave": "true"})
                 store.set(marker, _digest(secret))
-                return f"added the {label} download client"
+                return f"added the {label} {noun}"
             current = {f.get("name"): f.get("value") for f in have.get("fields", [])}
             secret_names = _secret_names(want)
-            stale = have.get("enable") is not True or store.get(marker) != _digest(secret)
+            stale = any(have.get(f) is not True for f in flags) or store.get(marker) != _digest(secret)
             for field, value in want.items():
                 shown = current.get(field)
                 if field in secret_names:
@@ -165,16 +179,17 @@ def arr_steps(
             if not stale:
                 return None
             client = copy.deepcopy(have)
-            client["enable"] = True
+            _enable(client)
             _apply_fields(client, want)
-            call("PUT", f"downloadclient/{have['id']}", json=client, params={"forceSave": "true"})
+            call("PUT", f"{kind}/{have['id']}", json=client, params={"forceSave": "true"})
             store.set(marker, _digest(secret))
-            return f"restored the {label} download client"
+            return f"restored the {label} {noun}"
 
-        return Step(f"{app}:client:{slug}", app, run, needs=needs)
+        step = f"{app}:client:{slug}" if kind == "downloadclient" else f"{app}:notify:{slug}"
+        return Step(step, app, run, needs=needs)
 
     def _secret_names(want: dict[str, Any]) -> set[str]:
-        return {n for n in ("apiKey", "password") if n in want}
+        return {n for n in ("apiKey", "password", "authToken") if n in want}
 
     def _apply_fields(client: dict[str, Any], want: dict[str, Any]) -> None:
         present = {f.get("name"): f for f in client.get("fields", [])}
@@ -207,10 +222,30 @@ def arr_steps(
             password,
         )
 
+    def plex_values() -> tuple[dict[str, Any], str]:
+        token = store.get(PLEX_TOKEN_NAME)
+        if not token:
+            raise StepError("Orama's Plex sign-in is missing — run apply again.")
+        return (
+            {"host": "plex", "port": PLEX_PORT, "authToken": token, "updateLibrary": True},
+            token,
+        )
+
+    def jellyfin_values() -> tuple[dict[str, Any], str]:
+        apikey = store.get(JELLYFIN_KEY_NAME)
+        if not apikey:
+            raise StepError("Jellyfin's API key is missing — run apply again.")
+        return (
+            {"host": "jellyfin", "port": JELLYFIN_PORT, "apiKey": apikey, "updateLibrary": True},
+            apikey,
+        )
+
     wait_name = f"wait:{app}"
     apps = enabled_apps(setup)
     usenet = "sabnzbd" in apps
     torrent = "qbittorrent" in apps
+    plex = "plex" in apps
+    jellyfin = "jellyfin" in apps
     return [
         Step(wait_name, app, wait),
         Step(f"{app}:root-folder", app, root_folder, needs=(wait_name,)),
@@ -223,5 +258,16 @@ def arr_steps(
             "qbittorrent", "qBittorrent", "QBittorrent", torrent,
             (wait_name, "qbittorrent:categories") if torrent else (wait_name,),
             qbittorrent_values,
+        ),
+        # A deselected media server loses its "(Orama)" notification and nothing else.
+        client_step(
+            "plex", "Plex", "PlexServer", plex,
+            (wait_name, "plex:libraries") if plex else (wait_name,), plex_values,
+            kind="notification",
+        ),
+        client_step(
+            "jellyfin", "Jellyfin", "MediaBrowser", jellyfin,
+            (wait_name, "jellyfin:api-key") if jellyfin else (wait_name,), jellyfin_values,
+            kind="notification",
         ),
     ]

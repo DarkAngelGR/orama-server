@@ -451,7 +451,7 @@ def apply(setup_path: Path) -> int:
         raise Failed(f"Cannot apply: {e}.") from None
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
-    results = run_steps(build_steps(setup, store, Http()))
+    results = run_steps(build_steps(setup, store, Http(), client))
     lines = format_checklist(results)
     if lines == ["✓ Nothing to change"] and (changed or seeded):
         lines = []  # the deploy or the login details already reported a change
