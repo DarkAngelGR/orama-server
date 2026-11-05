@@ -443,9 +443,10 @@ def apply(setup_path: Path) -> int:
 def _seed_logins(client: AgentClient, store: SecretStore, apps: list[str]) -> list[str]:
     """Seed app credentials through the Agent; return apps whose files changed."""
     seeded = []
-    if "bazarr" in apps:
-        if client.seed_config("bazarr", {"api_key": _required(store, "apikey:bazarr", "bazarr")}):
-            seeded.append("bazarr")
+    if "bazarr" in apps and client.seed_config(
+        "bazarr", {"api_key": _required(store, "apikey:bazarr", "bazarr")}
+    ):
+        seeded.append("bazarr")
     if "sabnzbd" in apps:
         values = {
             "api_key": _required(store, "apikey:sabnzbd", "sabnzbd"),
