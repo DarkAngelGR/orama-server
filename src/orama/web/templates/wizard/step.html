@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button %}
+{% block title %}{{ step.label }} · Setup · Orama{% endblock %}
+{% block content %}
+<div class="wizard">
+  {% include "wizard/_steps.html" %}
+  <h1>{{ heading }}</h1>
+  <p class="wizard-lead">{{ intro }}</p>
+  {% if errors %}{{ notice('problem', 'Some answers need another look. They are marked below.') }}{% endif %}
+  {% if saved %}{{ notice('ok', 'Saved.') }}{% endif %}
+  <form method="post" action="/setup/{{ step.key }}" class="wizard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% block fields %}{% endblock %}
+    <div class="wizard-actions">
+      {{ button(submit_label|default('Save and continue')) }}
+      {% if back_url %}<a class="button button-secondary" href="{{ back_url }}">Back</a>{% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

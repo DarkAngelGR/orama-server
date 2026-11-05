@@ -1,0 +1,8 @@
+{% extends "wizard/step.html" %}
+{% from "_macros.html" import choice %}
+{% set heading = 'How do you watch?' %}
+{% set intro = 'Orama picks files that play smoothly on your main device, so nothing has to be converted while you watch.' %}
+{% block fields %}
+{{ choice('device', 'Your main device', values.devices, values.device, errors.device) }}
+{{ choice('quality', 'Quality', values.qualities, values.quality, errors.quality) }}
+{% endblock %}

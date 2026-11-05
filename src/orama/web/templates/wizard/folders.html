@@ -1,0 +1,11 @@
+{% extends "wizard/step.html" %}
+{% from "_macros.html" import field, notice %}
+{% set heading = 'Where should your media live?' %}
+{% set intro = 'Pick one folder on this server. Movies, shows and downloads each get their own place inside it.' %}
+{% block fields %}
+{{ field('data_root', 'Data folder', values.data_root, errors.data_root,
+         'Write the whole path, like /mnt/media. It cannot be inside the Orama folder (' ~ values.config_root ~ ').', 'text', 'off') }}
+{% if applied %}
+{{ notice('wait', 'Orama does not move files that are already there. If you choose a different folder after your apps are running, move your existing media into it yourself first.') }}
+{% endif %}
+{% endblock %}

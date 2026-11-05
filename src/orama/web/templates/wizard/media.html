@@ -1,0 +1,18 @@
+{% extends "wizard/step.html" %}
+{% from "_macros.html" import field, secret_field, checkbox %}
+{% set heading = 'Which media servers?' %}
+{% set intro = 'A media server is the app you watch on. Pick Plex, Jellyfin or both. You can change this later in Settings.' %}
+{% block fields %}
+<fieldset class="wizard-group field">
+  <legend>Media servers</legend>
+  {{ checkbox('server_plex', 'Plex', values.plex, 'You sign in with your Plex account the first time you open it.', '', 'server_plex') }}
+  {{ checkbox('server_jellyfin', 'Jellyfin', values.jellyfin, 'Free and open source. Orama needs an administrator name and password for it.', '', 'server_jellyfin') }}
+  {% if errors.media_servers %}<p class="field-error" id="media_servers-error">{{ errors.media_servers }}</p>{% endif %}
+</fieldset>
+<div class="wizard-group" data-visible-if="server_jellyfin"{% if not values.jellyfin %} hidden{% endif %}>
+  <h2>Jellyfin administrator</h2>
+  {{ field('jellyfin_user', 'Administrator name', values.user, errors.jellyfin_user,
+           ('Saved — leave empty to keep. ' if values.user_saved else '') ~ 'Letters, digits and . _ @ - only, up to 64 characters.', 'text', 'username') }}
+  {{ secret_field('jellyfin_password', 'Administrator password', values.password_saved, errors.jellyfin_password, 'At least 12 characters. Orama signs in with it to set Jellyfin up for you.') }}
+</div>
+{% endblock %}
