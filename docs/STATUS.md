@@ -8,8 +8,8 @@ Read `AGENTS.md` first.
 | Plan | Contents | State |
 |---|---|---|
 | 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
-| 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ code done, reviewed, CI green at `90f04d8`; one gate left: follow-up Claude Security scan passed (owner confirmed) — summary in plan-1-notes "Plan 2a — done" |
-| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Plan written by Codex; Task 1 started by Codex, now paused. Waiting for the owner's go-ahead to execute. |
+| 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ complete — code, review and CI passed; owner confirmed follow-up Claude Security scan passed (2026-11-05) |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Executing (ChatGPT/Codex): Tasks 1–2 done; Task 3 implementation committed, verification and missing coverage in progress. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
@@ -17,8 +17,8 @@ Read `AGENTS.md` first.
 
 ## Resume here (updated by Claude, 2026-11-04)
 
-1. **Plan 2a:** code complete — final review + fix wave done, all CI green at `90f04d8` (run 41918698706). Remaining gate: a follow-up Claude Security scan of `f82dd43..HEAD` (Codex's Agent edits + research the first scan's usage limit cut). Claude only; the owner starts it with `/claude-security:claude-security` → Scan changes, base `f82dd43`, right after a usage reset.
-2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at 9c18626). Task 2 complete — CI passed at 06f25f13 (run 41939856043). Task 3 in progress (ChatGPT). Carry: Task 9/11 must move the Jellyfin contract probe to its own throwaway Jellyfin container (the probe completes the startup wizard in the shared install), the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
+1. **Plan 2a:** complete. Owner confirmed on 2026-11-05 that the follow-up Claude Security scan passed; no repeat scan required.
+2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at 9c18626). Task 2 complete — CI passed at 06f25f13 (run 41939856043). Task 3 in progress (ChatGPT/Codex, resumed 2026-11-05): existing implementation through `a8284c5`; clean checkout; checking missing task coverage and required tests. Carry: Task 9/11 must move the Jellyfin contract probe to its own throwaway Jellyfin container (the probe completes the startup wizard in the shared install), the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
@@ -35,7 +35,7 @@ At every task boundary record the latest tested commit, CI result, open decision
 | 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
 | 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
 | 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
-| — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan of `f82dd43..HEAD` pending | |
+| — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan passed (owner confirmed 2026-11-05) | |
 | — | Final whole-plan review + one fix round | ✅ done — review (opus), fix wave `538750a..90f04d8`, re-review clean, CI green | 90f04d8 |
 | — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
 
