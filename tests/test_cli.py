@@ -1134,3 +1134,27 @@ def test_http_root(http_base):
 
 def test_http_unknown_path(http_base):
     assert get(f"{http_base}/nope")[0] == 404
+
+
+@pytest.mark.parametrize("name", ["password:jellyfin", "opensubtitles:username",
+                                  "opensubtitles:password"])
+def test_plan2b_set_secret_names(capsys, monkeypatch, roots, name):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    value = random_secret()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, [name], FakeStdin(value + "\n"))
+    assert code == 0, out.err
+    assert SecretStore(cfg / "orama" / "secrets.bin").get(name) == value
+    assert value not in out.out + out.err
+
+
+def test_plex_token_cannot_be_set_by_hand(capsys, monkeypatch, roots):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["token:plex"],
+                               FakeStdin(random_secret() + "\n"))
+    assert code == 1
+    assert "secret name" in out.err
+    assert not (cfg / "orama" / "secrets.bin").exists()
