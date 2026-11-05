@@ -231,6 +231,10 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> int:
             os.fchmod(state_fd, 0o700)
             name, existing = _existing_setup(state_fd, config_root / state_name)
             setup = existing or draft
+            # The installer detects the address on every run: a NAS that got a new address
+            # keeps advertising the right one. `none` (nothing detected) changes nothing.
+            if draft.lan_address is not None and setup.lan_address != draft.lan_address:
+                setup = setup.model_copy(update={"lan_address": draft.lan_address})
             # A kept setup is Orama-writable: only sane ports survive, the rest are reassigned.
             kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
             apps = [a for a, s in CATALOG.items() if s.default_host_port] + ["orama"]
