@@ -1,0 +1,21 @@
+{% from "_macros.html" import notice, button %}
+<section id="plex-status" class="wizard-form">
+  {% if pin %}
+  <p>Open Plex in a new tab and approve Orama. Your code is <strong>{{ pin.code }}</strong>.</p>
+  <p><a class="button button-secondary" href="{{ pin.url }}" target="_blank" rel="noopener noreferrer">Open Plex</a></p>
+  <p role="status">Waiting for Plex approval. Orama will continue when you finish.</p>
+  <form method="post" action="{{ url_for('plex.status') }}"
+    hx-post="{{ url_for('plex.status') }}" hx-trigger="every 2s, submit"
+    hx-target="#plex-status" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ button('Check approval', 'secondary') }}
+  </form>
+  {% else %}
+  {% if error %}{{ notice('problem', error) }}{% endif %}
+  <form method="post" action="{{ url_for('plex.start') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ button('Start Plex sign-in again') }}
+  </form>
+  {% endif %}
+  <p><a href="{{ url_for('wizard.finish') }}">Back to installation</a></p>
+</section>

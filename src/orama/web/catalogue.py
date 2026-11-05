@@ -62,7 +62,7 @@ def _text(value, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-def _field(raw) -> IndexerField | None:
+def _field(raw, *, cardigann: bool) -> IndexerField | None:
     if not isinstance(raw, dict) or raw.get("advanced") or raw.get("hidden"):
         return None
     name = _text(raw.get("name"))
@@ -70,9 +70,13 @@ def _field(raw) -> IndexerField | None:
     if not _FIELD.fullmatch(name) or field_type == "hidden":
         return None
     privacy = _text(raw.get("privacy")).lower()
-    kind = "secret" if field_type == "password" or privacy in ("apikey", "password") else (
-        _KINDS.get(field_type, "info")
+    # Cardigann schemas use ordinary text fields for some API keys, cookies and
+    # one-time tokens. Treat free-form tracker settings as private even without a flag.
+    secret = (
+        field_type == "password" or privacy in ("apikey", "password")
+        or cardigann and field_type in ("textbox", "text")
     )
+    kind = "secret" if secret else _KINDS.get(field_type, "info")
     options = ()
     if kind == "select" and isinstance(raw.get("selectOptions"), list):
         options = tuple(
@@ -102,8 +106,10 @@ def _definitions(raw) -> tuple[IndexerDefinition, ...]:
         if row.get("implementation") in ("Newznab", "Torznab") and not name.startswith("Generic "):
             continue
         fields = row.get("fields")
+        cardigann = row.get("implementation") == "Cardigann"
         visible = tuple(
-            field for raw_field in fields if (field := _field(raw_field)) is not None
+            field for raw_field in fields
+            if (field := _field(raw_field, cardigann=cardigann)) is not None
         ) if isinstance(fields, list) else ()
         items.setdefault(definition.lower(), IndexerDefinition(
             definition, name, protocol, _text(row.get("privacy")), visible,

@@ -146,6 +146,16 @@ def test_awkward_password_arrives_intact(tmp_path):
     assert test_call.form["password"] == AWKWARD
 
 
+def test_existing_usenet_server_without_marker_is_left_alone(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path)
+    sab.servers["eweka"] = {"name": "eweka", "host": "existing.example"}
+    results = run_steps(sabnzbd_steps(setup, store, sab.http))
+    assert statuses(results)["sabnzbd:server:eweka"] == "failed"
+    assert sab.servers["eweka"]["host"] == "existing.example"
+    assert store.get(sent_marker_name("eweka")) is None
+
+
 def test_failed_server_test_is_plain_and_blocks_nothing(tmp_path):
     sab = FakeSab(login_ok=False)
     setup, store = make(tmp_path)

@@ -18,12 +18,14 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from flask import Blueprint, Flask, redirect, render_template, request, url_for
 
+from orama import state
 from orama.secrets import RedactingFilter, SecretStore
 from orama.web import auth
 
@@ -32,6 +34,7 @@ MAX_LINES = 500
 MAX_LINE_CHARS = 500
 MAX_RECORD_BYTES = 1024 * 1024
 SETUP_FILE = "setup.json"
+TEST_BUSY = "Orama is busy applying the setup. Try again in a moment."
 
 Status = Literal["running", "done", "failed", "interrupted"]
 _STATUSES = ("running", "done", "failed", "interrupted")
@@ -248,6 +251,17 @@ def register_jobs(app: Flask) -> None:
     app.register_blueprint(_job_pages())
 
 
+@contextmanager
+def apply_operation(st):
+    """Serialize web operations through the gap before the CLI takes apply.lock."""
+    if not st.apply_gate.acquire(blocking=False):
+        raise state.Busy
+    try:
+        yield
+    finally:
+        st.apply_gate.release()
+
+
 def _job_pages() -> Blueprint:
     pages = Blueprint("jobs", __name__)
 
@@ -265,7 +279,17 @@ def _job_pages() -> Blueprint:
     @auth.requires("setup")
     def apply():
         st = auth.web_state()
-        job = st.jobs.start(st.state_dir / SETUP_FILE)
+        try:
+            with apply_operation(st):
+                current = st.jobs.current()
+                if current and current.status == "running":
+                    job = current
+                else:
+                    with state.locked(state.apply_lock(st.state_dir), blocking=False):
+                        pass
+                    job = st.jobs.start(st.state_dir / SETUP_FILE)
+        except state.Busy:
+            return render_template("rejected.html", message=TEST_BUSY), 409
         if request.headers.get("HX-Request") == "true":
             return render(job)
         return redirect(url_for("jobs.current"), 303)

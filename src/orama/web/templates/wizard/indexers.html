@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button, field, secret_field %}
+{% block title %}Indexers · Setup · Orama{% endblock %}
+{% block content %}
+<div class="wizard">
+  {% include "wizard/_steps.html" %}
+  <h1>Find movies and shows</h1>
+  <p class="wizard-lead">Add at least one indexer and test that it works. Indexers help Orama find releases.</p>
+  {% if message %}{{ notice('problem' if problem else 'ok', message) }}{% endif %}
+  {% include "wizard/_indexer_form.html" %}
+  {% for item in setup.indexers %}
+  <section class="wizard-form" aria-label="{{ item.name }}">
+    <h2>{{ item.name }}</h2>
+    <p>{{ 'Test passed' if item.slug in tested_indexers else 'Needs a successful test' }}</p>
+    <div class="wizard-actions">
+      <a class="button button-secondary" href="{{ url_for('wizard.indexers', edit=item.slug) }}">Edit</a>
+      {% for action, label in [('test', 'Test again'), ('remove', 'Remove')] %}
+      <form method="post" action="{{ url_for('wizard.indexer_action', slug=item.slug, action=action) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ button(label, 'secondary') }}
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  {% if 'usenet' in setup.download_methods %}
+  <section class="wizard-form">
+    <h2>Usenet servers</h2>
+    <p>Enter the connection details from your Usenet provider.</p>
+    <form class="form-stack" method="post" action="{{ url_for('wizard.usenet') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if editing_server %}<input type="hidden" name="edit-usenet" value="{{ editing_server.slug }}">{% endif %}
+      {{ field('host', 'Server address', editing_server.host if editing_server else '') }}
+      {{ field('port', 'Port', editing_server.port if editing_server else '563', type='number') }}
+      {{ field('connections', 'Connections', editing_server.connections if editing_server else '20', type='number') }}
+      <label class="choice"><input type="checkbox" name="ssl"{% if not editing_server or editing_server.ssl %} checked{% endif %}> Use a secure connection</label>
+      {{ field('username', 'Username', editing_server.username if editing_server else '') }}
+      {{ secret_field('password', 'Password', saved=server_password_saved) }}
+      {{ button('Save and test server' if editing_server else 'Add and test server') }}
+    </form>
+  </section>
+  {% for server in setup.usenet_servers %}
+  <section class="wizard-form" aria-label="{{ server.host }}">
+    <h3>{{ server.host }}</h3>
+    <p>{{ 'Test passed' if server.slug in tested_servers else 'Needs a successful test' }}</p>
+    <div class="wizard-actions">
+      <a class="button button-secondary" href="{{ url_for('wizard.indexers', **{'edit-usenet': server.slug}) }}">Edit</a>
+      {% for action, label in [('test', 'Test again'), ('remove', 'Remove')] %}
+      <form method="post" action="{{ url_for('wizard.usenet_action', slug=server.slug, action=action) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ button(label, 'secondary') }}
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  {% endif %}
+  <div class="wizard-actions">
+    {% if back_url %}<a class="button button-secondary" href="{{ back_url }}">Back</a>{% endif %}
+    {% if next_url %}<a class="button button-primary" href="{{ next_url }}">Continue</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

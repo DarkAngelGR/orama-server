@@ -1,0 +1,8 @@
+{% extends "_job.html" %}
+{% block title %}Installation · Orama{% endblock %}
+{% block content %}
+<div class="wizard">
+  {{ super() }}
+  {% include "wizard/_finish_actions.html" %}
+</div>
+{% endblock %}

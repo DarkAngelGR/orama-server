@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from flask import Blueprint, Flask, current_app, g, redirect, render_template, request, url_for
@@ -25,6 +25,7 @@ from orama.setup_model import DesiredSetup
 from orama.web import auth, security
 from orama.web.assets import configure_assets
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
+from orama.web.plex import register_plex
 from orama.web.wizard import register_wizard
 from orama.wiring.http import Http
 
@@ -89,6 +90,7 @@ class WebState:
     store: SecretStore
     setup: SetupReader
     jobs: JobRunner
+    apply_gate: threading.Lock = field(default_factory=threading.Lock)
 
     @property
     def first_run_code(self) -> Path:
@@ -133,6 +135,7 @@ def create_app(
     app.register_blueprint(_auth_pages())
     register_jobs(app)
     register_wizard(app)
+    register_plex(app)
     return app
 
 

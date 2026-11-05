@@ -158,3 +158,6 @@ nav form { margin: 0; }
 .field select { max-width: 100%; }
 .field code { overflow-wrap: anywhere; }
 nav.wizard-steps { display: block; }
+.indexer-results { display: grid; gap: .25rem; list-style: none; padding: 0; margin: 0; }
+.indexer-results a { display: flex; align-items: center; min-height: 44px; padding: .5rem; overflow-wrap: anywhere; }
+.wizard dl dd { margin: 0; overflow-wrap: anywhere; }
