@@ -36,6 +36,10 @@ _HEX32 = re.compile(r"[0-9a-f]{32}")
 _QT_PBKDF2 = re.compile(r"@ByteArray\([A-Za-z0-9+/]{22}==:[A-Za-z0-9+/]{86}==\)")
 
 FORMATS: dict[str, _Format] = {
+    "bazarr": _Format(
+        section="auth", separator=": ", file=("config", "config.yaml"),
+        allowed={"api_key": ("apikey", _HEX32)}, fixed={},
+    ),
     "sabnzbd": _Format(
         section="misc",
         separator=" = ",
@@ -96,6 +100,8 @@ def render(app: str, current_text: str | None, values: Any) -> str | None:
     """The file's new text, or ``None`` when it already holds every wanted value."""
     fmt = _format(app)
     wanted = check(app, values)
+    if app == "bazarr":
+        return _render_bazarr(current_text or "", wanted)
     lines = _lines(current_text or "")
     start, end = _section(lines, fmt.section)
     changed = False
@@ -129,7 +135,7 @@ def render(app: str, current_text: str | None, values: Any) -> str | None:
 
 def _format(app: Any) -> _Format:
     if not isinstance(app, str) or app not in FORMATS:
-        raise Refused("Orama can only set up the config of SABnzbd and qBittorrent.")
+        raise Refused("Orama can only seed a supported app configuration.")
     return FORMATS[app]
 
 
@@ -169,3 +175,27 @@ def _normal(value: str) -> list[str]:
 def _line(fmt: _Format, key: str, value: str, ending: str) -> str:
     shown = f'"{value}"' if key in fmt.quoted else value
     return f"{key}{fmt.separator}{shown}{ending}"
+
+
+def _render_bazarr(current: str, wanted: dict[str, str]) -> str | None:
+    """Patch only auth.apikey in Bazarr YAML, leaving unrelated bytes untouched."""
+    lines = _lines(current)
+    start = next((i for i, line in enumerate(lines) if line.rstrip("\r\n") == "auth:"), None)
+    key = wanted["apikey"]
+    if start is None:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.extend(["auth:\n", f"  apikey: {key}\n"])
+        return "".join(lines)
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i] and not lines[i][0].isspace() and
+                not lines[i].lstrip().startswith("#")), len(lines))
+    for i in range(start + 1, end):
+        match = re.fullmatch(r"(  apikey:\\s*)([^#\\r\\n]*?)(\\r?\\n)?", lines[i])
+        if match:
+            if match.group(2).strip().strip("'\\\"") == key:
+                return None
+            lines[i] = f"{match.group(1)}{key}{match.group(3) or ''}"
+            return "".join(lines)
+    lines.insert(end, f"  apikey: {key}\n")
+    return "".join(lines)
