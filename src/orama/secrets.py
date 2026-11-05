@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import secrets
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,6 +29,11 @@ VPN_KEY_NAME = "vpn:wireguard_private_key"
 GLUETUN_PROXY_PASSWORD_NAME = "password:gluetun-proxy"
 QBITTORRENT_PASSWORD_NAME = "password:qbittorrent"
 SABNZBD_NZB_KEY_NAME = "nzbkey:sabnzbd"
+BAZARR_KEY_NAME = "apikey:bazarr"
+JELLYFIN_PASSWORD_NAME = "password:jellyfin"
+JELLYFIN_KEY_NAME = "apikey:jellyfin"
+PLEX_TOKEN_NAME = "token:plex"
+PLEX_CLIENT_ID_NAME = "plex:client_id"
 _QBT_PBKDF2_ITERATIONS = 100_000
 _QBT_SALT_BYTES = 16
 _QBT_KEY_BYTES = 64
@@ -124,6 +130,12 @@ def ensure_app_keys(store: SecretStore, apps: list[str], *, gluetun_proxy: bool 
     for app in apps:
         if app in _KEYED_APPS:
             wanted[f"apikey:{app}"] = generate_api_key
+    if "bazarr" in apps:
+        wanted[BAZARR_KEY_NAME] = generate_api_key
+    if "jellyfin" in apps:
+        wanted[JELLYFIN_PASSWORD_NAME] = _new_password
+    if "plex" in apps:
+        wanted[PLEX_CLIENT_ID_NAME] = lambda: str(uuid.uuid4())
     if "sabnzbd" in apps:
         wanted[SABNZBD_NZB_KEY_NAME] = generate_api_key
     if "qbittorrent" in apps:
