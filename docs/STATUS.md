@@ -9,7 +9,7 @@ Read `AGENTS.md` first.
 |---|---|---|
 | 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ complete — code, review and CI passed; owner confirmed follow-up Claude Security scan passed (2026-11-05) |
-| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Executing (ChatGPT/Codex): Tasks 1–3 done; Task 4 in progress (ChatGPT/Codex). |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Executing (ChatGPT/Codex): Tasks 1–4 done; Task 5 next. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | not written |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
@@ -18,7 +18,7 @@ Read `AGENTS.md` first.
 ## Resume here (updated by Claude, 2026-11-04)
 
 1. **Plan 2a:** complete. Owner confirmed on 2026-11-05 that the follow-up Claude Security scan passed; no repeat scan required.
-2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at 9c18626). Task 2 complete — CI passed at 06f25f13 (run 41939856043). Task 3 ✅ done (ChatGPT/Codex, 2026-11-05): `26f4c02`; 981 local unit tests, Ruff and ShellCheck passed. CI run 41944049997: unit, images, integration and publish all passed. In progress (ChatGPT/Codex): Task 4 (Plex LAN and NVIDIA capabilities). Carry: Task 9/11 must move the Jellyfin contract probe to its own throwaway Jellyfin container (the probe completes the startup wizard in the shared install), the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
+2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at 9c18626). Task 2 complete — CI passed at 06f25f13 (run 41939856043). Task 3 ✅ done (ChatGPT/Codex, 2026-11-05): `26f4c02`; 981 local unit tests, Ruff and ShellCheck passed. CI run 41944049997: unit, images, integration and publish all passed. Task 4 ✅ done (ChatGPT/Codex): `cd24f32`; 1,003 unit tests, Ruff and ShellCheck passed; fresh review clean. CI run 41945388747 passed all four jobs on retry after an app-image download failure. First unfinished task: Task 5 (Bazarr wiring). Carry: Task 9/11 must move the Jellyfin contract probe to its own throwaway Jellyfin container (the probe completes the startup wizard in the shared install), the pinned-image contract experiments: the probes in `tests/integration/media_contracts.py` and the `test_pinned_*` tests run on the CI host. `test_pinned_notification_contracts` was fixed to read `implementationName` (templates leave `name` empty).
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
