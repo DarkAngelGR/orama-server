@@ -24,8 +24,8 @@ Read `AGENTS.md` first.
 
 | # | Task | Model | State | Owner |
 |---|---|---|---|---|
-| 1 | Locks for setup, secret store and applies | most capable | in progress | Claude |
-| 2 | VPN provider list, Gluetun control server, unwritable folders | most capable | open | — |
+| 1 | Locks for setup, secret store and applies | most capable | done (`eb9eed9`, `01cea5e`) | Claude |
+| 2 | VPN provider list, Gluetun control server, unwritable folders | most capable | in progress | Claude |
 | 3 | Wiring: removals, single-item tests, proxy message | standard | open | — |
 | 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | open | — |
 | 5 | Web foundation and security | most capable | open | — |
