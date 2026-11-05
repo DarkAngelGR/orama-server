@@ -147,6 +147,24 @@ def test_tests_wait_for_apply_lock(signed, state_dir):
     assert b"Orama is busy applying the setup." in response.data
 
 
+def test_resubmitting_usenet_form_reuses_server(signed, app, state_dir, monkeypatch):
+    from orama.setup_model import DesiredSetup
+    from orama.wiring import sabnzbd
+
+    checked = []
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", lambda *args: checked.append(args[-1]))
+    password = secrets.token_urlsafe(20)
+    token = csrf_from(signed.get("/setup/indexers"))
+    data = {"csrf_token": token, "host": "news.example", "ssl": "on", "password": password}
+    for _ in range(2):
+        response = signed.post("/setup/usenet", data=data)
+        assert response.status_code == 200
+        assert password.encode() not in response.data
+    server, = DesiredSetup.load(state_dir / "setup.draft.json").usenet_servers
+    assert checked == [server.slug, server.slug]
+    assert app.extensions["orama"].store.get(f"usenet:{server.slug}:password") == password
+
+
 def _install(signed):
     review = signed.get("/setup/review")
     return signed.post("/setup/install", data={"csrf_token": csrf_from(review)})
