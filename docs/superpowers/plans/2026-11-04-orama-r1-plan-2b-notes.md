@@ -157,3 +157,28 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   before app startup; unchanged source passed on retry. Task 11 complete.
 - Plan 2b still requires its final whole-plan review/fix round and the owner's Claude
   Security scan. Task review above is not a substitute for those gates.
+
+## Final-review fix wave (Claude)
+
+- **Jellyfin set up by hand (RF2):** new set-secret name `user:jellyfin` (letters, digits, `. _ @ -`, up to 64).
+  Jellyfin wiring signs in (and, on a fresh server, makes the admin) with that name, else `orama-admin`.
+  A completed server Orama can't sign in to now reports: "Jellyfin is already set up — enter its admin name and
+  password with set-secret user:jellyfin and password:jellyfin, then run apply again." It never advises deleting
+  the config folder. Owner check (Plan 5): recover a hand-set-up Jellyfin this way.
+- **Bazarr format (§6.5):** `ignore_ass_subs`, `ignore_pgs_subs` and `ignore_vobsub_subs` are all turned on
+  (compare-then-write). Image subtitles (PGS, VobSub) are skipped so text SRT is downloaded.
+- **Recyclarr guide pinning (observed in Recyclarr 8.8.1 source, tag v8.8.1 / 874cb27):** settings are
+  `settings.yml` (or `.yaml`; both present is an error) in `RECYCLARR_CONFIG_DIR=/config`; `resource_providers`
+  entries `{name, type, clone_url, reference, replace_default}`; `reference` goes to `git fetch --depth 1 <url> <ref>`
+  then `git reset --hard FETCH_HEAD`, so a commit works (fetching these commits by SHA from GitHub was checked).
+  `replace_default: true` drops the unpinned `official` providers. Cache: `/config/resources/<type>/git/<name>`.
+  The Agent writes fixed settings (no secrets) with providers `orama-trash-guides` → TRaSH-Guides/Guides
+  `d0f1a6cb29bee8b53bd1d7f8c73333649972f21c` (master, 2026-11-03) and `orama-config-templates` →
+  recyclarr/config-templates `89eebadd429952069182a22930af4d768cacda36` (master, 2026-09-17; there is no `v8`
+  branch). Every template profile/group id in `orama_agent/recyclarr.py` and every custom-format id in
+  `profiles/trash.yaml` was checked present (with the expected names) at these commits. The pins are in the
+  sync digest. Existing installs keep an unused `official` cache folder (disk only). A failed guide fetch on a
+  fresh cache fails the sync; on an existing cache Recyclarr keeps the files it already has (its own behaviour).
+- **Jellyfin (Orama) notification** sets `notify=false` (refresh only, no pop-up), checked in CI.
+- **Bootstrap LAN address:** a kept setup or draft takes the detected private address when it had none or
+  another; `--lan-address none` leaves it.
