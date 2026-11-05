@@ -393,7 +393,8 @@ def test_plan2b_bazarr_configuration(clean_host: Host, applied: dict):
     for app in ("sonarr", "radarr"):
         assert settings["general"][f"use_{app}"] is True
         assert settings[app]["ip"] == app
-        assert bool(settings[app]["apikey"] == keys[f"apikey:{app}"]), "wrong link key"
+        if settings[app]["apikey"] != keys[f"apikey:{app}"]:
+            pytest.fail("wrong link key (values withheld)")
     profiles = app_get(applied, keys, "bazarr", "/api/system/languages/profiles")
     mine = [p for p in profiles if p["name"] == "Orama"]
     assert len(mine) == 1
@@ -764,7 +765,8 @@ def test_jellyfin_interrupted_apply_recovers(clean_host: Host, rerun: dict, outp
     assert status == 1
     changes = [line for line in output.splitlines() if line.startswith("✓")]
     assert changes == ["✓ Folders ready", "✓ Jellyfin: added the TV Shows library"]
-    assert bool(stored_secrets(clean_host)["apikey:jellyfin"] == before_key), "API key changed"
+    if stored_secrets(clean_host)["apikey:jellyfin"] != before_key:
+        pytest.fail("API key changed (values withheld)")
     status, output = apply(clean_host, outputs, "apply-after-recovery")
     assert status == 1
     assert [line for line in output.splitlines() if line.startswith("✓")] == ["✓ Folders ready"]
