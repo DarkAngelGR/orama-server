@@ -17,6 +17,8 @@ APP_NAMES = {
     "prowlarr": "Prowlarr",
     "bazarr": "Bazarr",
     "recyclarr": "Recyclarr",
+    "plex": "Plex",
+    "jellyfin": "Jellyfin",
 }
 
 
@@ -26,6 +28,11 @@ def display_name(app: str) -> str:
 
 class StepError(Exception):
     """A step failed; the message is plain language and safe to show."""
+
+
+class StepSkipped(Exception):
+    """A step cannot run yet for an expected reason (not a failure); the message is plain
+    language, safe to show, and also given for the steps that need it."""
 
 
 @dataclass
@@ -48,16 +55,23 @@ def run_steps(steps: list[Step]) -> list[StepResult]:
     results: list[StepResult] = []
     # failed or skipped step name -> app of the step that failed first (the root cause)
     bad: dict[str, str] = {}
+    # skipped step name -> why, when the root cause skipped itself rather than failed
+    why: dict[str, str] = {}
     for step in steps:
         blocker = next((n for n in step.needs if n in bad), None)
         if blocker is not None:
-            results.append(
-                StepResult(step.name, step.app, "skipped", f"waiting for {display_name(bad[blocker])}")
-            )
+            reason = why.get(blocker, f"waiting for {display_name(bad[blocker])}")
+            results.append(StepResult(step.name, step.app, "skipped", reason))
             bad[step.name] = bad[blocker]
+            if blocker in why:
+                why[step.name] = why[blocker]
             continue
         try:
             message = step.run()
+        except StepSkipped as err:
+            results.append(StepResult(step.name, step.app, "skipped", str(err)))
+            bad[step.name] = step.app
+            why[step.name] = str(err)
         except StepError as err:
             results.append(StepResult(step.name, step.app, "failed", str(err)))
             bad[step.name] = step.app
@@ -107,11 +121,15 @@ def format_checklist(results: list[StepResult]) -> list[str]:
     for r in results:
         name = display_name(r.app)
         if r.status == "changed":
-            lines.append(f"✓ {name}: {r.message}")
+            line = f"✓ {name}: {r.message}"
         elif r.status == "failed":
-            lines.append(f"✗ {name}: {r.message}")
+            line = f"✗ {name}: {r.message}"
         elif r.status == "skipped":
-            lines.append(f"… {name}: skipped, {r.message}")
-    if not any(r.status in ("changed", "failed") for r in results):
+            line = f"… {name}: skipped, {r.message}"
+        else:
+            continue
+        if line not in lines:  # one reason given for several skipped steps is said once
+            lines.append(line)
+    if not lines:
         return ["✓ Nothing to change"]
     return lines

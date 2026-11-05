@@ -10,6 +10,10 @@ and prints a plain-language checklist. Secret values are never printed.
 
 ``set-secret NAME`` also runs inside the Orama container as PUID. It reads one secret from
 stdin (no echo on a terminal) and keeps it in the secret store next to the setup file.
+
+``plex-sign-in`` also runs inside the Orama container as PUID. It prints a plex.tv link and
+code, waits while the owner approves it in a browser, and keeps the Plex token in the same
+secret store. The token is never printed.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ import re
 import secrets
 import stat
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 
@@ -52,6 +57,7 @@ from orama.setup_model import DesiredSetup, enabled_apps
 from orama.wiring.engine import display_name, format_checklist, run_steps
 from orama.wiring.http import Http
 from orama.wiring.plan import build_steps
+from orama.wiring.plex import SignInError, begin_sign_in, poll_sign_in
 
 CORE_COMPOSE_FILE = "core.compose.yaml"
 SETUP_FILE = "setup.json"
@@ -61,6 +67,7 @@ RESTART_PENDING = "restart:gluetun-qbittorrent"
 QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
 SETUP_LIMIT = 1024 * 1024  # a real setup is a few KiB
+PLEX_POLL_SECONDS = 2
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
 SECRET_NAME = re.compile(
     rf"(?:{re.escape(VPN_KEY_NAME)}"
@@ -134,6 +141,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     s.add_argument("name", metavar="NAME")
     s.add_argument("--setup", required=True, type=Path)
+
+    p = sub.add_parser(
+        "plex-sign-in", help="(inside the Orama container) sign Orama in to your Plex account"
+    )
+    p.add_argument("--setup", required=True, type=Path)
     return parser
 
 
@@ -156,6 +168,8 @@ def main(argv: Sequence[str] | None = None, *, chown: Chown | None = None) -> in
                     "or pipe it in."
                 )
             set_secret(args.name, args.setup)
+        elif args.command == "plex-sign-in":
+            plex_sign_in(args.setup)
         elif args.command == "bootstrap":
             try:
                 port = bootstrap(args, chown or _default_chown())
@@ -523,6 +537,41 @@ def set_secret(name: str, setup_path: Path) -> None:
     except OSError as e:
         raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
     print(f"✓ Saved {name}")
+
+
+# ---------------------------------------------------------------- plex-sign-in
+
+def plex_sign_in(setup_path: Path) -> None:
+    """Sign Orama in to the owner's Plex account with Plex's PIN flow; keep the token."""
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+    if not setup_path.is_file():
+        raise Failed(f"No setup found at {setup_path}.")
+    store = SecretStore(_secrets_path(setup_path))
+    install_redaction(store)
+    http = Http()
+    try:
+        sign_in = begin_sign_in(store, http)
+        print(f"Open {sign_in.url} and enter code {sign_in.code}", flush=True)
+        while True:
+            status = poll_sign_in(store, http, sign_in.pin_id)
+            if status == "done":
+                break
+            if status == "expired":
+                raise Failed(
+                    "The Plex sign-in code expired or was not accepted — run plex-sign-in again."
+                )
+            if time.time() >= sign_in.expires_at:
+                raise Failed("The Plex sign-in timed out — run plex-sign-in again.")
+            time.sleep(PLEX_POLL_SECONDS)
+    except SignInError as e:  # plain, never holds the token
+        raise Failed(str(e)) from None
+    except KeyboardInterrupt:
+        raise Failed("Cancelled; Plex is not signed in.") from None
+    except ValueError as e:  # e.g. the secret store cannot be decrypted; messages hold no values
+        raise Failed(f"Cannot use the secret store: {e}.") from None
+    except OSError as e:
+        raise Failed(f"Cannot use Orama's files ({e.strerror or type(e).__name__}).") from None
+    print("✓ Plex signed in")
 
 
 def _secrets_path(setup_path: Path) -> Path:
