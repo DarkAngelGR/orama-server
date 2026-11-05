@@ -16,6 +16,7 @@ APP_NAMES = {
     "radarr": "Radarr",
     "prowlarr": "Prowlarr",
     "bazarr": "Bazarr",
+    "recyclarr": "Recyclarr",
 }
 
 

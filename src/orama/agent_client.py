@@ -48,6 +48,16 @@ class AgentClient:
         """
         return self._call("seed-config", {"app": app, "values": dict(values)})["changed"]
 
+    def recyclarr_sync(self, apps: dict[str, Any], force: bool = False) -> bool:
+        """Sync Sonarr's/Radarr's quality profiles: ``{app: {"templates", "scores"}}``.
+
+        True if Recyclarr ran; False if this exact choice already synced (unless ``force``).
+        """
+        args: dict[str, Any] = {"apps": apps}
+        if force:
+            args["force"] = True
+        return self._call("recyclarr-sync", args)["changed"]
+
     def _call(self, cmd: str, args: dict[str, Any]) -> Any:
         rid = uuid.uuid4().hex
         request = json.dumps({"id": rid, "cmd": cmd, "args": args}).encode() + b"\n"
