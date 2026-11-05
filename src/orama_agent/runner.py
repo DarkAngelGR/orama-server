@@ -6,7 +6,9 @@ compose file and an Agent-owned empty ``--env-file``, so no ``.env`` file and no
 ``COMPOSE_*`` variable can change what compose does.
 
 The one other command is Recyclarr's one-shot ``docker run``, whose argv is fixed from the
-Agent's own roots and the catalogue: nothing from a request reaches it at all.
+Agent's own roots and the catalogue: nothing from a request reaches it at all. Its
+container has a fixed name and is removed (``docker rm -f``) before every run and after a
+failed one, so a CLI killed by the timeout never leaves Recyclarr running with the keys.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ PULL_TIMEOUT = 3600  # a first install downloads every app image
 UP_TIMEOUT = 720  # up, restart, stop and start
 CALL_TIMEOUT = 60  # ps
 RECYCLARR_TIMEOUT = 900  # one sync of Sonarr and Radarr, including its guide download
+RECYCLARR_CONTAINER = "orama-recyclarr"
 STDERR_TAIL_LINES = 40
 LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
 _WHAT = {
@@ -184,13 +187,45 @@ class ComposeRunner:
         folder = app_config_dir(PurePosixPath(self._roots.config), "recyclarr")
         argv = [
             "docker", "run", "--rm",
+            "--name", RECYCLARR_CONTAINER,
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
             "--network", SHARED_NETWORK,
             "--user", f"{self._roots.puid}:{self._roots.pgid}",
             "-v", f"{folder}:/config",
             CATALOG["recyclarr"].image,
             "sync", "--config", CONTAINER_CONFIG,
         ]
-        self._exec(argv, _WHAT["recyclarr"], RECYCLARR_TIMEOUT)
+        self._remove_recyclarr()
+        try:
+            self._exec(argv, _WHAT["recyclarr"], RECYCLARR_TIMEOUT)
+        except RunnerError:
+            try:  # a timed-out CLI leaves the container running: stop it
+                self._remove_recyclarr()
+            except RunnerError:
+                pass  # the run's own error is the one to report
+            raise
+
+    def _remove_recyclarr(self) -> None:
+        """``docker rm -f`` Recyclarr's container; none being there is fine."""
+        argv = ["docker", "rm", "-f", RECYCLARR_CONTAINER]
+        what = _WHAT["recyclarr"]
+        try:
+            proc = self._run(
+                argv, env=_child_env(), capture_output=True, text=True, timeout=CALL_TIMEOUT,
+                check=False, shell=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RunnerError(f"{what} did not finish in time. {LOG_HINT}", _tail(e.stderr)) from None
+        except OSError as e:
+            raise RunnerError(
+                f"{what} failed: Docker could not be started. {LOG_HINT}",
+                f"{type(e).__name__}: {e.strerror or ''}",
+            ) from None
+        if proc.returncode != 0 and "no such container" not in (proc.stderr or "").lower():
+            raise RunnerError(
+                f"{what} failed. {LOG_HINT}", f"exit code {proc.returncode}\n{_tail(proc.stderr)}"
+            )
 
 
 class FakeRunner:
