@@ -505,8 +505,12 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
         )
         folders = [str(p) for p in data_folders(setup.data_root)]
         folders += [str(app_config_dir(setup.config_root, a)) for a in apps]
-        client.ensure_folders(folders)
+        result = client.ensure_folders(folders)
         print("✓ Folders ready", flush=True)
+        for folder in _text_list(result, "not_writable"):
+            # A warning only: the owner's folder is never changed, and the apply goes on.
+            print(f"⚠ The apps cannot write to {folder}. Give user {setup.puid} or group "
+                  f"{setup.pgid} write access to it, then apply again.", flush=True)
         changed = client.apply(build_apps_compose(setup), env_files_for(setup, store))
         # Only the ports apply assigned: a setup change saved meanwhile (by bootstrap or the
         # web app) is reloaded and kept.
@@ -551,6 +555,14 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
     for line in lines:
         print(line)
     return 1 if any(r.status == "failed" for r in results) else 0
+
+
+def _text_list(result: object, key: str) -> list[str]:
+    """The text items of ``result[key]``; a name that would redraw the terminal is quoted."""
+    items = result.get(key) if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [i if i.isprintable() else repr(i) for i in items if isinstance(i, str)]
 
 
 def _seed_logins(client: AgentClient, store: SecretStore, apps: list[str]) -> list[str]:

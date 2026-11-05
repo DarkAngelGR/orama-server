@@ -291,12 +291,11 @@ def test_port_forward_command_survives_yaml():
     assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
 
 
-def test_port_forward_only_only_for_protonvpn():
-    s = full(vpn={"provider": "mullvad", "port_forwarding": True})
+def test_no_port_forwarding_settings_for_other_providers():
+    s = full(vpn={"provider": "nordvpn", "port_forwarding": False})
     env = build_apps_compose(s)["services"]["gluetun"]["environment"]
-    assert env["VPN_PORT_FORWARDING"] == "on"
-    assert env["VPN_PORT_FORWARDING_UP_COMMAND"] == PORT_FORWARD_COMMAND
-    assert "PORT_FORWARD_ONLY" not in env
+    for key in ("VPN_PORT_FORWARDING", "VPN_PORT_FORWARDING_UP_COMMAND", "PORT_FORWARD_ONLY"):
+        assert key not in env
 
 
 @pytest.mark.parametrize("route", [True, False])
@@ -518,3 +517,31 @@ def test_media_network_and_gpu_environment(nvidia, lan):
         assert env.get("NVIDIA_VISIBLE_DEVICES") == ("all" if nvidia else None)
         assert env.get("NVIDIA_DRIVER_CAPABILITIES") == (
             "compute,video,utility" if nvidia else None)
+
+
+# ---------------------------------------------------------------- VPN providers
+
+
+def _address(*octets, prefix=32):
+    return ".".join(map(str, octets)) + f"/{prefix}"
+
+
+@pytest.mark.parametrize("provider", ["protonvpn", "nordvpn", "mullvad", "ivpn", "surfshark"])
+def test_gluetun_control_server_bound_to_localhost(provider):
+    from orama.catalog import VPN_PROVIDERS
+
+    vpn = {"provider": provider, "port_forwarding": VPN_PROVIDERS[provider].port_forwarding}
+    if VPN_PROVIDERS[provider].needs_address:
+        vpn["wireguard_address"] = _address(10, 64, 1, 2)
+    env = build_apps_compose(full(vpn=vpn))["services"]["gluetun"]["environment"]
+    assert env["HTTP_CONTROL_SERVER_ADDRESS"] == "127.0.0.1:8000"
+
+
+def test_wireguard_address_in_gluetun_env():
+    address = _address(10, 64, 1, 2)
+    s = full(vpn={"provider": "mullvad", "port_forwarding": False, "wireguard_address": address})
+    env = build_apps_compose(s)["services"]["gluetun"]["environment"]
+    assert env["WIREGUARD_ADDRESSES"] == address
+    assert env["VPN_SERVICE_PROVIDER"] == "mullvad"
+    env = build_apps_compose(full())["services"]["gluetun"]["environment"]
+    assert "WIREGUARD_ADDRESSES" not in env

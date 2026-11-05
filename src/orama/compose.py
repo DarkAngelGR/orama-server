@@ -10,8 +10,10 @@ import yaml
 from orama.catalog import (
     CATALOG,
     CORE,
+    GLUETUN_CONTROL_SERVER_ADDRESS,
     GLUETUN_PORT_FORWARD_UP_COMMAND,
     GLUETUN_PROXY_USER,
+    VPN_PROVIDERS,
     ServiceSpec,
 )
 from orama.layout import app_config_dir, app_env_file, orama_state_dir
@@ -20,7 +22,6 @@ from orama.setup_model import DesiredSetup, enabled_apps
 NETWORK = "orama"  # the network's key inside both compose files
 SHARED_NETWORK = "orama-net"  # its Docker name: created by the core compose, joined by the apps
 QBITTORRENT_WEBUI_PORT = 8090
-PORT_FORWARD_ONLY_PROVIDER = "protonvpn"
 
 
 def _bind(source: object, target: str) -> dict[str, str]:
@@ -45,12 +46,15 @@ def _environment(spec: ServiceSpec, setup: DesiredSetup) -> dict[str, str]:
             "VPN_SERVICE_PROVIDER": setup.vpn.provider,
             "VPN_TYPE": "wireguard",
             "TZ": tz,
+            "HTTP_CONTROL_SERVER_ADDRESS": GLUETUN_CONTROL_SERVER_ADDRESS,
         }
+        if setup.vpn.wireguard_address is not None:
+            env["WIREGUARD_ADDRESSES"] = str(setup.vpn.wireguard_address)
         if setup.vpn.port_forwarding:
             env["VPN_PORT_FORWARDING"] = "on"
             env["VPN_PORT_FORWARDING_UP_COMMAND"] = GLUETUN_PORT_FORWARD_UP_COMMAND
-            if setup.vpn.provider == PORT_FORWARD_ONLY_PROVIDER:  # Gluetun refuses it for others
-                env["PORT_FORWARD_ONLY"] = "on"
+            if VPN_PROVIDERS[setup.vpn.provider].port_forwarding:  # the model checks this too
+                env["PORT_FORWARD_ONLY"] = "on"  # only servers that can forward a port
         if setup.vpn.route_prowlarr:
             # The password goes in Gluetun's env file (HTTPPROXY_PASSWORD), never here.
             env["HTTPPROXY"] = "on"

@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Interface
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
@@ -20,13 +20,56 @@ from pydantic import (
     model_validator,
 )
 
+from orama.catalog import VPN_PROVIDERS
+
 
 class VpnConfig(BaseModel):
     """VPN settings. The key itself lives in SecretStore, never here."""
 
-    provider: str = "protonvpn"
+    provider: StrictStr = "protonvpn"
     port_forwarding: bool = True
     route_prowlarr: bool = False
+    # The "Address" line of the provider's WireGuard file, for providers that need it.
+    wireguard_address: IPv4Interface | None = None
+
+    @field_validator("provider")
+    @classmethod
+    def _known_provider(cls, value: str) -> str:
+        if value not in VPN_PROVIDERS:
+            names = ", ".join(p.label for p in VPN_PROVIDERS.values())
+            raise ValueError(f"the VPN service must be one of: {names}")
+        return value
+
+    @field_validator("wireguard_address", mode="before")
+    @classmethod
+    def _address_is_text(cls, value: Any) -> Any:
+        # Pydantic would also take an integer, bytes or a tuple; a setup holds text only.
+        if value is not None and not isinstance(value, str | IPv4Interface):
+            raise ValueError("the WireGuard address must be written as text, like a.b.c.d/32")
+        return value
+
+    @field_validator("wireguard_address")
+    @classmethod
+    def _address_prefix(cls, value: IPv4Interface | None) -> IPv4Interface | None:
+        if value is not None and not 8 <= value.network.prefixlen <= 32:
+            raise ValueError("the WireGuard address must end in /8 to /32, like a.b.c.d/32")
+        return value
+
+    @model_validator(mode="after")
+    def _fits_provider(self) -> Self:
+        provider = VPN_PROVIDERS[self.provider]
+        if self.port_forwarding and not provider.port_forwarding:
+            raise ValueError("Port forwarding works only with Proton VPN in this version.")
+        if provider.needs_address and self.wireguard_address is None:
+            raise ValueError(
+                f"{provider.label} needs the WireGuard address from its WireGuard "
+                "configuration file (the Address line, like a.b.c.d/32)."
+            )
+        if not provider.needs_address and self.wireguard_address is not None:
+            raise ValueError(
+                f"{provider.label} does not use a WireGuard address here; leave it empty."
+            )
+        return self
 
 
 def _validate_root(value: Any) -> PurePosixPath:

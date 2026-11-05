@@ -32,6 +32,7 @@ from orama.layout import app_config_dir, data_folders
 from orama.secrets import PLEX_CLIENT_ID_NAME, VPN_KEY_NAME, SecretStore, ensure_app_keys
 from orama.setup_model import DesiredSetup, IndexerChoice, VpnConfig, enabled_apps
 from orama.wiring.http import Http
+from orama_agent import server as agent_server
 from orama_agent.runner import FakeRunner
 from orama_agent.server import AgentServer
 from orama_agent.validate import Roots
@@ -377,6 +378,7 @@ def test_bootstrap_empty_taken_ports(capsys, roots):
 PLEX_WAITING = (
     "… Plex: skipped, Plex is waiting for sign-in — run `python -m orama.cli plex-sign-in`"
 )
+REAL_APPS_CAN_WRITE = getattr(agent_server, "apps_can_write", None)
 
 class Fleet(Http):
     """All five download apps behind one Http: each request goes to that host's fake.
@@ -447,6 +449,8 @@ def agent(roots, monkeypatch):
     thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     monkeypatch.setenv("ORAMA_AGENT_SOCKET", socket_path)
+    # chown is skipped here, so folders belong to the test's own user, not 1000:1001.
+    monkeypatch.setattr(agent_server, "apps_can_write", lambda st, puid, pgid: True)
     runner.fleet = Fleet(monkeypatch, cfg / "orama" / "secrets.bin")
     monkeypatch.setattr(cli, "Http", lambda: runner.fleet)
     monkeypatch.setattr(
@@ -513,6 +517,29 @@ def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, ro
     assert len(secrets) == 6  # includes Bazarr API key
     for value in secrets:
         assert value not in out.out and value not in out.err and value not in caplog.text
+
+
+def test_apply_warns_about_unwritable_folder(capsys, roots, agent, monkeypatch):
+    data, cfg = roots
+    monkeypatch.setattr(agent_server, "apps_can_write", REAL_APPS_CAN_WRITE)
+    path = write_setup(cfg, data)
+    assert cli.main(["apply", "--setup", str(path)]) == 0
+    capsys.readouterr()
+    # The owner's own folder, with no write access for anyone (whatever user runs the test).
+    locked = data / "media" / "movies"
+    os.chmod(locked, 0o555)
+    others = [p for p in data_folders(PurePosixPath(data)) if Path(p) != locked]
+    for folder in others:
+        os.chmod(folder, 0o2777)
+    for app in enabled_apps(DesiredSetup.load(path)):
+        os.chmod(app_config_dir(PurePosixPath(cfg), app), 0o2777)
+    code = cli.main(["apply", "--setup", str(path)])
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    warning = (f"⚠ The apps cannot write to {locked}. Give user 1000 or group 1001 write "
+               "access to it, then apply again.")
+    assert out == ["✓ Folders ready", warning, PLEX_WAITING]
+    assert stat.S_IMODE(os.lstat(locked).st_mode) == 0o555  # nothing was changed
 
 
 def test_apply_second_run_reports_nothing_to_change(capsys, roots, agent):

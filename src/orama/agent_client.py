@@ -29,7 +29,9 @@ class AgentClient:
         self.socket_path = socket_path
         self.timeout = timeout
 
-    def ensure_folders(self, paths: list[str]) -> list[str]:
+    def ensure_folders(self, paths: list[str]) -> dict[str, list[str]]:
+        """``{"created": [...], "not_writable": [...]}``: the folders the Agent made, and
+        the existing ones the apps (PUID:PGID) cannot write to (left unchanged)."""
         return self._call("ensure-folders", {"paths": list(paths)})
 
     def apply(self, compose: dict, env_files: dict[str, dict[str, str]]) -> list[str]:

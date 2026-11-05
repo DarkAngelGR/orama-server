@@ -312,3 +312,81 @@ def test_lan_address_json_integer_refused(tmp_path):
         type(good).model_validate_json(json.dumps(data))
     data["lan_address"] = ".".join(map(str, (192, 168, 1, 10)))
     assert str(type(good).model_validate_json(json.dumps(data)).lan_address) == data["lan_address"]
+
+
+# ---------------------------------------------------------------- VPN providers
+
+
+def _address(*octets, prefix=32):
+    return ".".join(map(str, octets)) + f"/{prefix}"
+
+
+def test_vpn_providers_are_the_five_in_this_version():
+    from orama.catalog import VPN_PROVIDERS
+
+    assert {name: p.label for name, p in VPN_PROVIDERS.items()} == {
+        "protonvpn": "Proton VPN", "nordvpn": "NordVPN", "mullvad": "Mullvad",
+        "ivpn": "IVPN", "surfshark": "Surfshark",
+    }
+    assert [n for n, p in VPN_PROVIDERS.items() if p.port_forwarding] == ["protonvpn"]
+    assert {n for n, p in VPN_PROVIDERS.items() if p.needs_address} == {
+        "mullvad", "ivpn", "surfshark",
+    }
+    assert all(name == p.name for name, p in VPN_PROVIDERS.items())
+
+
+@pytest.mark.parametrize("provider", ["expressvpn", "ProtonVPN", "", "custom", 7])
+def test_unknown_vpn_provider_refused(provider):
+    with pytest.raises(ValidationError):
+        VpnConfig(provider=provider, port_forwarding=False)
+
+
+def test_port_forwarding_refused_for_nordvpn():
+    with pytest.raises(ValidationError, match="Port forwarding works only with Proton VPN"):
+        VpnConfig(provider="nordvpn", port_forwarding=True)
+    VpnConfig(provider="nordvpn", port_forwarding=False)
+    VpnConfig(provider="protonvpn", port_forwarding=True)
+
+
+@pytest.mark.parametrize("provider", ["mullvad", "ivpn", "surfshark"])
+def test_mullvad_needs_wireguard_address(provider):
+    with pytest.raises(ValidationError, match="WireGuard address"):
+        VpnConfig(provider=provider, port_forwarding=False)
+    vpn = VpnConfig(provider=provider, port_forwarding=False,
+                    wireguard_address=_address(10, 64, 1, 2))
+    assert str(vpn.wireguard_address) == _address(10, 64, 1, 2)
+
+
+@pytest.mark.parametrize("provider", ["protonvpn", "nordvpn"])
+def test_address_refused_for_protonvpn(provider):
+    with pytest.raises(ValidationError, match="WireGuard address"):
+        VpnConfig(provider=provider, port_forwarding=False,
+                  wireguard_address=_address(10, 2, 0, 2))
+
+
+@pytest.mark.parametrize("bad", [
+    _address(10, 64, 1, 2, prefix=7), _address(10, 64, 1, 2, prefix=33), "2001:db8::2/128",
+    "10.64.1", 167772161, " " + _address(10, 64, 1, 2), _address(10, 64, 1, 2) + ",",
+    _address(300, 1, 1, 1),
+])
+def test_bad_wireguard_address_refused(bad):
+    with pytest.raises(ValidationError):
+        VpnConfig(provider="mullvad", port_forwarding=False, wireguard_address=bad)
+
+
+def test_wireguard_address_round_trips_as_text(tmp_path):
+    setup = make_setup(download_methods={"torrent"}, vpn=VpnConfig(
+        provider="ivpn", port_forwarding=False, wireguard_address=_address(172, 18, 3, 4, prefix=24)))
+    setup.save(tmp_path / "s.json")
+    saved = json.loads((tmp_path / "s.json").read_text())
+    assert saved["vpn"]["wireguard_address"] == _address(172, 18, 3, 4, prefix=24)
+    assert DesiredSetup.load(tmp_path / "s.json") == setup
+
+
+def test_saved_protonvpn_setup_without_address_still_loads(tmp_path):
+    path = tmp_path / "s.json"
+    data = make_setup(download_methods={"torrent"}, vpn=VpnConfig()).to_json_dict()
+    del data["vpn"]["wireguard_address"]
+    path.write_text(json.dumps(data))
+    loaded = DesiredSetup.load(path)
+    assert loaded.vpn.provider == "protonvpn" and loaded.vpn.wireguard_address is None
