@@ -123,3 +123,24 @@ def test_skipped_step_names_the_root_cause_app_through_the_chain():
     )
     assert [r.message for r in res[1:]] == ["waiting for Sonarr"] * 3
     assert format_checklist(res)[-1] == "… Prowlarr: skipped, waiting for Sonarr"
+
+
+def test_a_step_can_skip_itself_and_its_dependents_say_why_once():
+    from orama.wiring.engine import StepSkipped
+
+    def wait():
+        raise StepSkipped("Plex is waiting for sign-in")
+
+    ran = []
+    res = run_steps(
+        [
+            Step("p1", "plex", wait),
+            Step("p2", "plex", lambda: ran.append("p2"), needs=("p1",)),
+            Step("s1", "sonarr", lambda: None),
+        ]
+    )
+    assert ran == []
+    assert [r.status for r in res] == ["skipped", "skipped", "unchanged"]
+    assert res[0].message == res[1].message == "Plex is waiting for sign-in"
+    # Shown even when nothing else changed, and only once.
+    assert format_checklist(res) == ["… Plex: skipped, Plex is waiting for sign-in"]
