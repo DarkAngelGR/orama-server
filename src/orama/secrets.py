@@ -32,6 +32,7 @@ SABNZBD_NZB_KEY_NAME = "nzbkey:sabnzbd"
 BAZARR_KEY_NAME = "apikey:bazarr"
 JELLYFIN_PASSWORD_NAME = "password:jellyfin"
 JELLYFIN_KEY_NAME = "apikey:jellyfin"
+JELLYFIN_USER_NAME = "user:jellyfin"  # set by the owner for a Jellyfin set up by hand
 PLEX_TOKEN_NAME = "token:plex"
 PLEX_CLIENT_ID_NAME = "plex:client_id"
 _QBT_PBKDF2_ITERATIONS = 100_000

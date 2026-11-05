@@ -43,6 +43,7 @@ from orama.platform import Platform, default_roots
 from orama.ports import assign_ports
 from orama.secrets import (
     BAZARR_KEY_NAME,
+    JELLYFIN_USER_NAME,
     QBITTORRENT_PASSWORD_NAME,
     SABNZBD_NZB_KEY_NAME,
     VPN_KEY_NAME,
@@ -71,11 +72,13 @@ PLEX_POLL_SECONDS = 2
 SECRET_LIMIT = 4096  # characters; a WireGuard key or an API key is well under 100
 SECRET_NAME = re.compile(
     rf"(?:{re.escape(VPN_KEY_NAME)}"
-    r"|password:jellyfin"
+    r"|(?:user|password):jellyfin"
     r"|opensubtitles:(?:username|password)"
     r"|usenet:[a-z0-9-]{1,40}:password"
     r"|indexer:[a-z0-9-]{1,40}:[A-Za-z0-9_.]{1,64})"
 )
+
+JELLYFIN_USER_VALUE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -515,7 +518,7 @@ def set_secret(name: str, setup_path: Path) -> None:
     if not SECRET_NAME.fullmatch(name):  # never echoed: it may be a mistyped secret
         raise Failed(
             "That is not a secret name Orama knows. Use vpn:wireguard_private_key, "
-            "password:jellyfin, opensubtitles:username, opensubtitles:password, "
+            "user:jellyfin, password:jellyfin, opensubtitles:username, opensubtitles:password, "
             "usenet:<server>:password or indexer:<indexer>:<field>."
         )
     if not setup_path.is_file():
@@ -529,6 +532,11 @@ def set_secret(name: str, setup_path: Path) -> None:
         raise Failed(
             "The VPN key should look like the one your VPN provider gave you: letters, "
             "digits, + / =. Nothing was saved."
+        )
+    if name == JELLYFIN_USER_NAME and not JELLYFIN_USER_VALUE.fullmatch(value):
+        raise Failed(
+            "The Jellyfin admin name may use only letters, digits and . _ @ - "
+            "(up to 64 characters). Nothing was saved."
         )
     try:
         store.set(name, value)

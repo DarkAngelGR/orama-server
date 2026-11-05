@@ -4,7 +4,12 @@ import urllib.parse
 import pytest
 from conftest import make_setup, random_secret
 
-from orama.secrets import JELLYFIN_KEY_NAME, JELLYFIN_PASSWORD_NAME, SecretStore
+from orama.secrets import (
+    JELLYFIN_KEY_NAME,
+    JELLYFIN_PASSWORD_NAME,
+    JELLYFIN_USER_NAME,
+    SecretStore,
+)
 from orama.wiring.engine import StepError, run_steps
 from orama.wiring.http import FakeHttp, Response
 from orama.wiring.jellyfin import ADMIN_USER, WRONG_PASSWORD, jellyfin_steps
@@ -185,6 +190,40 @@ def test_completed_server_with_another_password_gets_the_plain_message(store, pa
                for c in fake.http.calls if c.path.startswith("/Startup"))
     assert fake.writes() and all(c.path == "/Users/AuthenticateByName" for c in fake.writes())
     assert_hidden(fake, store, results, password, fake.password)
+
+
+def test_wrong_password_message_points_to_set_secret_and_never_to_deleting():
+    assert WRONG_PASSWORD == (
+        "Jellyfin is already set up — enter its admin name and password with set-secret "
+        "user:jellyfin and password:jellyfin, then run apply again."
+    )
+    assert "remove" not in WRONG_PASSWORD and "delete" not in WRONG_PASSWORD
+    assert "folder" not in WRONG_PASSWORD
+
+
+def test_hand_set_up_jellyfin_is_recovered_with_the_owner_admin_name(store, password):
+    fake = FakeJellyfin(password)
+    fake.completed = True
+    fake.startup_name = "owner.admin@home"
+    first = run(fake, store)
+    assert first["jellyfin:auth"].status == "failed"
+    store.set(JELLYFIN_USER_NAME, "owner.admin@home")
+    results = run(fake, store)
+    assert results["jellyfin:auth"].status == "unchanged"
+    assert results["jellyfin:api-key"].status == "changed"
+    assert results["jellyfin:libraries"].status == "changed"
+    signins = [c.json for c in fake.http.calls if c.path == "/Users/AuthenticateByName"]
+    assert signins[-1]["Username"] == "owner.admin@home"
+    assert fake.users_created == 0
+    assert_hidden(fake, store, results, password)
+
+
+def test_fresh_server_makes_the_admin_under_the_stored_name(store, password):
+    store.set(JELLYFIN_USER_NAME, "owner")
+    fake = FakeJellyfin(password)
+    results = run(fake, store)
+    assert results["jellyfin:auth"].status == "unchanged"
+    assert fake.startup_name == "owner" and fake.users_created == 1
 
 
 def test_existing_library_at_the_path_is_kept(store, password):

@@ -1256,6 +1256,32 @@ def test_plan2b_set_secret_names(capsys, monkeypatch, roots, name):
     assert value not in out.out + out.err
 
 
+@pytest.mark.parametrize("value", ["orama-admin", "Owner.Name@home_1", "a", "b" * 64])
+def test_set_secret_stores_the_jellyfin_admin_name(capsys, monkeypatch, roots, value):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["user:jellyfin"],
+                               FakeStdin(value + "\n"))
+    assert code == 0, out.err
+    assert SecretStore(cfg / "orama" / "secrets.bin").get("user:jellyfin") == value
+
+
+@pytest.mark.parametrize("bad", [" ", "/", "\\", "'", '"', ":", "é", "x" * 65 + "-"])
+def test_set_secret_refuses_a_bad_jellyfin_admin_name(capsys, caplog, monkeypatch, roots, bad):
+    data, cfg = roots
+    cfg.mkdir()
+    write_setup(cfg, data)
+    marker = os.urandom(6).hex()
+    code, out = run_set_secret(capsys, monkeypatch, cfg, ["user:jellyfin"],
+                               FakeStdin(marker + bad + "\n"))
+    assert code == 1
+    assert out.err.startswith("✗ ") and len(out.err.strip().splitlines()) == 1
+    assert "Jellyfin admin name" in out.err
+    assert marker not in out.err + out.out + caplog.text
+    assert not (cfg / "orama" / "secrets.bin").exists()
+
+
 def test_plex_token_cannot_be_set_by_hand(capsys, monkeypatch, roots):
     data, cfg = roots
     cfg.mkdir()
