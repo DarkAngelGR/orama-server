@@ -219,3 +219,10 @@ def test_task5_app_registers_static_policy(tmp_path):
         assert response.status_code == 200
         assert response.cache_control.max_age >= 86400
         assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_links_styled_as_buttons_get_their_full_height():
+    """An <a class="button"> is inline by default and ignores min-height: 43 px on CI fonts."""
+    css = (Path(__file__).resolve().parents[2] / "src/orama/web/static/orama.css").read_text()
+    rule = next(line for line in css.splitlines() if line.startswith(".button {"))
+    assert "display: inline-flex" in rule and "min-height: 48px" in rule
