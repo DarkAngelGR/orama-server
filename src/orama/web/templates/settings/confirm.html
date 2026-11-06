@@ -3,8 +3,8 @@
 {% block title %}Turn off an app? · Settings · Orama{% endblock %}
 {% block content %}
 <div class="settings">
-  <h1>Turn off {{ 'this app' if apps|length == 1 else 'these apps' }}?</h1>
-  {% for app_name in apps %}{{ notice('wait', 'This stops ' ~ app_name ~ '. Its settings folder is kept and no media is deleted.') }}{% endfor %}
+  <h1>Turn this off?</h1>
+  {% for line in messages %}{{ notice('wait', line) }}{% endfor %}
   <form method="post" action="/settings/{{ section }}" class="wizard-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="confirm" value="1">

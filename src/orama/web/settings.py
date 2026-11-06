@@ -19,11 +19,12 @@ from flask import (
     render_template,
     request,
 )
+from pydantic import ValidationError
 
 from orama import state
 from orama.secrets import SecretStore
 from orama.setup_model import MAX_EXTRA_HOST_NAMES, DesiredSetup
-from orama.web import auth, catalogue, forms
+from orama.web import auth, catalogue, forms, security
 from orama.web.jobs import TEST_BUSY, apply_operation
 from orama.web.wizard import STEPS
 from orama.wiring import prowlarr, sabnzbd
@@ -51,18 +52,26 @@ RETYPE = {
 
 PASSWORD_MISMATCH = "The two new passwords do not match."
 WRONG_PASSWORD = "That is not your current password."
+GRAPHICS_BAD = ("Orama cannot use what the installer found. Run the installer again, then "
+                "try once more.")
+IN_USE = ("You are using Orama through that name right now. Open it with another address "
+          "first.")
 HOST_NAME_BAD = ("That is not a name Orama can use. Use lower-case letters, digits, dots and "
                  "hyphens, like media.example.")
 
 
 class _Back(Exception):
-    """Go back to the Settings page without saving (a draft exists, or nothing differs)."""
+    """Go back to the Settings page without saving: nothing differs."""
+
+
+class _Draft(Exception):
+    """An unfinished setup change exists: Settings must not save over it."""
 
 
 class _NeedsConfirm(Exception):
-    def __init__(self, apps: list[str]) -> None:
+    def __init__(self, messages: list[str]) -> None:
         super().__init__("confirm")
-        self.apps = apps
+        self.messages = messages
 
 
 class _DryStore:
@@ -79,6 +88,66 @@ class _DryStore:
 
     def delete(self, name: str) -> None:
         pass
+
+
+class _Candidate:
+    """The secret store as it would be if a candidate entry were accepted.
+
+    Reads see the candidate's buffered secret writes and deletes. Writes made through it by
+    the entry's own test (sent markers, ``test-ok``) go straight to the real store, because
+    they describe what really happened in the app. :meth:`commit` writes the buffered ones.
+    """
+
+    def __init__(self, store: SecretStore) -> None:
+        self._store = store
+        self.pending: dict[str, str | None] = {}  # None = delete
+
+    def get(self, name: str):
+        if name in self.pending:
+            return self.pending[name]
+        return self._store.get(name)
+
+    def names(self) -> list[str]:
+        names = {n for n in self._store.names() if self.pending.get(n, "") is not None}
+        names.update(n for n, v in self.pending.items() if v is not None)
+        return sorted(names)
+
+    def buffer(self) -> _Buffer:
+        return _Buffer(self)
+
+    def commit(self) -> None:
+        for name, value in self.pending.items():
+            if name.startswith("test-ok:"):
+                continue  # the test just recorded the real answer
+            if value is None:
+                self._store.delete(name)
+            else:
+                self._store.set(name, value)
+
+    # What the entry's test writes goes to the real store.
+    def set(self, name: str, value: str) -> None:
+        self._store.set(name, value)
+        self.pending.pop(name, None)
+
+    def delete(self, name: str) -> None:
+        self._store.delete(name)
+        self.pending.pop(name, None)
+
+
+class _Buffer:
+    """The write side used while building the candidate: nothing reaches the real store."""
+
+    def __init__(self, layer: _Candidate) -> None:
+        self._layer = layer
+
+    def get(self, name: str):
+        return self._layer.get(name)
+
+    def set(self, name: str, value: str) -> None:
+        self._layer.pending[name] = value
+
+    def delete(self, name: str) -> None:
+        self._layer.pending[name] = None
 
 
 def register_settings(app: Flask) -> None:
@@ -111,15 +180,23 @@ def _graphics_text(gid: int | None, nvidia: bool) -> str:
     return " and ".join(parts)
 
 
+STOPS = "This stops {}. Its settings folder is kept and no media is deleted."
+VPN_OFF = "This turns the VPN off. Torrent downloads will no longer go through the VPN."
+
+
 def _stopping(section: str, setup: DesiredSetup, form) -> list[str]:
-    """The apps this form would turn off."""
+    """What this form would turn off, as the sentences the owner confirms."""
+    found: list[str] = []
     if section == "media":
-        return [APP_NAMES[n] for n in ("plex", "jellyfin")
-                if n in setup.media_servers and not forms._on(form, f"server_{n}")]
-    if section == "downloads":
-        return [APP_NAMES[n] for n in ("usenet", "torrent")
-                if n in setup.download_methods and not forms._on(form, n)]
-    return []
+        found = [STOPS.format(APP_NAMES[n]) for n in ("plex", "jellyfin")
+                 if n in setup.media_servers and not forms._on(form, f"server_{n}")]
+    elif section == "downloads":
+        found = [STOPS.format(APP_NAMES[n]) for n in ("usenet", "torrent")
+                 if n in setup.download_methods and not forms._on(form, n)]
+        if (setup.vpn is not None and not forms._on(form, "vpn")
+                and forms._on(form, "torrent")):
+            found.append(VPN_OFF)
+    return found
 
 
 def _pages() -> Blueprint:
@@ -175,6 +252,9 @@ def _pages() -> Blueprint:
 
     # ------------------------------------------------------------ saving
 
+    def draft_page():
+        return render_page(409, message="Nothing was saved.", problem=True)
+
     def commit(section: str, change, *, start: bool, echo=None):
         """Run ``change(setup) -> setup`` on setup.json under the lock; maybe start an apply."""
         st = auth.web_state()
@@ -187,7 +267,7 @@ def _pages() -> Blueprint:
 
         def guarded(setup: DesiredSetup) -> DesiredSetup:
             if (st.state_dir / DRAFT_FILE).exists():
-                raise _Back
+                raise _Draft
             return change(setup)
 
         try:
@@ -204,23 +284,28 @@ def _pages() -> Blueprint:
                 state.update_setup(path, guarded)
         except _Back:
             return redirect("/settings", 303)
+        except _Draft:
+            return draft_page()
         except state.Busy:
             return render_page(409, message=TEST_BUSY, problem=True,
                                overrides=echo(None) if echo else None)
         except forms.Invalid as e:
-            return render_page(400, overrides=echo(e.errors) if echo else None)
+            shown = echo(e.errors) if echo else None
+            return render_page(400, overrides=shown,
+                               message="" if shown else next(iter(e.errors.values())),
+                               problem=not shown)
         except _NeedsConfirm as e:
-            return confirm_page(section, e.apps)
+            return confirm_page(section, e.messages)
         return redirect("/settings?applied=1" if start else f"/settings?saved={section}", 303)
 
-    def confirm_page(section: str, apps: list[str]):
+    def confirm_page(section: str, messages: list[str]):
         hidden = [(k, v) for k, v in request.form.items(multi=True)
                   if k not in ("csrf_token", "confirm")
                   and k not in {name for name, _ in RETYPE.get(section, ())}]
         retype = [(name, label) for name, label in RETYPE.get(section, ())
                   if request.form.get(name)]
         return render_template(
-            "settings/confirm.html", section=section, apps=apps, hidden=hidden, retype=retype,
+            "settings/confirm.html", section=section, messages=messages, hidden=hidden, retype=retype,
             title=dict(WIZARD_SECTIONS)[section],
         )
 
@@ -265,6 +350,8 @@ def _pages() -> Blueprint:
         def change(setup: DesiredSetup) -> DesiredSetup:
             names = list(setup.extra_host_names)
             if removing:
+                if removing == security.normalize_host(request.environ.get("HTTP_HOST", "")):
+                    raise forms.Invalid({"add_name": IN_USE})
                 names = [n for n in names if n != removing]
             elif adding:
                 if adding in names:
@@ -298,7 +385,10 @@ def _pages() -> Blueprint:
         def change(setup: DesiredSetup) -> DesiredSetup:
             if (setup.render_gid, setup.nvidia) == (gid, nvidia):
                 raise _Back  # nothing differs: back to the page, no apply
-            return forms._rebuild(setup, render_gid=gid, nvidia=nvidia)
+            try:
+                return forms._rebuild(setup, render_gid=gid, nvidia=nvidia)
+            except ValidationError:
+                raise forms.Invalid({"graphics": GRAPHICS_BAD}) from None
 
         return commit("graphics", change, start=True)
 
@@ -393,7 +483,7 @@ def _pages() -> Blueprint:
                              if st.store.get(f"test-ok:indexer:{i.slug}") == "1"},
             tested_servers={s.slug for s in setup.usenet_servers
                             if st.store.get(f"test-ok:usenet:{s.slug}") == "1"},
-            job=job, show_job=bool(job and request.method == "POST" and message),
+            job=job, show_job=bool(job and request.method == "POST" and message and not problem),
             running=bool(job and job.status == "running"),
         ), status
 
@@ -404,7 +494,7 @@ def _pages() -> Blueprint:
         if setup is None:
             abort(409)
         if (st.state_dir / DRAFT_FILE).exists():
-            return redirect("/settings", 303)
+            return draft_page()
         definitions = None
         message, problem = "", False
         try:
@@ -418,14 +508,16 @@ def _pages() -> Blueprint:
                 with state.locked(state.apply_lock(st.state_dir), blocking=False):
                     with state.locked(state.setup_lock(st.state_dir)):
                         if (st.state_dir / DRAFT_FILE).exists():
-                            return redirect("/settings", 303)
+                            return draft_page()
                         setup = DesiredSetup.load(path)
                         if kind == "indexer":
                             items, remove = setup.indexers, forms.remove_indexer
                             test = prowlarr.test_indexer
+                            marker = prowlarr.sent_marker_name
                         else:
                             items, remove = setup.usenet_servers, forms.remove_usenet_server
                             test = sabnzbd.test_usenet_server
+                            marker = sabnzbd.sent_marker_name
                         if action != "add" and not any(i.slug == slug for i in items):
                             abort(404)
                         if action == "add":
@@ -434,6 +526,9 @@ def _pages() -> Blueprint:
                             existing = next((i for i in items if i.slug == edit_slug), None)
                             if edit_slug and existing is None:
                                 abort(404)
+                            # Build the candidate without touching the real secret store.
+                            layer = _Candidate(st.store)
+                            buffer = layer.buffer()
                             if kind == "indexer":
                                 choice = (existing.definition if existing
                                           else request.form.get("definition"))
@@ -444,19 +539,42 @@ def _pages() -> Blueprint:
                                 if definition is None:
                                     raise forms.Invalid(
                                         {"definition": "Choose an indexer from the list."})
-                                setup, slug = forms.add_indexer(
-                                    setup, definition, request.form, st.store, existing=existing)
+                                candidate, slug = forms.add_indexer(
+                                    setup, definition, request.form, buffer, existing=existing)
                             else:
-                                setup, slug = forms.add_usenet_server(
-                                    setup, request.form, st.store, existing=existing)
+                                candidate, slug = forms.add_usenet_server(
+                                    setup, request.form, buffer, existing=existing)
+                            entries = candidate.indexers if kind == "indexer" else candidate.usenet_servers
+                            entry = next(i for i in entries if i.slug == slug)
+                            label = entry.name if kind == "indexer" else entry.host
+                            sent_before = bool(st.store.get(marker(
+                                f"indexer:{slug}" if kind == "indexer" else slug)))
+                            ok_name = f"test-ok:{kind}:{slug}"
+                            ok_before = st.store.get(ok_name)
+                            # Test the candidate first; only a pass is saved and applied.
+                            error = test(candidate, layer, st.http, slug)
+                            if error:
+                                if ok_before is not None:
+                                    st.store.set(ok_name, ok_before)  # the old entry still stands
+                                if not sent_before and st.store.get(marker(
+                                        f"indexer:{slug}" if kind == "indexer" else slug)):
+                                    # The test created it in the app: have the next apply remove it.
+                                    if kind == "indexer":
+                                        st.store.set(prowlarr.REMOVE_PREFIX + slug, entry.name)
+                                    else:
+                                        st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+                                return render_indexers(
+                                    setup, f"{error} Nothing was saved.", True, 400)
+                            layer.commit()
+                            candidate.save(path)
+                            setup = candidate
+                            message = f"{label} works. Applying it now."
                         elif action == "remove":
                             # A live entry: its removal step in the next apply deletes it.
                             setup = remove(setup, slug, st.store, keep_credentials=True)
-                        if action != "test":
                             setup.save(path)
-                    if action == "remove":
-                        message = "Removed."
-                    else:
+                            message = "Removed."
+                    if action == "test":
                         error = test(setup, st.store, st.http, slug)
                         entries = setup.indexers if kind == "indexer" else setup.usenet_servers
                         entry = next(i for i in entries if i.slug == slug)

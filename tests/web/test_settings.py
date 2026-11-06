@@ -60,6 +60,20 @@ def starts(runner) -> list[str]:
     return runner.log.read_text().split() if runner.log.exists() else []
 
 
+def passing(kind):
+    """A test that passes and records it, as the real ones do."""
+    def run(setup, store, http, slug):
+        store.set(f"test-ok:{kind}:{slug}", "1")
+    return run
+
+
+def failing(kind, message="Check the details."):
+    def run(setup, store, http, slug):
+        store.delete(f"test-ok:{kind}:{slug}")
+        return message
+    return run
+
+
 def write_hardware(app, **values):
     (sd(app) / "hardware.json").write_text(json.dumps({"render_gid": None, "nvidia": False, **values}))
 
@@ -191,7 +205,7 @@ def test_empty_secret_keeps_stored_vpn_key(signed, app, runner):
 
 def test_indexer_empty_secret_keeps_stored_value(signed, app, runner, monkeypatch):
     monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
-    monkeypatch.setattr(prowlarr, "test_indexer", lambda *args: None)
+    monkeypatch.setattr(prowlarr, "test_indexer", passing("indexer"))
     store = app.extensions["orama"].store
     key = secrets.token_urlsafe(20)
     setup, slug = forms.add_indexer(live(app), DEFINITION, {
@@ -212,7 +226,7 @@ def test_indexer_empty_secret_keeps_stored_value(signed, app, runner, monkeypatc
 
 
 def test_usenet_empty_password_keeps_stored_value(signed, app, runner, monkeypatch):
-    monkeypatch.setattr(sabnzbd, "test_usenet_server", lambda *args: None)
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", passing("usenet"))
     store = app.extensions["orama"].store
     secret = secrets.token_urlsafe(20)
     setup, slug = forms.add_usenet_server(live(app), {
@@ -372,7 +386,9 @@ def test_draft_blocks_settings_saves(signed, app, runner):
     before = (sd(app) / "setup.json").read_bytes()
     draft = (sd(app) / "setup.draft.json").read_bytes()
     response = post(signed, "/settings/playback", device="lg", quality="4k")
-    assert response.status_code == 303 and response.headers["Location"] == "/settings"
+    assert response.status_code == 409
+    assert "Nothing was saved." in page(response)
+    assert "You have an unfinished setup change." in page(response)
     assert (sd(app) / "setup.json").read_bytes() == before
     assert (sd(app) / "setup.draft.json").read_bytes() == draft
     assert starts(runner) == []
@@ -451,3 +467,191 @@ def test_invalid_form_is_not_asked_to_confirm(signed, app):
     write_setup(sd(app), media_servers={"plex", "jellyfin"})
     response = post(signed, "/settings/media")  # nothing ticked
     assert response.status_code == 400 and "Yes, stop it" not in page(response)
+
+
+# ------------------------------------------------------------------ only a passing test is saved
+
+
+def seeded_indexer(app):
+    store = app.extensions["orama"].store
+    key = secrets.token_urlsafe(20)
+    setup, slug = forms.add_indexer(live(app), DEFINITION, {
+        "name": "Mine", "field:apiKey": key, "field:baseUrl": "https://indexer.example",
+    }, store)
+    setup.save(sd(app) / "setup.json")
+    store.set(f"test-ok:indexer:{slug}", "1")
+    return store, slug, key
+
+
+def test_failed_indexer_edit_saves_nothing_and_keeps_old_key(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    seen = {}
+
+    def bad(setup, store_, http, slug_):
+        seen["key"] = store_.get(f"indexer:{slug_}:apiKey")  # the candidate is what is tested
+        store_.delete(f"test-ok:indexer:{slug_}")
+        return "The indexer refused the key."
+
+    monkeypatch.setattr(prowlarr, "test_indexer", bad)
+    before = (sd(app) / "setup.json").read_bytes()
+    wrong = secrets.token_urlsafe(20)
+    edit = signed.get(f"/settings/indexers?edit={slug}")
+    response = signed.post("/settings/indexers", data={
+        "csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
+        "field:apiKey": wrong, "field:baseUrl": "https://indexer.example",
+    })
+    assert response.status_code == 400
+    assert "The indexer refused the key." in page(response) and "Nothing was saved." in page(response)
+    assert seen["key"] == wrong
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert store.get(f"test-ok:indexer:{slug}") == "1"
+    assert wrong not in page(response)
+    assert starts(runner) == []
+
+
+def test_passing_indexer_edit_saves_applies_and_records_test(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    monkeypatch.setattr(prowlarr, "test_indexer", passing("indexer"))
+    store, slug, _old = seeded_indexer(app)
+    store.delete(f"test-ok:indexer:{slug}")
+    new = secrets.token_urlsafe(20)
+    edit = signed.get(f"/settings/indexers?edit={slug}")
+    response = signed.post("/settings/indexers", data={
+        "csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
+        "field:apiKey": new, "field:baseUrl": "https://indexer.example",
+    })
+    assert response.status_code == 200 and "works" in page(response)
+    assert store.get(f"indexer:{slug}:apiKey") == new
+    assert store.get(f"test-ok:indexer:{slug}") == "1"
+    assert starts(runner) == [str(sd(app) / "setup.json")]
+
+
+def test_failed_new_indexer_leaves_no_entry_or_secret(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    monkeypatch.setattr(prowlarr, "test_indexer", failing("indexer"))
+    store = app.extensions["orama"].store
+    before = (sd(app) / "setup.json").read_bytes()
+    key = secrets.token_urlsafe(20)
+    response = post(signed, "/settings/indexers", token_from="/settings/indexers",
+                    definition="Newznab", name="Fresh", **{"field:apiKey": key})
+    assert response.status_code == 400
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get("indexer:fresh:apiKey") is None
+    assert starts(runner) == []
+
+
+def test_failed_new_indexer_created_in_the_app_is_marked_for_removal(
+        signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store = app.extensions["orama"].store
+
+    def created_then_failed(setup, store_, http, slug):
+        store_.set(prowlarr.sent_marker_name(f"indexer:{slug}"), "recorded")
+        return "It did not answer."
+
+    monkeypatch.setattr(prowlarr, "test_indexer", created_then_failed)
+    response = post(signed, "/settings/indexers", token_from="/settings/indexers",
+                    definition="Newznab", name="Fresh")
+    assert response.status_code == 400
+    assert store.get(prowlarr.REMOVE_PREFIX + "fresh") == "Fresh"
+    assert starts(runner) == []
+
+
+def test_failed_usenet_edit_saves_nothing_and_keeps_old_password(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", failing("usenet", "Login refused."))
+    store = app.extensions["orama"].store
+    secret = secrets.token_urlsafe(20)
+    setup, slug = forms.add_usenet_server(live(app), {
+        "host": "news.example", "port": "563", "username": "me", "password": secret, "ssl": "on",
+    }, store)
+    setup.save(sd(app) / "setup.json")
+    store.set(f"test-ok:usenet:{slug}", "1")
+    before = (sd(app) / "setup.json").read_bytes()
+    edit = signed.get(f"/settings/indexers?edit-usenet={slug}")
+    wrong = secrets.token_urlsafe(20)
+    response = signed.post("/settings/usenet", data={
+        "csrf_token": csrf_from(edit), "edit-usenet": slug, "host": "news.example",
+        "port": "119", "connections": "10", "username": "me", "password": wrong,
+    })
+    assert response.status_code == 400 and "Login refused." in page(response)
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"usenet:{slug}:password") == secret
+    assert store.get(f"test-ok:usenet:{slug}") == "1"
+    assert starts(runner) == []
+
+
+# ------------------------------------------------------------------ smaller fixes
+
+
+def test_cannot_remove_the_name_in_use_right_now(signed, app, password):
+    # Another name is in use here, so removing EXTRA is fine (and EXTRA comes back after).
+    assert post(signed, "/settings/addresses", remove=EXTRA).status_code == 303
+    write_setup(sd(app))
+    host = {"Host": EXTRA.upper() + ".:8765"}
+    via_name = app.test_client()
+    assert signin(via_name, password, headers=host).status_code == 303
+    token = csrf_from(via_name.get("/settings", headers=host))
+    refused = via_name.post("/settings/addresses", headers=host,
+                            data={"csrf_token": token, "remove": EXTRA})
+    assert refused.status_code == 400
+    assert "You are using Orama through that name right now." in page(refused)
+    assert EXTRA in live(app).extra_host_names
+
+
+def test_turning_the_vpn_off_asks_first(signed, app, runner):
+    vpn_setup(app)
+    response = post(signed, "/settings/downloads", torrent="on")
+    assert response.status_code == 200
+    assert "This turns the VPN off. Torrent downloads will no longer go through the VPN." in page(response)
+    assert live(app).vpn is not None and starts(runner) == []
+    done = post(signed, "/settings/downloads", torrent="on", confirm="1")
+    assert done.status_code == 303 and live(app).vpn is None
+
+
+def test_usenet_off_with_servers_is_refused_not_confirmed(signed, app):
+    setup, _slug = forms.add_usenet_server(live(app), {
+        "host": "news.example", "port": "563", "username": "me", "password": "x" * 12,
+    }, app.extensions["orama"].store)
+    setup.save(sd(app) / "setup.json")
+    write_setup_methods = setup.to_json_dict()
+    assert write_setup_methods["usenet_servers"]
+    response = post(signed, "/settings/downloads", torrent="on")
+    assert response.status_code == 400
+    assert "Yes, stop it" not in page(response) and "Usenet servers" in page(response)
+    assert "usenet" in live(app).download_methods
+
+
+def test_graphics_the_model_refuses_gives_plain_message(signed, app, monkeypatch):
+    from pydantic import ValidationError
+
+    write_hardware(app, render_gid=105)
+
+    def refuse(*args, **kwargs):
+        DesiredSetup.model_validate({})  # raises ValidationError
+    monkeypatch.setattr(forms, "_rebuild", refuse)
+    response = post(signed, "/settings/graphics")
+    assert response.status_code == 400
+    assert "Orama cannot use what the installer found." in page(response)
+    assert ValidationError  # imported for the comment above
+
+
+def test_current_password_guesses_are_rate_limited(signed, app, password):
+    new = new_password()
+    for _ in range(5):
+        wrong = post(signed, "/settings/password", current_password="wrong-" + "x" * 8,
+                     new_password=new, repeat_password=new)
+        assert wrong.status_code == 400
+    limited = post(signed, "/settings/password", current_password=password,
+                   new_password=new, repeat_password=new)
+    assert limited.status_code == 429
+    assert "Too many wrong tries." in page(limited)
+    assert app.extensions["orama"].passwords.verify(password)
+
+
+def test_post_without_csrf_token_is_refused(signed, app):
+    before = (sd(app) / "setup.json").read_bytes()
+    response = signed.post("/settings/playback", data={"device": "lg", "quality": "4k"})
+    assert response.status_code == 403
+    assert (sd(app) / "setup.json").read_bytes() == before
