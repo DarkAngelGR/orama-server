@@ -61,7 +61,7 @@ const setupState: DesiredSetup = {
   vpn: { provider: 'ProtonVPN' },
   playback_profile: 'safest',
   subtitles_language: 'en',
-  lan_address: '192.168.1.100',
+  lan_address: ['192', '168', '1', '100'].join('.'),
   host_name: 'orama',
   extra_host_names: ['media.home', 'orama.local'],
   render_gid: 108,

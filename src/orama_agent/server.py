@@ -95,6 +95,17 @@ def _show(value: Any) -> str:
 
 def _open_child_dir(parent_fd: int, name: str, shown: Path) -> int:
     try:
+        if stat.S_ISLNK(os.stat(name, dir_fd=parent_fd, follow_symlinks=False).st_mode):
+            raise Refused(
+                f"The folder {_show(str(shown))} is a link; Orama only uses real folders."
+            )
+    except FileNotFoundError:
+        pass
+    except Refused:
+        raise
+    except OSError:
+        pass
+    try:
         return os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
     except OSError as e:
         if e.errno not in (errno.ELOOP, errno.ENOTDIR):
