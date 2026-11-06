@@ -90,6 +90,38 @@ def test_secret_looking_names_are_secret_without_a_privacy_flag(source, name):
     ]
 
 
+def _kinds(source, fields):
+    store, http = source
+    schema = [{
+        "definitionName": "plain", "name": "Plain", "protocol": "torrent",
+        "implementation": "Avistaz", "fields": fields,
+    }]
+    http.route("GET", "/api/v1/indexer/schema", lambda _: Response(200, {}, json.dumps(schema).encode()))
+    plain, = catalogue.load(store, http, frozenset({"torrent"}))
+    return [(field.name, field.kind) for field in plain.fields]
+
+
+@pytest.mark.parametrize("name, field_type, kind", [
+    ("useFreeleechToken", "checkbox", "checkbox"),
+    ("tokenMode", "select", "select"),
+    ("tokenLimit", "number", "number"),
+])
+def test_non_text_fields_keep_their_kind_despite_a_secret_looking_name(
+        source, name, field_type, kind):
+    assert _kinds(source, [{"name": name, "type": field_type}]) == [(name, kind)]
+
+
+@pytest.mark.parametrize("name", ["apiKey", "passkey", "cookie", "token"])
+def test_text_fields_with_secret_looking_names_stay_secret(source, name):
+    assert _kinds(source, [{"name": name, "type": "text"}]) == [(name, "secret")]
+
+
+@pytest.mark.parametrize("field_type", ["checkbox", "select", "number", "textbox"])
+def test_privacy_flagged_fields_are_secret_of_any_type(source, field_type):
+    fields = [{"name": "plainName", "type": field_type, "privacy": "apiKey"}]
+    assert _kinds(source, fields) == [("plainName", "secret")]
+
+
 def test_unreachable_schema_can_be_retried(source):
     store, http = source
     http.unreachable = True
