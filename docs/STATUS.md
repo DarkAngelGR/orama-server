@@ -34,8 +34,8 @@ Read `AGENTS.md` first.
 | 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | done (`b1fa2ab`) | Claude |
 | 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | done (`fd8f827`..`d441491`) | Codex + Claude |
 | 10 | Settings and Change setup | standard | done (`f2c8cf2`..`2f983ce`) | Claude |
-| 11 | Apps page and Home | standard | in progress | Claude |
-| 12 | Design reviews and browser pass | standard | open | — |
+| 11 | Apps page and Home | standard | done (`ec7ee0e`, `634482f`) | Claude |
+| 12 | Design reviews and browser pass | standard | in progress | Claude |
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
