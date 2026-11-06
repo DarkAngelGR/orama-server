@@ -1,0 +1,8 @@
+{#- The Continue button of the starting page, shown once the apply is no longer running.
+    Sent again out-of-band with each status poll (oob=true), so it appears when the job ends. -#}
+<div id="starting-next"{% if oob %} hx-swap-oob="true"{% endif %}>
+{%- if next_url and not running %}
+  <p class="wizard-lead">When the list says all done, carry on with the next step.</p>
+  <div class="wizard-actions"><a class="button button-primary" href="{{ next_url }}">Continue</a></div>
+{%- endif -%}
+</div>

@@ -297,3 +297,18 @@ def test_hostile_record_is_ignored(tmp_path: Path, content: bytes):
     (tmp_path / "last-apply.json").write_bytes(content)
     runner = JobRunner(tmp_path, script_argv("pass"))
     assert runner.current() is None
+
+
+def test_busy_apply_htmx_shows_notice_in_page(app, signed, state_dir):
+    from orama import state
+
+    token = csrf_from(signed.get("/"))
+    with state.locked(state.apply_lock(state_dir)):
+        htmx = signed.post("/jobs/apply", headers={"HX-Request": "true", "X-CSRF-Token": token})
+        plain = signed.post("/jobs/apply", data={"csrf_token": token})
+    # htmx does not swap a 4xx answer: the notice must come back as 200 to be seen.
+    assert htmx.status_code == 200
+    body = htmx.get_data(as_text=True)
+    assert APPLY_BUSY in body and 'id="checklist-items"' in body
+    assert 'id="job-status" hx-swap-oob="true"' in body
+    assert plain.status_code == 409 and "<html" in plain.get_data(as_text=True).lower()

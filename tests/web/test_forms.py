@@ -259,6 +259,14 @@ def test_playback_unknown_refused(store):
     assert set(e.value.errors) == {"device", "quality"}
 
 
+def test_playback_model_refusal_is_plain_invalid(store):
+    # A setup the model no longer accepts: the page shows a plain sentence, not an error page.
+    broken = make_setup().model_copy(update={"download_methods": frozenset()})
+    with pytest.raises(forms.Invalid) as e:
+        forms.apply_playback(broken, {"device": "lg", "quality": "4k"}, store)
+    assert e.value.errors and all(text.endswith(".") for text in e.value.errors.values())
+
+
 # ------------------------------------------------------------------ subtitles
 
 

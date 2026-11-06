@@ -26,6 +26,7 @@ from typing import Literal
 from flask import Blueprint, Flask, redirect, render_template, request, url_for
 
 from orama import state
+from orama.cli import APPLY_BUSY
 from orama.secrets import RedactingFilter, SecretStore
 from orama.web import auth
 
@@ -265,10 +266,11 @@ def apply_operation(st):
 def _job_pages() -> Blueprint:
     pages = Blueprint("jobs", __name__)
 
-    def render(job: Job | None):
+    def render(job: Job | None, **extra):
         htmx = request.headers.get("HX-Request") == "true"
         template = "_job_poll.html" if htmx else "_job.html"
-        return render_template(template, job=job, running=bool(job and job.status == "running"))
+        return render_template(template, job=job, running=bool(job and job.status == "running"),
+                               **extra)
 
     @pages.get("/jobs/current")
     @auth.requires("setup")
@@ -279,6 +281,9 @@ def _job_pages() -> Blueprint:
     @auth.requires("setup")
     def apply():
         st = auth.web_state()
+        # The wizard's starting page polls itself (it shows Continue when the job ends).
+        extra = ({"starting": True, "poll_url": "/setup/starting"}
+                 if request.form.get("return") == "starting" else {})
         try:
             with apply_operation(st):
                 current = st.jobs.current()
@@ -289,9 +294,12 @@ def _job_pages() -> Blueprint:
                         pass
                     job = st.jobs.start(st.state_dir / SETUP_FILE)
         except state.Busy:
+            if request.headers.get("HX-Request") == "true":
+                # htmx does not swap a 4xx answer, so the notice comes as a 200 partial.
+                return render(st.jobs.current(), notice_message=APPLY_BUSY, **extra)
             return render_template("rejected.html", message=TEST_BUSY), 409
         if request.headers.get("HX-Request") == "true":
-            return render(job)
+            return render(job, **extra)
         return redirect(url_for("jobs.current"), 303)
 
     return pages

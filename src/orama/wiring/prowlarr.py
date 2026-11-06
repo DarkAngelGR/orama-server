@@ -29,6 +29,10 @@ VPN_TAG = "vpn"
 SYNC_PENDING = "prowlarr:sync:pending"
 _NAME = "Prowlarr"
 REMOVE_PREFIX = "remove:indexer:"
+# Written as the sent marker before an item is created. If Prowlarr saves the item but the
+# answer is lost (a timeout, or Orama stopped in between), the next run finds the item with
+# this marker and treats it as Orama's: it updates it and records the real marker.
+PENDING_MARKER = "pending"
 
 
 class _Refused(StepError):
@@ -146,7 +150,17 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 item["tags"] = sorted({*item.get("tags", []), tag})
             _apply_fields(item, want, label)
             mark_pending()
-            call("POST", resource, json=item, params={"forceSave": "true"})
+            before = store.get(marker)
+            store.set(marker, PENDING_MARKER)
+            try:
+                call("POST", resource, json=item, params={"forceSave": "true"})
+            except _Refused:
+                # Prowlarr answered no, so nothing was saved: do not claim a later item.
+                if before is None:
+                    store.delete(marker)
+                else:
+                    store.set(marker, before)
+                raise
             store.set(marker, _digest(secret))
             return item, f"added {label}", False
         if (
@@ -348,7 +362,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         if entry.startswith(REMOVE_PREFIX):
             name = store.get(entry)
             slug = entry[len(REMOVE_PREFIX):]
-            if name and not any(choice.slug == slug or choice.name == name for choice in setup.indexers):
+            if name and not any(choice.slug == slug for choice in setup.indexers):
                 steps.append(remove_step(slug, name))
     removals = len(steps)
     app_names = [a for a in ("sonarr", "radarr") if a in apps]

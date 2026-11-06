@@ -5,7 +5,8 @@
 {%- include "_job_status.html" -%}
 </div>
 {% if running -%}
-<div id="job-poller" hx-swap-oob="true" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+<div id="job-poller" hx-swap-oob="true" hx-get="{{ poll_url|default('/jobs/current', true) }}" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
 {%- else -%}
 <div id="job-poller" hx-swap-oob="true"></div>
 {%- endif %}
+{% if starting %}{% with oob = true %}{% include "wizard/_starting_next.html" %}{% endwith %}{% endif %}

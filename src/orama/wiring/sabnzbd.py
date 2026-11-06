@@ -15,6 +15,10 @@ COMPLETE_DIR = "/data/downloads/usenet"
 INCOMPLETE_DIR = "/data/downloads/usenet/incomplete"
 CATEGORIES = {"tv": "tv", "movies": "movies"}
 START_TIMEOUT = 300.0
+# Written as the sent marker before a server is created. If SABnzbd saves it but the answer
+# is lost (a timeout, or Orama stopped in between), the next run finds the server with this
+# marker and treats it as Orama's: it sends the settings again and records the real marker.
+PENDING_MARKER = "pending"
 
 
 def sent_marker_name(slug: str) -> str:
@@ -141,6 +145,8 @@ def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 )
             ):
                 return None
+            if have is None:
+                store.set(sent_marker_name(server.slug), PENDING_MARKER)
             client.call(mode="set_config", section="servers", name=server.slug, **want)
             store.set(sent_marker_name(server.slug), _digest(password))
             return f"set up the Usenet server {server.slug}"
