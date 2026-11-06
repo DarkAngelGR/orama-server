@@ -483,31 +483,59 @@ def seeded_indexer(app):
     return store, slug, key
 
 
-def test_failed_indexer_edit_saves_nothing_and_keeps_old_key(signed, app, runner, monkeypatch):
+def fake_prowlarr(wrong, calls):
+    """Prowlarr holds whatever the last test sent; it refuses the wrong key only."""
+    def run(setup, store_, http, slug_):
+        item = next(i for i in setup.indexers if i.slug == slug_)
+        held = (store_.get(f"indexer:{slug_}:apiKey"), item.fields.get("baseUrl"))
+        calls.append(held)
+        if held[0] == wrong:
+            store_.delete(f"test-ok:indexer:{slug_}")
+            return "The indexer refused the key."
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+        return None
+    return run
+
+
+def edit_with(signed, slug, key):
+    edit = signed.get(f"/settings/indexers?edit={slug}")
+    return signed.post("/settings/indexers", data={
+        "csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
+        "field:apiKey": key, "field:baseUrl": "https://indexer.example",
+    })
+
+
+def test_failed_indexer_edit_puts_the_old_one_back(signed, app, runner, monkeypatch):
     monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
     store, slug, key = seeded_indexer(app)
-    seen = {}
-
-    def bad(setup, store_, http, slug_):
-        seen["key"] = store_.get(f"indexer:{slug_}:apiKey")  # the candidate is what is tested
-        store_.delete(f"test-ok:indexer:{slug_}")
-        return "The indexer refused the key."
-
-    monkeypatch.setattr(prowlarr, "test_indexer", bad)
-    before = (sd(app) / "setup.json").read_bytes()
     wrong = secrets.token_urlsafe(20)
-    edit = signed.get(f"/settings/indexers?edit={slug}")
-    response = signed.post("/settings/indexers", data={
-        "csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
-        "field:apiKey": wrong, "field:baseUrl": "https://indexer.example",
-    })
+    calls = []
+    monkeypatch.setattr(prowlarr, "test_indexer", fake_prowlarr(wrong, calls))
+    before = (sd(app) / "setup.json").read_bytes()
+    response = edit_with(signed, slug, wrong)
     assert response.status_code == 400
-    assert "The indexer refused the key." in page(response) and "Nothing was saved." in page(response)
-    assert seen["key"] == wrong
+    html = page(response)
+    assert "The indexer refused the key." in html and "Nothing was saved." in html
+    assert "could not put the old settings back" not in html and wrong not in html
+    # The app saw the candidate first, then the old values again.
+    assert calls == [(wrong, "https://indexer.example"), (key, "https://indexer.example")]
     assert (sd(app) / "setup.json").read_bytes() == before
     assert store.get(f"indexer:{slug}:apiKey") == key
     assert store.get(f"test-ok:indexer:{slug}") == "1"
-    assert wrong not in page(response)
+    assert starts(runner) == []
+
+
+def test_failed_restore_says_so(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    monkeypatch.setattr(prowlarr, "test_indexer", failing("indexer", "Prowlarr does not answer."))
+    before = (sd(app) / "setup.json").read_bytes()
+    response = edit_with(signed, slug, secrets.token_urlsafe(20))
+    html = page(response)
+    assert response.status_code == 400
+    assert "Orama could not put the old settings back. Apply again to fix it." in html
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"indexer:{slug}:apiKey") == key
     assert starts(runner) == []
 
 
@@ -560,9 +588,21 @@ def test_failed_new_indexer_created_in_the_app_is_marked_for_removal(
 
 
 def test_failed_usenet_edit_saves_nothing_and_keeps_old_password(signed, app, runner, monkeypatch):
-    monkeypatch.setattr(sabnzbd, "test_usenet_server", failing("usenet", "Login refused."))
     store = app.extensions["orama"].store
     secret = secrets.token_urlsafe(20)
+    wrong = secrets.token_urlsafe(20)
+    calls = []
+
+    def fake_sabnzbd(setup, store_, http, slug_):
+        held = (store_.get(f"usenet:{slug_}:password"), next(
+            s.port for s in setup.usenet_servers if s.slug == slug_))
+        calls.append(held)
+        if held[0] == wrong:
+            store_.delete(f"test-ok:usenet:{slug_}")
+            return "Login refused."
+        store_.set(f"test-ok:usenet:{slug_}", "1")
+
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", fake_sabnzbd)
     setup, slug = forms.add_usenet_server(live(app), {
         "host": "news.example", "port": "563", "username": "me", "password": secret, "ssl": "on",
     }, store)
@@ -570,12 +610,12 @@ def test_failed_usenet_edit_saves_nothing_and_keeps_old_password(signed, app, ru
     store.set(f"test-ok:usenet:{slug}", "1")
     before = (sd(app) / "setup.json").read_bytes()
     edit = signed.get(f"/settings/indexers?edit-usenet={slug}")
-    wrong = secrets.token_urlsafe(20)
     response = signed.post("/settings/usenet", data={
         "csrf_token": csrf_from(edit), "edit-usenet": slug, "host": "news.example",
         "port": "119", "connections": "10", "username": "me", "password": wrong,
     })
     assert response.status_code == 400 and "Login refused." in page(response)
+    assert calls == [(wrong, 119), (secret, 563)]  # the old server was put back
     assert (sd(app) / "setup.json").read_bytes() == before
     assert store.get(f"usenet:{slug}:password") == secret
     assert store.get(f"test-ok:usenet:{slug}") == "1"
