@@ -32,8 +32,8 @@ Read `AGENTS.md` first.
 | 6 | Design system and base layout | standard | done (`655939e`..`73ba9e0`) | Codex + Claude |
 | 7 | Apply jobs with a live checklist | standard | done (`a107a6b`..`43b9fa8`) | Claude |
 | 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | done (`b1fa2ab`) | Claude |
-| 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | needs review (`fd8f827`, all four CI jobs passed in run 42115499976) | Codex |
-| 10 | Settings and Change setup | standard | open | — |
+| 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | done (`fd8f827`..`d441491`) | Codex + Claude |
+| 10 | Settings and Change setup | standard | in progress | Claude |
 | 11 | Apps page and Home | standard | open | — |
 | 12 | Design reviews and browser pass | standard | open | — |
 
