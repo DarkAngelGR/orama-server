@@ -404,7 +404,7 @@ def _wizard_pages() -> Blueprint:
             with apply_operation(st):
                 job = st.jobs.current()
                 if job and job.status == "running":
-                    return redirect(url_for("wizard.finish"), 303)
+                    raise state.Busy  # the draft is kept: Install again once it ends
                 with (state.locked(state.apply_lock(st.state_dir), blocking=False),
                       state.locked(state.setup_lock(st.state_dir))):
                     setup = _working_setup(st)
