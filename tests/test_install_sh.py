@@ -385,6 +385,25 @@ def test_check_existing_setup_mismatch_stops(tmp_path, field, value, env):
     assert env in out.stdout and str(value) in out.stdout
 
 
+def test_check_existing_setup_lets_orama_data_root_move_the_data_folder(tmp_path):
+    # Set on purpose: the new folder wins (bootstrap rewrites the setup). Unset, a rerun
+    # with the default folder still stops (the test above).
+    config = tmp_path / "orama-config"
+    _saved(config, "setup.json", data_root="/srv/other")
+    out = run_fn(
+        f'CONFIG_ROOT={shlex.quote(str(config))} DATA_ROOT=/srv/data ORAMA_DATA_ROOT=/srv/data '
+        'PUID=1000 PGID=1000 ORAMA_IMAGE=unused; check_existing_setup'
+    )
+    assert out.returncode == 0, out.stdout
+    _saved(config, "setup.json", data_root="/srv/other", puid=1001)
+    out = run_fn(
+        f'CONFIG_ROOT={shlex.quote(str(config))} DATA_ROOT=/srv/data ORAMA_DATA_ROOT=/srv/data '
+        'PUID=1000 PGID=1000 ORAMA_IMAGE=unused; check_existing_setup'
+    )
+    assert out.returncode == 1 and "ORAMA_PUID" in out.stdout
+    assert "ORAMA_DATA_ROOT" not in out.stdout
+
+
 def test_check_existing_setup_prefers_saved_over_draft(tmp_path):
     config = tmp_path / "c"
     _saved(config, "setup.draft.json", data_root="/srv/old-draft")
@@ -593,7 +612,8 @@ def test_main_refuses_root_ids_before_touching_docker():
 
 def test_main_refuses_mismatched_setup_before_touching_docker(tmp_path):
     config = tmp_path / "c"
-    _saved(config, "setup.json", data_root="/srv/other")
+    # ORAMA_DATA_ROOT set on purpose may move the data folder; another user id may not.
+    _saved(config, "setup.json", data_root="/srv/other", puid=1001)
     out = run_fn("require_root() { :; }; require_x86_64() { :; }; main",
                  OS_RELEASE_FILE=UBUNTU, DOCKER_BIN="/nonexistent", DRY_RUN="1",
                  SUDO_UID="1000", SUDO_GID="1000", ORAMA_CONFIG_ROOT=config,

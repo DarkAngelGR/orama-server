@@ -74,6 +74,8 @@ AUTH_FILE = "auth.json"
 FIRST_RUN_CODE_FILE = "first-run.code"
 HARDWARE_FILE = "hardware.json"
 NO_CODE = "-"
+DATA_ROOT_MOVED = ("The media folder in your setup is not the one the installer gave Orama. "
+                   "Run the installer again, or put the folder back.")
 RESTART_PENDING = "restart:gluetun-qbittorrent"
 QBITTORRENT_HASH_NAME = "qbhash:qbittorrent"
 APP_CONFIG_PARENT = "config"
@@ -262,6 +264,20 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> tuple[int, str | None]:
                     _refuse_odd_file(state_fd, file, config_root / state_name / file)
                 name, existing = _existing_setup(state_fd, config_root / state_name)
                 setup = existing or draft
+                # The data folder is the one the Agent is given (its only data mount), so
+                # the setup follows the installer, never the other way round.
+                if setup.data_root != data_root:
+                    print(f"Your media folder is now {_shown(data_root)} (it was "
+                          f"{_shown(setup.data_root)}). Orama does not move files: move your "
+                          "media into it yourself.", file=sys.stderr)
+                    setup = _with_data_root(setup, data_root)
+                if name == SETUP_FILE:
+                    # An unfinished change made in the web app follows too.
+                    kept_draft = _read_setup(state_fd, DRAFT_FILE, config_root / state_name)
+                    if kept_draft is not None and kept_draft.data_root != data_root:
+                        fixed = _with_data_root(kept_draft, data_root)
+                        _write_atomic(state_fd, DRAFT_FILE, _setup_text(fixed), 0o600,
+                                      owner=owner, chown=chown)
                 # The installer detects the address and the host name on every run: a NAS
                 # that got a new address keeps answering to it. `none` (nothing detected)
                 # changes nothing.
@@ -298,6 +314,20 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> tuple[int, str | None]:
     finally:
         os.close(config_fd)
     return setup.ports["orama"], code
+
+
+def _with_data_root(setup: DesiredSetup, data_root: PurePosixPath) -> DesiredSetup:
+    """``setup`` with the installer's data folder, checked by the model's own rules."""
+    try:
+        return DesiredSetup.model_validate({**setup.to_json_dict(), "data_root": str(data_root)})
+    except ValidationError as e:
+        raise Failed("These folders cannot be used. " + _plain_errors(e)) from None
+
+
+def _shown(value: object) -> str:
+    """Printable values as they are; anything with control characters escaped."""
+    text = str(value)
+    return text if text.isprintable() else repr(text)
 
 
 def _password_exists(state_fd: int) -> bool:
@@ -447,34 +477,41 @@ def _lock_within(fd: int, seconds: float) -> None:
 def _existing_setup(state_fd: int, shown: PurePosixPath) -> tuple[str, DesiredSetup | None]:
     """The saved setup, else the earlier draft, else nothing (the draft name)."""
     for name in (SETUP_FILE, DRAFT_FILE):
-        # Orama (PUID) can write this file and we run as root: never follow a link, never
-        # block on a FIFO, read only a regular file, and only so much of it.
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-        try:
-            fd = os.open(name, flags, dir_fd=state_fd)
-        except FileNotFoundError:
-            continue
-        except OSError as e:
-            if e.errno == errno.ELOOP:
-                raise Failed(f"{shown / name} is a link; Orama will not read it.") from None
-            raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
-            raise Failed(f"{shown / name} is not a regular file; move it away and run again.")
-        with os.fdopen(fd, "rb") as f:
-            try:
-                raw = f.read(SETUP_LIMIT + 1)
-            except OSError as e:
-                raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
-        if len(raw) > SETUP_LIMIT:
-            raise Failed(f"{shown / name} is too large to be a setup; fix or remove it.")
-        try:
-            return name, DesiredSetup.model_validate_json(raw)
-        except ValueError:
-            raise Failed(
-                f"{shown / name} is not a valid setup; fix or remove it and run again."
-            ) from None
+        found = _read_setup(state_fd, name, shown)
+        if found is not None:
+            return name, found
     return DRAFT_FILE, None
+
+
+def _read_setup(state_fd: int, name: str, shown: PurePosixPath) -> DesiredSetup | None:
+    """The setup saved as ``name``, or None when there is none."""
+    # Orama (PUID) can write this file and we run as root: never follow a link, never
+    # block on a FIFO, read only a regular file, and only so much of it.
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        fd = os.open(name, flags, dir_fd=state_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise Failed(f"{shown / name} is a link; Orama will not read it.") from None
+        raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise Failed(f"{shown / name} is not a regular file; move it away and run again.")
+    with os.fdopen(fd, "rb") as f:
+        try:
+            raw = f.read(SETUP_LIMIT + 1)
+        except OSError as e:
+            raise Failed(f"Cannot read {shown / name} ({e.strerror}).") from None
+    if len(raw) > SETUP_LIMIT:
+        raise Failed(f"{shown / name} is too large to be a setup; fix or remove it.")
+    try:
+        return DesiredSetup.model_validate_json(raw)
+    except ValueError:
+        raise Failed(
+            f"{shown / name} is not a valid setup; fix or remove it and run again."
+        ) from None
 
 
 def _write_atomic(
@@ -561,7 +598,12 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
         )
         folders = [str(p) for p in data_folders(setup.data_root)]
         folders += [str(app_config_dir(setup.config_root, a)) for a in apps]
-        result = client.ensure_folders(folders)
+        try:
+            result = client.ensure_folders(folders)
+        except AgentError as e:
+            if _refused_data_folder(e.message, data_folders(setup.data_root)):
+                raise Failed(DATA_ROOT_MOVED) from None
+            raise
         print("✓ Folders ready", flush=True)
         for folder in _text_list(result, "not_writable"):
             # A warning only: the owner's folder is never changed, and the apply goes on.
@@ -611,6 +653,23 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
     for line in lines:
         print(line)
     return 1 if any(r.status == "failed" for r in results) else 0
+
+
+def _refused_data_folder(message: str, folders: list[PurePosixPath]) -> bool:
+    """True when the Agent refused one of the data folders: they lie outside its data root.
+
+    Orama cannot see the Agent's root, only this refusal, which names the path as Python
+    shows it (``repr``), maybe shortened with "...".
+    """
+    head, tail = "The folder ", " is not one Orama may create."
+    if not (message.startswith(head) and message.endswith(tail)):
+        return False
+    shown = message[len(head):-len(tail)]
+    for folder in folders:
+        full = repr(str(folder))
+        if shown == full or (shown.endswith("...") and full.startswith(shown[:-3])):
+            return True
+    return False
 
 
 def _text_list(result: object, key: str) -> list[str]:

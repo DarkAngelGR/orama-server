@@ -302,11 +302,13 @@ prepare_data_root() {
 }
 
 # Compares an earlier setup file with this run's values. Exit 0 same, 1 different, 2 unreadable.
-# Args: file data_root config_root puid pgid install_url.
+# Args: file data_root config_root puid pgid install_url data_root_chosen(0|1). With
+# ORAMA_DATA_ROOT set on purpose (1) a different data folder is wanted: bootstrap moves the
+# setup to it, so only the other values must match.
 # shellcheck disable=SC2016  # Python source, not shell
 SETUP_CHECK_PY='
 import json, os, shlex, stat, sys
-path, data_root, config_root, puid, pgid, url = sys.argv[1:7]
+path, data_root, config_root, puid, pgid, url, chosen = sys.argv[1:8]
 LIMIT = 1024 * 1024  # a real setup is a few KiB
 try:
     # The file is writable by Orama (PUID) and we run as root: never follow a link, never
@@ -335,7 +337,7 @@ def shown(value):
     text = str(value)
     return text if text.isprintable() else repr(text)
 
-diff = [f for f in fields if f[2] != f[3]]
+diff = [f for f in fields if f[2] != f[3] and not (chosen == "1" and f[1] == "ORAMA_DATA_ROOT")]
 for label, env, old, new in diff:
     print(f"    {label}: saved {shown(old)}, this run {shown(new)}  ({env})")
 if diff:
@@ -351,7 +353,8 @@ sys.exit(1 if diff else 0)
 
 # Stop if an earlier setup in CONFIG_ROOT was made with other folders or ids.
 check_existing_setup() {
-  local state="$CONFIG_ROOT/orama" name="" file out status=0
+  local state="$CONFIG_ROOT/orama" name="" file out status=0 chosen=0
+  [[ -z "${ORAMA_DATA_ROOT:-}" ]] || chosen=1
   for file in setup.json setup.draft.json; do
     if [[ -e "$state/$file" || -L "$state/$file" ]]; then
       name=$file
@@ -362,12 +365,12 @@ check_existing_setup() {
 
   if command -v python3 > /dev/null 2>&1; then
     out=$(python3 -I -c "$SETUP_CHECK_PY" "$state/$name" \
-      "$DATA_ROOT" "$CONFIG_ROOT" "$PUID" "$PGID" "$INSTALL_URL") || status=$?
+      "$DATA_ROOT" "$CONFIG_ROOT" "$PUID" "$PGID" "$INSTALL_URL" "$chosen") || status=$?
   else
     out=$("$DOCKER_BIN" run --rm --user 0:0 --network none \
       --mount "$(mount_arg "$state" /state ro)" --entrypoint python "$ORAMA_IMAGE" \
       -I -c "$SETUP_CHECK_PY" "/state/$name" \
-      "$DATA_ROOT" "$CONFIG_ROOT" "$PUID" "$PGID" "$INSTALL_URL") || status=$?
+      "$DATA_ROOT" "$CONFIG_ROOT" "$PUID" "$PGID" "$INSTALL_URL" "$chosen") || status=$?
   fi
   case "$status" in
     0) return 0 ;;

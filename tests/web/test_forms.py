@@ -108,24 +108,13 @@ def test_read_media_never_has_secret_values(store):
 # ------------------------------------------------------------------ folders
 
 
-def test_folders_good(store):
-    out = forms.apply_folders(make_setup(), {"data_root": "/mnt/media"}, store)
-    assert str(out.data_root) == "/mnt/media"
-
-
-@pytest.mark.parametrize("value", ["", "media", "/a:b", "/a/../b", "/"])
-def test_folders_plain_refusals(store, value):
-    with pytest.raises(forms.Invalid) as e:
-        forms.apply_folders(make_setup(), {"data_root": value}, store)
-    message = e.value.errors["data_root"]
-    assert "data_root" not in message and "Value error" not in message
-
-
-def test_data_folder_inside_orama_folder_refused(store):
-    with pytest.raises(forms.Invalid) as e:
-        forms.apply_folders(make_setup(), {"data_root": "/srv/orama/media"}, store)
-    assert "Orama folder" in e.value.errors["data_root"]
-    assert "config_root" not in e.value.errors["data_root"]
+def test_folders_are_read_only(store):
+    # The data folder is the installer's (the Agent's own root): a form cannot change it.
+    setup = make_setup()
+    out = forms.apply_folders(setup, {"data_root": "/mnt/media"}, store)
+    assert out == setup
+    assert forms.read_folders(setup, store)["data_root"] == "/srv/data"
+    assert forms.echo_folders(setup, {"data_root": "/mnt/media"}, store)["data_root"] == "/srv/data"
 
 
 # ------------------------------------------------------------------ downloads

@@ -12,6 +12,7 @@ import pytest
 
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
+from orama.web import wizard
 from orama.web.jobs import JobRunner
 
 from .conftest import csrf_from, signin, wireguard_key
@@ -147,18 +148,47 @@ def test_media_saved_to_draft_and_moves_on(app, signed):
 
 
 def test_back_and_refresh_keep_draft(app, signed):
-    post(signed, "/setup/folders", data_root="/mnt/films")
     post(signed, "/setup/playback", device="lg", quality="4k")
-    again = text(signed.get("/setup/folders"))
-    assert 'value="/mnt/films"' in again
-    assert text(signed.get("/setup/folders")) == again  # refresh
-    playback = text(signed.get("/setup/playback"))
-    assert re.search(r'value="lg"\s+checked', playback)
-    draft = draft_of(app)
-    assert str(draft.data_root) == "/mnt/films" and draft.device == "lg"
+    again = text(signed.get("/setup/playback"))
+    assert re.search(r'value="lg"\s+checked', again)
+    assert text(signed.get("/setup/playback")) == again  # refresh
+    assert draft_of(app).device == "lg"
     # The saved setup itself is not touched while the wizard edits the draft.
     saved = DesiredSetup.load(app.extensions["orama"].state_dir / "setup.json")
-    assert str(saved.data_root) == "/srv/data"
+    assert saved.device != "lg"
+
+
+FOLDER_TEXT = ("Your media folder is /srv/data. It was chosen when Orama was installed. "
+               "To use another folder, run the installer again with ORAMA_DATA_ROOT set to it.")
+
+
+def plain(html: str) -> str:
+    """The page's words: tags dropped, white space squeezed."""
+    return " ".join(re.sub(r"<[^>]+>", " ", html).split()).replace(" .", ".")
+
+
+def test_folders_page_shows_the_installers_folder_read_only(signed):
+    html = text(signed.get("/setup/folders"))
+    assert FOLDER_TEXT in plain(html)
+    assert 'name="data_root"' not in html
+    assert "Orama does not move files" not in html
+
+
+def test_folders_post_cannot_change_the_data_folder(app, signed):
+    response = post(signed, "/setup/folders", data_root="/mnt/films")
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/setup/downloads"
+    assert str(draft_of(app).data_root) == "/srv/data"
+
+
+def test_install_keeps_the_live_data_folder(app, signed):
+    # A draft made before the folder became read-only cannot move the media folder.
+    d = app.extensions["orama"].state_dir
+    live_setup = DesiredSetup.load(d / "setup.json")
+    stale = live_setup.model_copy(update={"data_root": "/mnt/elsewhere"})
+    stale.save(d / "setup.draft.json")
+    wizard._promote(app.extensions["orama"], stale)
+    assert str(DesiredSetup.load(d / "setup.json").data_root) == "/srv/data"
 
 
 def test_wizard_keeps_answers_after_error(app, signed):
@@ -177,9 +207,9 @@ def test_wizard_keeps_answers_after_error(app, signed):
 
 
 def test_error_text_has_no_field_names_or_codes(signed):
-    html = text(post(signed, "/setup/folders", data_root="/srv/orama/media"))
-    assert "Orama folder" in html
-    for word in ("config_root", "data_root is", "Value error", "400"):
+    html = text(post(signed, "/setup/media"))
+    assert "Choose at least one" in html
+    for word in ("Field required", "Input should", "Value error", "400"):
         assert word not in html.split("<main")[1]
 
 
@@ -219,22 +249,6 @@ def test_downloads_form_hides_port_forwarding_for_nordvpn(app, signed):
 def test_address_help_says_bare_address_gets_slash_32(signed):
     html = text(signed.get("/setup/downloads"))
     assert "/32" in html
-
-
-def test_folders_note_only_after_apps_were_applied(app, signed, state_dir):
-    note = "Orama does not move files that are already there"
-    st = app.extensions["orama"]
-    # setup.json exists but nothing has been applied: no warning about moving files
-    assert note not in text(signed.get("/setup/folders"))
-    d = state_dir
-    st.jobs = JobRunner(d, lambda p: [sys.executable, "-c", "print('ok')"])
-    st.jobs.start(d / "setup.json")
-    assert st.jobs.wait(10)
-    html = text(signed.get("/setup/folders"))
-    assert note in html
-    (state_dir / "setup.json").rename(state_dir / "setup.draft.json")
-    html = text(signed.get("/setup/folders"))
-    assert "Orama does not move files that are already there" not in html
 
 
 def test_post_needs_csrf(signed):
