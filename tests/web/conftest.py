@@ -118,4 +118,4 @@ def session_cookie(client) -> str | None:
 
 def signed_in(client, **kwargs) -> bool:
     response = client.get("/", **kwargs)
-    return response.status_code == 200 and b"Signed in" in response.data
+    return response.status_code == 200 and b"Welcome to Orama" in response.data

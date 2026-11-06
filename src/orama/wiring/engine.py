@@ -17,6 +17,7 @@ APP_NAMES = {
     "prowlarr": "Prowlarr",
     "bazarr": "Bazarr",
     "recyclarr": "Recyclarr",
+    "gluetun": "Gluetun",
     "plex": "Plex",
     "jellyfin": "Jellyfin",
 }
