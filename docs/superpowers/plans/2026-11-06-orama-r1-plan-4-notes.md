@@ -7,7 +7,7 @@
 - Owner explicitly deferred Claude Security while Claude is unavailable until
   Wednesday 2026-11-11. Plan 2b and Plan 3 scans remain pending, not passed;
   they do not block continued development under this instruction.
-- Plan 4 is written for review; no request product code has been implemented.
+- Owner approved Plan 4 on 2026-11-06. Task 1 started; no request product code yet.
 - Proposed implementation choices: standard-library SQLite for transactional durable
   requests; one elected in-process reconciler; webhook hints plus authoritative API
   polling; existing Flask/Jinja/htmx security and presentation layers.
