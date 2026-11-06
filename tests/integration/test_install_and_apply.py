@@ -26,7 +26,7 @@ import pytest
 from orama.wiring.plex import WAITING_FOR_SIGN_IN
 from orama_agent import recyclarr
 
-from . import media_contracts
+from . import media_contracts, request_contracts
 from .conftest import REPO_ROOT, Host, docker_inspect, run
 
 pytestmark = pytest.mark.integration
@@ -467,6 +467,17 @@ def test_plan2b_jellyfin_and_notifications(clean_host: Host, applied: dict):
             "jellyfin", True, False), app
         assert all(mine[0][flag] is True for flag in ("onDownload", "onUpgrade", "onRename")), app
     assert "Plex is waiting for sign-in" in applied["output"]
+
+
+@pytest.mark.parametrize("app", ["sonarr", "radarr"])
+def test_pinned_request_read_contracts(clean_host, applied, app):
+    request_contracts.read_contracts(app, applied["setup"]["ports"][app],
+                                     stored_secrets(clean_host)[f"apikey:{app}"])
+
+
+def test_pinned_authenticated_request_webhooks(clean_host, applied, tmp_path):
+    request_contracts.authenticated_webhooks(applied["setup"]["ports"],
+                                             stored_secrets(clean_host), tmp_path)
 
 
 def test_pinned_notification_contracts(clean_host, applied, capsys):
