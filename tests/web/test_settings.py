@@ -14,12 +14,22 @@ from conftest import make_setup, random_secret
 from orama import state
 from orama.secrets import VPN_KEY_NAME, SecretStore
 from orama.setup_model import DesiredSetup
-from orama.web import catalogue, forms, wizard
+from orama.web import catalogue, draft, forms, wizard
 from orama.web import settings as settings_module
 from orama.web.jobs import JobRunner
 from orama.wiring import prowlarr, sabnzbd
 
-from .conftest import EXTRA, HOST_NAME, LAN, NEW_LAN, csrf_from, new_password, signin, write_setup
+from .conftest import (
+    EXTRA,
+    HOST_NAME,
+    LAN,
+    NEW_LAN,
+    csrf_from,
+    new_password,
+    signin,
+    wireguard_key,
+    write_setup,
+)
 from .test_wizard_indexers import DEFINITION
 
 
@@ -1085,3 +1095,208 @@ def test_candidate_secrets_are_not_logged(signed, app, caplog):
     }, store)
     prowlarr.test_indexer(setup, store, app.extensions["orama"].http, slug)
     assert secret not in caplog.text
+
+
+# ------------------------------------------------------------------ Change setup keeps typed secrets
+# out of the live store until Install
+
+
+def wizard_post(signed, path, **data):
+    return signed.post(path, data={"csrf_token": csrf_from(signed.get(path)), **data})
+
+
+def draft_names(store) -> list[str]:
+    return [n for n in store.names() if n.startswith("draft:")]
+
+
+def test_change_setup_typed_secrets_stay_out_of_live_store_until_thrown_away(signed, app):
+    key = vpn_setup(app)
+    store = app.extensions["orama"].store
+    jellyfin_pw = new_password()
+    store.set("password:jellyfin", jellyfin_pw)
+    assert post(signed, "/settings/change-setup").status_code == 303
+    new_key, typo = wireguard_key(), new_password()
+    pages = [wizard_post(signed, "/setup/downloads", torrent="on", vpn="on",
+                         vpn_provider="protonvpn", vpn_key=new_key),
+             wizard_post(signed, "/setup/media", server_jellyfin="on",
+                         jellyfin_user="owner", jellyfin_password=typo)]
+    assert [r.status_code for r in pages] == [303, 303]
+    # The wizard sees the draft's values; the live store and the apply do not.
+    assert store.get(VPN_KEY_NAME) == key and store.get("password:jellyfin") == jellyfin_pw
+    assert draft_names(store)
+    for path in ("/setup/downloads", "/setup/media", "/setup/review", "/settings"):
+        html = page(signed.get(path))
+        for value in (key, new_key, jellyfin_pw, typo):
+            assert value not in html
+    assert post(signed, "/settings/discard-draft").status_code == 303
+    assert store.get(VPN_KEY_NAME) == key and store.get("password:jellyfin") == jellyfin_pw
+    assert draft_names(store) == []
+    assert not (sd(app) / "setup.draft.json").exists()
+
+
+def test_change_setup_install_promotes_typed_secrets_in_one_write(signed, app, runner,
+                                                                monkeypatch):
+    vpn_setup(app)
+    write_setup(sd(app), vpn={"provider": "protonvpn"}, download_methods={"torrent", "usenet"})
+    store, _slug, _ = seeded_indexer(app)
+    seeded_usenet(app)
+    assert post(signed, "/settings/change-setup").status_code == 303
+    new_key = wireguard_key()
+    assert wizard_post(signed, "/setup/downloads", usenet="on", torrent="on", vpn="on",
+                       vpn_provider="protonvpn", vpn_key=new_key).status_code == 303
+    assert store.get(VPN_KEY_NAME) != new_key
+    writes = []
+    real_update = SecretStore.update
+
+    def spy(self, changes):
+        try:
+            with state.locked(state.setup_lock(sd(app)), blocking=False):
+                held = False
+        except state.Busy:
+            held = True
+        writes.append((dict(changes), held))
+        return real_update(self, changes)
+
+    monkeypatch.setattr(SecretStore, "update", spy)
+    response = wizard_post(signed, "/setup/install")
+    assert response.status_code == 303, page(response)
+    promoting = [(c, held) for c, held in writes if VPN_KEY_NAME in c]
+    assert len(promoting) == 1
+    changes, held = promoting[0]
+    assert held  # under setup.lock
+    assert changes[VPN_KEY_NAME] == new_key
+    assert all(changes[n] is None for n in changes if n.startswith("draft:"))
+    assert store.get(VPN_KEY_NAME) == new_key and draft_names(store) == []
+    assert starts(runner) == [str(sd(app) / "setup.json")]
+
+
+def recording_fake_prowlarr(app, wrong, held_by_app):
+    """Prowlarr holds whatever a test sent; refuses the wrong key; no setup.lock is held."""
+    def run(setup, store_, http, slug_):
+        with state.locked(state.setup_lock(sd(app)), blocking=False):
+            pass  # raises Busy if a test ever ran under setup.lock
+        held_by_app[slug_] = store_.get(f"indexer:{slug_}:apiKey")
+        if held_by_app[slug_] == wrong:
+            store_.delete(f"test-ok:indexer:{slug_}")
+            return "The indexer refused the key."
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+        return None
+    return run
+
+
+def test_draft_indexer_test_then_throw_away_restores_the_live_entry(signed, app, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    held_by_app = {slug: key}
+    wrong = secrets.token_urlsafe(20)
+    monkeypatch.setattr(prowlarr, "test_indexer", recording_fake_prowlarr(app, wrong, held_by_app))
+    assert post(signed, "/settings/change-setup").status_code == 303
+    edit = signed.get(f"/setup/indexers?edit={slug}")
+    response = signed.post("/setup/indexers", data={
+        "csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
+        "field:apiKey": wrong, "field:baseUrl": "https://indexer.example",
+    })
+    html = page(response)
+    assert "The indexer refused the key." in html and wrong not in html and key not in html
+    assert held_by_app[slug] == wrong  # the test really sent the draft's key
+    # The live store keeps the live key and the live test result; the draft is not tested.
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert store.get(f"test-ok:indexer:{slug}") == "1"
+    # The wizard reads the draft's own result: not tested.
+    assert draft.draft_store(app.extensions["orama"]).get(f"test-ok:indexer:{slug}") is None
+    assert post(signed, "/settings/discard-draft").status_code == 303
+    assert held_by_app[slug] == key  # tested again with the live key: the app is back
+    assert store.get(f"test-ok:indexer:{slug}") == "1"
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert draft_names(store) == []
+
+
+def test_draft_only_indexer_sent_by_its_test_is_removed_after_throw_away(signed, app,
+                                                                         monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store = app.extensions["orama"].store
+
+    def creates(setup, store_, http, slug_):
+        store_.set(prowlarr.sent_marker_name(f"indexer:{slug_}"), "digest")
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+
+    monkeypatch.setattr(prowlarr, "test_indexer", creates)
+    assert post(signed, "/settings/change-setup").status_code == 303
+    page_ = signed.get("/setup/indexers?definition=Newznab")
+    key = secrets.token_urlsafe(20)
+    response = signed.post("/setup/indexers", data={
+        "csrf_token": csrf_from(page_), "definition": "Newznab", "name": "Draft only",
+        "field:apiKey": key, "field:baseUrl": "https://indexer.example",
+    })
+    assert response.status_code == 200 and key not in page(response)
+    assert store.get("indexer:draft-only:apiKey") is None  # only in the draft
+    assert store.get("test-ok:indexer:draft-only") is None
+    assert post(signed, "/settings/discard-draft").status_code == 303
+    assert store.get("remove:indexer:draft-only") == "Draft only"  # the next apply deletes it
+    assert draft_names(store) == []
+
+
+def test_throw_away_while_an_apply_runs_says_busy_and_keeps_the_draft(signed, app, tmp_path):
+    gate = tmp_path / "gate"
+    code = f"import time,pathlib\nwhile not pathlib.Path({str(gate)!r}).exists(): time.sleep(0.02)\n"
+    job = JobRunner(sd(app), lambda p: [sys.executable, "-c", code])
+    app.extensions["orama"].jobs = job
+    write_setup(sd(app), "setup.draft.json", device="apple_tv")
+    job.start(sd(app) / "setup.json")
+    try:
+        response = post(signed, "/settings/discard-draft")
+    finally:
+        gate.write_text("x")
+        job.wait(10)
+    assert response.status_code == 409
+    assert "Orama is busy applying the setup. Try again in a moment." in page(response)
+    assert (sd(app) / "setup.draft.json").exists()
+
+
+def test_draft_removal_marker_is_thrown_away_with_the_draft(signed, app, monkeypatch):
+    store, slug, key = seeded_indexer(app)
+    store.set(prowlarr.sent_marker_name(f"indexer:{slug}"), "digest")  # live in Prowlarr
+    assert post(signed, "/settings/change-setup").status_code == 303
+    response = wizard_post(signed, f"/setup/indexers/{slug}/remove")
+    assert response.status_code == 200
+    assert store.get(f"remove:indexer:{slug}") is None  # the live apply would delete it
+    assert post(signed, "/settings/discard-draft").status_code == 303
+    assert store.get(f"remove:indexer:{slug}") is None
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert store.get(f"test-ok:indexer:{slug}") == "1"
+    assert draft_names(store) == []
+
+
+def test_draft_usenet_test_then_throw_away_tests_the_live_server_again(signed, app,
+                                                                      monkeypatch):
+    store, slug, password = seeded_usenet(app)
+    sent = {}
+
+    def fake_sab(setup, store_, http, slug_):
+        sent[slug_] = store_.get(f"usenet:{slug_}:password")
+        store_.set(f"test-ok:usenet:{slug_}", "1")
+
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", fake_sab)
+    assert post(signed, "/settings/change-setup").status_code == 303
+    other = secrets.token_urlsafe(20)
+    edit = signed.get(f"/setup/indexers?edit-usenet={slug}")
+    response = signed.post("/setup/usenet", data={
+        "csrf_token": csrf_from(edit), "edit-usenet": slug, "host": "news.example",
+        "port": "563", "username": "me", "password": other, "ssl": "on",
+    })
+    assert response.status_code == 200 and other not in page(response)
+    assert sent[slug] == other and store.get(f"usenet:{slug}:password") == password
+    assert post(signed, "/settings/discard-draft").status_code == 303
+    assert sent[slug] == password and store.get(f"test-ok:usenet:{slug}") == "1"
+    assert draft_names(store) == []
+
+
+def test_first_install_writes_the_store_directly(signed, app):
+    # Nothing is live yet, so there is nothing to protect: one code path, no draft names.
+    (sd(app) / "setup.json").rename(sd(app) / "setup.draft.json")
+    store = app.extensions["orama"].store
+    pw = new_password()
+    response = wizard_post(signed, "/setup/media", server_jellyfin="on", jellyfin_user="owner",
+                           jellyfin_password=pw)
+    assert response.status_code == 303
+    assert store.get("password:jellyfin") == pw and draft_names(store) == []

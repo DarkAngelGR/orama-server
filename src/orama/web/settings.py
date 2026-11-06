@@ -9,9 +9,6 @@ Wizard sections are rendered by their own step templates, so the fields stay the
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -27,7 +24,9 @@ from pydantic import ValidationError
 from orama import state
 from orama.secrets import SecretStore
 from orama.setup_model import MAX_EXTRA_HOST_NAMES, DesiredSetup
-from orama.web import auth, catalogue, forms, security
+from orama.web import auth, catalogue, draft, forms, security
+from orama.web.draft import undo_candidate as _undo_candidate
+from orama.web.draft import write_back as _write_back
 from orama.web.jobs import TEST_BUSY, apply_operation
 from orama.web.wizard import STEPS
 from orama.wiring import prowlarr, sabnzbd
@@ -169,54 +168,6 @@ def _load(st, name: str) -> DesiredSetup | None:
         return None
 
 
-def _write_back(path, data: bytes) -> None:
-    """Put ``data`` back in ``path`` atomically (temp file in the same folder + replace)."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
-def _undo_candidate(st, path, reference: DesiredSetup | None, kind: str, slug: str,
-                    name: str, test, marker_name: str, sent_before: bool,
-                    candidate: DesiredSetup | None = None,
-                    layer: _Candidate | None = None) -> bool:
-    """Undo a candidate entry's test in the app when the candidate is not saved.
-
-    The test sent the candidate to Prowlarr or SABnzbd. ``reference`` is the setup that stands
-    (None: ``setup.json`` as it is now). An entry it has is tested again with the stored
-    secrets, which puts its values back in the app; one it lacks that the test created gets a
-    removal marker for the next apply. The candidate's ``test-ok`` is dropped either way.
-    A candidate that is the setup itself, with no secret of its own (a replayed form), changed
-    nothing in the app: there is nothing to undo, so no second test runs on the old values.
-    Returns False when this could not be done.
-    """
-    try:
-        if reference is None:
-            reference = DesiredSetup.load(path)
-        st.store.delete(f"test-ok:{kind}:{slug}")
-        if (candidate is not None and layer is not None and candidate == reference
-                and not any(not name.startswith("test-ok:") for name in layer.pending)):
-            return True
-        entries = reference.indexers if kind == "indexer" else reference.usenet_servers
-        if any(i.slug == slug for i in entries):
-            return test(reference, st.store, st.http, slug) is None
-        if not sent_before and st.store.get(marker_name):
-            if kind == "indexer":
-                st.store.set(prowlarr.REMOVE_PREFIX + slug, name)
-            else:
-                st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
-        return True
-    except (OSError, ValueError):
-        return False
-
-
 def _hardware(st) -> tuple[int | None, bool] | None:
     """What the installer found, or None when the file is missing or not understood."""
     try:
@@ -265,10 +216,10 @@ def _pages() -> Blueprint:
         st = auth.web_state()
         overrides = overrides or {}
         setup = _load(st, SETUP_FILE)
-        draft = (st.state_dir / DRAFT_FILE).exists()
+        has_draft = (st.state_dir / DRAFT_FILE).exists()
         sections: list[dict[str, Any]] = []
         extra: dict[str, Any] = {}
-        if setup is not None and not draft:
+        if setup is not None and not has_draft:
             for key, title in WIZARD_SECTIONS:
                 read = forms.SECTIONS[key][0]
                 given = overrides.get(key, {})
@@ -292,7 +243,7 @@ def _pages() -> Blueprint:
         elif not message and saved == "password":
             message = "Your password is changed. Other sessions were signed out."
         return render_template(
-            "settings/index.html", setup=setup, draft=draft, sections=sections, job=job,
+            "settings/index.html", setup=setup, draft=has_draft, sections=sections, job=job,
             show_job=show_job, running=bool(job and job.status == "running"),
             message=message, problem=problem, address_errors=overrides.get("addresses", {}).get("errors", {}),
             password_errors=overrides.get("password", {}).get("errors", {}),
@@ -489,15 +440,38 @@ def _pages() -> Blueprint:
             if not (st.state_dir / DRAFT_FILE).exists():
                 live = _load(st, SETUP_FILE)
                 if live is not None:
+                    stale = draft.stale_secrets(st.store)
+                    if stale:
+                        st.store.update(stale)
                     live.save(st.state_dir / DRAFT_FILE)
         return redirect("/setup/media", 303)
 
     @pages.post("/settings/discard-draft")
     @auth.requires("settings")
     def discard_draft():
+        """Throw the draft away: its file, its secrets, and what its tests sent to the apps."""
         st = auth.web_state()
-        with state.locked(state.setup_lock(st.state_dir)):
-            (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
+        path = st.state_dir / SETUP_FILE
+        try:
+            with apply_operation(st):
+                job = st.jobs.current()
+                if job and job.status == "running":
+                    raise state.Busy
+                # apply.lock (non-blocking): the live entries are tested again below.
+                with state.locked(state.apply_lock(st.state_dir), blocking=False):
+                    with state.locked(state.setup_lock(st.state_dir)):
+                        changes, touched = draft.discard_changes(st.store)
+                        if changes:
+                            st.store.update(changes)  # first: a failure keeps the draft whole
+                        (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
+                    # No network under setup.lock: the apps are put back after it.
+                    restored = not touched or not path.exists() or draft.undo_touched(
+                        st, path, touched)
+        except state.Busy:
+            return render_page(409, message=TEST_BUSY, problem=True)
+        if not restored:
+            return render_page(500, message=f"The change was thrown away. {RESTORE_FAILED}",
+                               problem=True)
         return redirect("/settings", 303)
 
     # ------------------------------------------------------------ indexers and Usenet

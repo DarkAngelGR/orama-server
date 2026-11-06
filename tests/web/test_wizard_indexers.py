@@ -4,7 +4,7 @@ import pytest
 from conftest import make_setup
 
 from orama import state
-from orama.web import forms
+from orama.web import draft, forms
 from orama.web.catalogue import IndexerDefinition, IndexerField
 from orama.wiring.prowlarr import sent_marker_name
 from orama.wiring.sabnzbd import sent_marker_name as usenet_marker
@@ -121,7 +121,7 @@ def test_failed_test_keeps_entry_and_shows_reason(signed, app, monkeypatch):
     assert b"Check the indexer address." in response.data
     assert b"Try me" in response.data
     assert key.encode() not in response.data
-    assert app.extensions["orama"].store.get("indexer:try-me:apiKey") == key
+    assert draft.draft_store(app.extensions["orama"]).get("indexer:try-me:apiKey") == key
 
     edit = signed.get("/setup/indexers?edit=try-me")
     assert b"Edit Try me" in edit.data and b"leave empty to keep" in edit.data
@@ -131,11 +131,11 @@ def test_failed_test_keeps_entry_and_shows_reason(signed, app, monkeypatch):
         "field:apiKey": "", "field:baseUrl": "https://corrected.example",
     })
     assert response.status_code == 200
-    assert app.extensions["orama"].store.get("indexer:try-me:apiKey") == key
+    assert draft.draft_store(app.extensions["orama"]).get("indexer:try-me:apiKey") == key
     from orama.setup_model import DesiredSetup
 
-    draft = DesiredSetup.load(app.extensions["orama"].state_dir / "setup.draft.json")
-    item, = draft.indexers
+    saved = DesiredSetup.load(app.extensions["orama"].state_dir / "setup.draft.json")
+    item, = saved.indexers
     assert item.slug == "try-me" and item.fields["baseUrl"] == "https://corrected.example"
 
 
@@ -199,7 +199,9 @@ def test_resubmitting_usenet_form_reuses_server(signed, app, state_dir, monkeypa
         assert password.encode() not in response.data
     server, = DesiredSetup.load(state_dir / "setup.draft.json").usenet_servers
     assert checked == [server.slug, server.slug]
-    assert app.extensions["orama"].store.get(f"usenet:{server.slug}:password") == password
+    # A live setup exists: the password waits in the draft until Install.
+    assert draft.draft_store(app.extensions["orama"]).get(f"usenet:{server.slug}:password") == password
+    assert app.extensions["orama"].store.get(f"usenet:{server.slug}:password") is None
 
 
 def _install(signed):
