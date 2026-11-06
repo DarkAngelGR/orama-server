@@ -351,3 +351,17 @@ def test_polling_sends_only_new_lines_and_stays_quiet(app, signed):
     assert "HX-Reswap" not in other_job.headers and "✓ one" in other_job.get_data(as_text=True)
     too_many = signed.get(f"/jobs/current?seen=99&since={stamp}", headers=htmx)
     assert "HX-Reswap" not in too_many.headers
+
+
+def test_checklist_redactor_keeps_indexer_names_but_hides_secrets(tmp_path: Path):
+    import secrets
+
+    from orama.secrets import SecretStore
+    from orama.web.jobs import store_redactor
+
+    store = SecretStore(tmp_path / "secrets.bin")
+    key = "k-" + secrets.token_hex(12)
+    store.update({"remove:indexer:nyaa": "Nyaa Tracker", "indexer:nyaa:apiKey": key})
+    redact = store_redactor(store)
+    assert redact("✓ Removed the Nyaa Tracker indexer") == "✓ Removed the Nyaa Tracker indexer"
+    assert redact(f"sent {key}") == "sent ***"

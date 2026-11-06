@@ -146,6 +146,9 @@ class SecretStore:
     def values(self) -> list[str]:
         return list(self._load().values())
 
+    def items(self) -> list[tuple[str, str]]:
+        return list(self._load().items())
+
 
 def generate_api_key() -> str:
     """32 lowercase hex chars, the format the *arr apps use."""
@@ -238,6 +241,25 @@ def _secret_names(app: str, setup: DesiredSetup) -> dict[str, str]:
     return {env: f"apikey:{app}" for env in CATALOG[app].secret_env}
 
 
+# Names that hold bookkeeping, never a secret: indexer names in removal markers, test
+# results, sent markers (digests, "pending"), the Jellyfin admin name, Plex's client id, a
+# draft's own bookkeeping. Their values may be shown. Every other name is a secret, including
+# names this list does not know yet.
+_PUBLIC_NAME = re.compile(
+    r"(remove|test-ok|user|plex|prowlarr|arr|bazarr|restart|draft:del|draft:touched):"
+    r"|usenet:[^:]*:sent$"
+)
+DRAFT_SET_PREFIX = "draft:set:"
+
+
+def is_secret_name(name: str) -> bool:
+    """True unless ``name`` is one of the bookkeeping names whose values are not secret."""
+    name = name.removeprefix(DRAFT_SET_PREFIX)  # a draft's copy is as secret as the real one
+    if name.startswith("indexer:"):
+        return True  # only an indexer's secret fields are stored under its name
+    return not _PUBLIC_NAME.match(name)
+
+
 class RedactingFilter(logging.Filter):
     """Replaces stored secret values and secret-looking key/value pairs with ***."""
 
@@ -278,7 +300,8 @@ class RedactingFilter(logging.Filter):
         return self._redact(text, literals)
 
     def _literals(self) -> list[str]:
-        return [v for v in self.store.values() if len(v) >= _MIN_LITERAL_LEN]
+        return [v for n, v in self.store.items()
+                if len(v) >= _MIN_LITERAL_LEN and is_secret_name(n)]
 
     @staticmethod
     def _redact(text: str, literals: list[str]) -> str:
