@@ -18,7 +18,7 @@ from flask import Blueprint, Flask, abort, current_app, redirect, render_templat
 from orama import state
 from orama.secrets import JELLYFIN_USER_NAME, PLEX_TOKEN_NAME, VPN_KEY_NAME
 from orama.setup_model import DesiredSetup
-from orama.web import auth, catalogue, forms
+from orama.web import auth, catalogue, draft, forms
 from orama.web.jobs import TEST_BUSY, apply_operation, poll_view
 from orama.wiring import jellyfin, prowlarr, sabnzbd
 
@@ -61,10 +61,11 @@ def _indexers_tested(st) -> bool:
     setup = _working_setup(st)
     if setup is None:
         return False
-    if not any(st.store.get(f"test-ok:indexer:{i.slug}") == "1" for i in setup.indexers):
+    store = draft.draft_store(st)
+    if not any(store.get(f"test-ok:indexer:{i.slug}") == "1" for i in setup.indexers):
         return False
     return "usenet" not in setup.download_methods or any(
-        st.store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers)
+        store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers)
 
 
 def step_list(current: str) -> list[dict[str, Any]]:
@@ -129,7 +130,20 @@ def _promote(st, setup: DesiredSetup) -> None:
             field: getattr(live, field)
             for field in ("lan_address", "host_name", "extra_host_names", "ports", "data_root")
         })
-    setup.save(st.state_dir / SETUP_FILE)  # atomic: temp file and rename
+    path = st.state_dir / SETUP_FILE
+    before = path.read_bytes() if path.exists() else None
+    changes = draft.promote_secrets(st.store)
+    setup.save(path)  # atomic: temp file and rename
+    if changes:
+        # The secrets typed into the draft become live in one write: all of them or none.
+        try:
+            st.store.update(changes)
+        except BaseException:
+            if before is None:
+                path.unlink(missing_ok=True)
+            else:
+                draft.write_back(path, before)
+            raise
     (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
 
 
@@ -177,15 +191,16 @@ def _wizard_pages() -> Blueprint:
                             "then open the link it prints.",
                 ), 409
             if request.method == "GET":
-                return render_step(key, read(setup, st.store), {}, 200)
+                return render_step(key, read(setup, draft.draft_store(st)), {}, 200)
             try:
                 with state.locked(state.setup_lock(st.state_dir)):
                     # Read again under the lock so a save made meanwhile is kept.
                     current = _working_setup(st) or setup
-                    updated = apply(current, request.form, st.store)
+                    updated = apply(current, request.form, draft.draft_store(st))
                     updated.save(st.state_dir / DRAFT_FILE)
             except forms.Invalid as e:
-                return render_step(key, echo(setup, request.form, st.store), e.errors, 400)
+                return render_step(key, echo(setup, request.form, draft.draft_store(st)),
+                                   e.errors, 400)
             if key == "downloads" and _first_apply_due(st):
                 try:
                     with apply_operation(st):
@@ -193,9 +208,9 @@ def _wizard_pages() -> Blueprint:
                             # Promote the draft, so "Apply again" has a setup to apply
                             # even when this first apply fails.
                             with state.locked(state.setup_lock(st.state_dir)):
-                                draft = _working_setup(st)
-                                if draft is not None:
-                                    _promote(st, draft)
+                                working = _working_setup(st)
+                                if working is not None:
+                                    _promote(st, working)
                             st.jobs.start(st.state_dir / SETUP_FILE)
                 except state.Busy:
                     return render_template("rejected.html", message=TEST_BUSY), 409
@@ -226,6 +241,7 @@ def _wizard_pages() -> Blueprint:
 
     def render_indexers(setup, message="", problem=False, status=200):
         st = auth.web_state()
+        store = draft.draft_store(st)
         query = request.args.get("q", "")[:100]
         definition = request.values.get("definition", "")
         edit_slug = request.args.get("edit") or request.form.get("edit")
@@ -256,20 +272,21 @@ def _wizard_pages() -> Blueprint:
             query=query, definition=definition, waiting=waiting, message=message,
             editing=editing, editing_server=editing_server,
             saved_fields={field for field in editing.secret_fields
-                          if st.store.get(f"indexer:{editing.slug}:{field}") is not None}
+                          if store.get(f"indexer:{editing.slug}:{field}") is not None}
             if editing else set(),
             server_password_saved=bool(editing_server and
-                                       st.store.get(f"usenet:{editing_server.slug}:password")),
+                                       store.get(f"usenet:{editing_server.slug}:password")),
             problem=problem, back_url=_neighbour("indexers", -1),
             next_url=_neighbour("indexers", 1),
             tested_indexers={i.slug for i in setup.indexers
-                             if st.store.get(f"test-ok:indexer:{i.slug}") == "1"},
+                             if store.get(f"test-ok:indexer:{i.slug}") == "1"},
             tested_servers={s.slug for s in setup.usenet_servers
-                            if st.store.get(f"test-ok:usenet:{s.slug}") == "1"},
+                            if store.get(f"test-ok:usenet:{s.slug}") == "1"},
         ), status
 
     def change_entry(kind: str, action: str, slug: str = ""):
         st = auth.web_state()
+        store = draft.draft_store(st)
         setup = _working_setup(st)
         if setup is None:
             abort(409)
@@ -312,11 +329,11 @@ def _wizard_pages() -> Blueprint:
                             if definition is None:
                                 raise forms.Invalid({"definition": "Choose an indexer from the list."})
                             setup, slug = forms.add_indexer(
-                                setup, definition, request.form, st.store, existing=existing,
+                                setup, definition, request.form, store, existing=existing,
                             )
                         else:
                             setup, slug = forms.add_usenet_server(
-                                setup, request.form, st.store, existing=existing,
+                                setup, request.form, store, existing=existing,
                             )
                     elif action == "remove":
                         try:
@@ -325,7 +342,7 @@ def _wizard_pages() -> Blueprint:
                             saved = None
                         active = (() if saved is None else
                                   saved.indexers if kind == "indexer" else saved.usenet_servers)
-                        setup = remove(setup, slug, st.store, keep_credentials=any(
+                        setup = remove(setup, slug, store, keep_credentials=any(
                             item.slug == slug for item in active
                         ))
                     if action != "test":
@@ -333,10 +350,15 @@ def _wizard_pages() -> Blueprint:
                 if action == "remove":
                     message, problem = "Removed.", False
                 else:
-                    error = test(setup, st.store, st.http, slug)
                     entries = setup.indexers if kind == "indexer" else setup.usenet_servers
                     entry = next(item for item in entries if item.slug == slug)
                     label = entry.name if kind == "indexer" else entry.host
+                    # The test sends the draft's entry to the app: remember it, so throwing
+                    # the draft away can put the live one back.
+                    store.touch(kind, slug, entry.name if kind == "indexer" else slug,
+                                prowlarr.sent_marker_name(f"indexer:{slug}") if kind == "indexer"
+                                else sabnzbd.sent_marker_name(slug))
+                    error = test(setup, store.for_test(), st.http, slug)
                     message, problem = error or f"{label} works.", bool(error)
         except state.Busy:
             return render_indexers(setup, TEST_BUSY, True, 409)
@@ -377,14 +399,15 @@ def _wizard_pages() -> Blueprint:
 
     def render_review(setup, message="", status=200):
         st = auth.web_state()
-        subtitles = forms.read_subtitles(setup, st.store)
+        store = draft.draft_store(st)
+        subtitles = forms.read_subtitles(setup, store)
         language_labels = dict(subtitles["options"])
         return render_template(
             "wizard/review.html", setup=setup, message=message, steps=step_list("review"),
             step=STEPS[-1], position=len(STEPS), back_url=_neighbour("review", -1),
             device=dict(forms.DEVICES)[setup.device], quality=dict(forms.QUALITIES)[setup.quality],
             languages=[language_labels.get(code, code) for code in setup.subtitle_languages],
-            vpn_key_saved=bool(st.store.get(VPN_KEY_NAME)),
+            vpn_key_saved=bool(store.get(VPN_KEY_NAME)),
             subtitles_account_saved=subtitles["account_saved"],
         ), status
 
@@ -410,11 +433,12 @@ def _wizard_pages() -> Blueprint:
                     setup = _working_setup(st)
                     if setup is None:
                         abort(409)
-                    if not any(st.store.get(f"test-ok:indexer:{i.slug}") == "1"
+                    store = draft.draft_store(st)
+                    if not any(store.get(f"test-ok:indexer:{i.slug}") == "1"
                                for i in setup.indexers):
                         return render_review(setup, "Test at least one indexer before installing.", 400)
                     if "usenet" in setup.download_methods and not any(
-                        st.store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers
+                        store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers
                     ):
                         return render_review(
                             setup, "Test at least one Usenet server before installing.", 400,

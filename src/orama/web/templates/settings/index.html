@@ -11,7 +11,7 @@
   <section class="settings-section" aria-labelledby="draft-title">
     <h2 id="draft-title">An unfinished change</h2>
     {{ notice('wait', 'You have an unfinished setup change.') }}
-    <p class="field-help">Settings stays closed until you finish it or throw it away. Nothing is applied until you press Install at the end of the setup. If you throw it away, indexers you tested in that change may need testing again.</p>
+    <p class="field-help">Settings stays closed until you finish it or throw it away. Nothing is applied until you press Install at the end of the setup. If you throw it away, Orama tests the indexers and Usenet servers you tested in that change again, so your apps keep their current settings.</p>
     <div class="wizard-actions">
       <a class="button button-primary" href="/setup/media">Continue it</a>
       <form method="post" action="/settings/discard-draft">
