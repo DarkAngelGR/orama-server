@@ -1,27 +1,28 @@
 {% from "_macros.html" import field, secret_field, button %}
+{% set ep = indexers_endpoint|default('wizard.indexers', true) %}
 {% if waiting %}
 <section class="wizard-form" id="indexer-catalogue"
-  hx-get="{{ url_for('wizard.indexers', q=query, definition=definition, edit=editing.slug if editing else None) }}"
+  hx-get="{{ url_for(ep, q=query, definition=definition, edit=editing.slug if editing else None) }}"
   hx-trigger="every 5s" hx-swap="outerHTML">
   <p role="status">Prowlarr is still starting. This page updates by itself.</p>
 </section>
 {% else %}
 <section class="wizard-form" id="indexer-catalogue">
-  <form class="form-stack" method="get" action="{{ url_for('wizard.indexers') }}">
+  <form class="form-stack" method="get" action="{{ url_for(ep) }}">
     {{ field('q', 'Search indexers', query, type='search') }}
     {{ button('Search', 'secondary') }}
   </form>
   {% if definitions and not selected %}
   <ul class="indexer-results">
     {% for row in definitions %}
-    <li><a href="{{ url_for('wizard.indexers', q=query, definition=row.definition) }}">{{ row.name }}</a></li>
+    <li><a href="{{ url_for(ep, q=query, definition=row.definition) }}">{{ row.name }}</a></li>
     {% endfor %}
   </ul>
   {% elif not selected %}
   <p>No indexers match. Try a different name.</p>
   {% endif %}
   {% if selected %}
-  <form class="form-stack" method="post" action="{{ url_for('wizard.indexers', q=query) }}">
+  <form class="form-stack" method="post" action="{{ url_for(ep, q=query) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="definition" value="{{ selected.definition }}">
     {% if editing %}

@@ -254,11 +254,14 @@ def test_install_promotes_draft_and_starts_job(signed, app, state_dir):
     from orama.setup_model import DesiredSetup
 
     draft = DesiredSetup.load(state_dir / "setup.draft.json")
+    live = DesiredSetup.load(state_dir / "setup.json")
     response = _install(signed)
     assert response.status_code == 303
     assert response.location == "/setup/finish"
     assert not (state_dir / "setup.draft.json").exists()
-    assert DesiredSetup.load(state_dir / "setup.json") == draft
+    # The owner's answers come from the draft; the machine's own facts stay from the live file.
+    machine = {f: getattr(live, f) for f in ("lan_address", "host_name", "extra_host_names", "ports")}
+    assert DesiredSetup.load(state_dir / "setup.json") == draft.model_copy(update=machine)
     jobs.start.assert_called_once_with(state_dir / "setup.json")
 
 

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button, secret_field %}
+{% block title %}Turn off an app? · Settings · Orama{% endblock %}
+{% block content %}
+<div class="settings">
+  <h1>Turn off {{ 'this app' if apps|length == 1 else 'these apps' }}?</h1>
+  {% for app_name in apps %}{{ notice('wait', 'This stops ' ~ app_name ~ '. Its settings folder is kept and no media is deleted.') }}{% endfor %}
+  <form method="post" action="/settings/{{ section }}" class="wizard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="confirm" value="1">
+    {% for name, value in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    {% for name, label in retype %}
+    {{ secret_field(name, 'Type the ' ~ label|lower ~ ' again', false, '', 'Orama does not keep what you typed. Leave it empty to keep the saved one.') }}
+    {% endfor %}
+    <div class="wizard-actions">
+      {{ button('Yes, stop it', 'danger') }}
+      <a class="button button-secondary" href="/settings#{{ section }}">No, go back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

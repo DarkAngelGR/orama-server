@@ -93,7 +93,20 @@ def _working_setup(st) -> DesiredSetup | None:
 
 
 def _promote(st, setup: DesiredSetup) -> None:
-    """Make ``setup`` the real setup and drop the draft. The caller holds ``setup.lock``."""
+    """Make ``setup`` the real setup and drop the draft. The caller holds ``setup.lock``.
+
+    The installer and apply write the machine's own facts (address, names, ports) only to
+    ``setup.json``, so a draft made earlier would carry stale ones: those come from the live file.
+    """
+    try:
+        live = DesiredSetup.load(st.state_dir / SETUP_FILE)
+    except (FileNotFoundError, ValueError):
+        live = None
+    if live is not None:
+        setup = setup.model_copy(update={
+            field: getattr(live, field)
+            for field in ("lan_address", "host_name", "extra_host_names", "ports")
+        })
     setup.save(st.state_dir / SETUP_FILE)  # atomic: temp file and rename
     (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
 
