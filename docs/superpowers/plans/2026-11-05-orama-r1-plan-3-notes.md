@@ -60,7 +60,9 @@ Fixed:
 - Page titles (`h1`) were up to 64 px on working pages; now at most 40 px, with spacing under the Apps title.
 - The finish page's "Apply again" touched the notice and competed with "Sign in with Plex"; it now has space
   and is a secondary button once something has run.
-- The phone header wrapped "Sign out" onto a second line; tighter spacing.
+- Links styled as buttons (`<a class="button">`) were inline and ignored their 48 px height: 43 px on the CI
+  runner's fonts. Found by the browser job; `.button` is now `inline-flex`.
+- The phone header: tighter spacing, one line where it fits.
 - Wizard indexer and Usenet entries look like the cards used in Settings.
 - Wording: "Use at least 12 characters (no more than 256)." instead of "between 12 and 256 characters long";
   the WireGuard error says what a key looks like; the confirm button says "Yes, turn it off".
@@ -76,6 +78,8 @@ ACCEPTED:
 - **After a rejected form, focus stays at the top of the new page.** The error notice is `role="alert"` and
   each wrong field is marked `aria-invalid` and tied to its message with `aria-describedby`, so it is
   announced. Moving focus to the first error would be an extra.
+- **"Sign out" may sit on a second row in the header at exactly 360 px** (four items, long words). It stays a
+  44 px target and nothing scrolls sideways.
 - **Settings repeats "Media servers" as the section title and the group legend.** Different roles
   (heading and fieldset); harmless.
 - **The finish page and the starting page poll while open.** A hidden tab keeps polling until the job ends,
@@ -103,7 +107,7 @@ Plan 5:
 ## Deferred minors not fixed
 
 - `forms.choice` compares values as strings; callers pass strings.
-- The static files are cached for a day with a manual `v=` number in `base.html` (CSS is `v=5`). Bump it when
+- The static files are cached for a day with a manual `v=` number in `base.html` (CSS is `v=7`). Bump it when
   an asset changes.
 - If a second tab starts an apply while another page is polling, the poller notices the different job and
   sends the whole list. A job with more than 500 lines drops the oldest, and a page that already showed them
