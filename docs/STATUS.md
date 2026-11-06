@@ -11,7 +11,7 @@ Read `AGENTS.md` first.
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ complete — code, review and CI passed; owner confirmed follow-up Claude Security scan passed (2026-11-05) |
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `b41db6a`. Owner Claude Security scan pending. |
 
-| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | owner OK'd 2026-11-05; executing — task board below and in `docs/tasks/plan-3/` |
+| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
 | 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
 
@@ -36,6 +36,8 @@ Read `AGENTS.md` first.
 | 10 | Settings and Change setup | standard | done (`f2c8cf2`..`2f983ce`) | Claude |
 | 11 | Apps page and Home | standard | done (`ec7ee0e`, `634482f`) | Claude |
 | 12 | Design reviews and browser pass | standard | done (`f9883e8`..`a456b90`) | Claude |
+
+**Plan 3 hand-off (Claude, 2026-11-06):** web app code complete. Two gates are left and both are the owner's: (1) Claude Security scan of **Plan 2b** (`/claude-security:claude-security` → Scan changes, base `441c1a8`, High, Yes), (2) Claude Security scan of **Plan 3** (base `6a39133`, High, Yes). Run them right after a usage reset. Decisions to know: the media folder is read-only in the web app (set by the installer; changing it later = re-run the installer with `ORAMA_DATA_ROOT`); sessions are tied to the sign-in address; Home is a placeholder until Plan 4. Details: `docs/superpowers/plans/2026-11-05-orama-r1-plan-3-notes.md`. Next: write Plan 4 (requests) — see the roadmap table.
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
