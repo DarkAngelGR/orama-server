@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-03-orama-release-1-design.md`, §§5–11. Read `AGENTS.md`, `docs/tasks/README.md`, and the Plan 1, 2b and 3 notes first; notes override earlier implementation text.
 
-**Status:** Draft implementation plan prepared by Codex from the approved release design; awaiting plan review, implementation not started. Owner deferred the Claude Security scans on 2026-11-06 until Claude is available Wednesday 2026-11-11. Deferral permits development; it does not record the scans as passed.
+**Status:** Owner approved this plan on 2026-11-06; executing inline with Codex. Owner deferred the Claude Security scans on 2026-11-06 until Claude is available Wednesday 2026-11-11. Deferral permits development; it does not record the scans as passed.
 
 ## Global Constraints
 
