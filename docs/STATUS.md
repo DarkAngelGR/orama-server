@@ -29,7 +29,7 @@ operations subplan before Release 1 completion; see the Plan 4 notes.
 | # | Task | State | Owner |
 |---|---|---|---|
 | 1 | Verify pinned request, media-info and webhook contracts | in progress | Codex |
-| 2 | Durable request store and idempotent identities | open | — |
+| 2 | Durable request store and idempotent identities | in progress | Gemini |
 | 3 | Safe lookup and app read client | open | — |
 | 4 | Idempotent movie and TV submission | open | — |
 | 5 | Status reconciliation and background scheduling | open | — |
