@@ -44,6 +44,8 @@ WIZARD_SECTIONS = (
     ("playback", "Playback"),
     ("subtitles", "Subtitles"),
 )
+# The data folder is the installer's (the Agent's only data mount): shown, not changed here.
+READ_ONLY_SECTIONS = frozenset({"folders"})
 _STEP = {s.key: s for s in STEPS}
 
 APP_NAMES = {"plex": "Plex", "jellyfin": "Jellyfin", "usenet": "SABnzbd", "torrent": "qBittorrent"}
@@ -274,7 +276,7 @@ def _pages() -> Blueprint:
                     f"wizard/{key}.html", layout="settings/_bare.html", embedded=True,
                     form_action=f"/settings/{key}", step=_STEP[key],
                     values=given.get("values") or read(setup, st.store),
-                    errors=given.get("errors", {}), applied=True, first_time=False,
+                    errors=given.get("errors", {}), first_time=False,
                     saved=False, back_url=None,
                 )
                 sections.append({"key": key, "title": title, "html": html})
@@ -391,6 +393,8 @@ def _pages() -> Blueprint:
         return save
 
     for key, _title in WIZARD_SECTIONS:
+        if key in READ_ONLY_SECTIONS:
+            continue  # shown, never saved here
         pages.add_url_rule(f"/settings/{key}", endpoint=f"save_{key}",
                            view_func=make_section(key), methods=["POST"])
 

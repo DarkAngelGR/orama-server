@@ -264,9 +264,10 @@ async function wizard() {
     await click(page, page.getByRole("button", { name: "Save and continue" }), "folders");
     await expectPath(page, "/setup/folders");
 
-    // 2. Folders.
-    await page.getByLabel("Data folder").fill("/srv/media-browser");
-    await click(page, page.getByRole("button", { name: "Save and continue" }), "downloads and vpn");
+    // 2. Folders: the installer's folder, shown and not editable.
+    if (!(await page.getByText("It was chosen when Orama was installed.").isVisible())) fail("the media folder is not explained");
+    if ((await page.locator("#data_root").count()) !== 0) fail("the media folder can be edited in the web app");
+    await click(page, page.getByRole("button", { name: "Continue" }), "downloads and vpn");
     await expectPath(page, "/setup/downloads");
 
     // 3. Downloads: Usenet and torrents with a VPN. The first save starts the apps.
@@ -449,7 +450,7 @@ async function keyboard() {
     await Promise.all([page.waitForURL((u) => new URL(u).pathname === "/setup/folders"), page.keyboard.press("Enter")]);
     await audit(page, "folders (keyboard)");
 
-    await tabTo(page, "#data_root");
+    await tabTo(page, "form.wizard-form button[type=submit]");  // not the header's Sign out
     await Promise.all([page.waitForURL((u) => new URL(u).pathname === "/setup/downloads"), page.keyboard.press("Enter")]);
     await audit(page, "downloads (keyboard)");
 

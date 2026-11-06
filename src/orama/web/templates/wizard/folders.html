@@ -1,11 +1,9 @@
 {% extends "wizard/step.html" %}
-{% from "_macros.html" import field, notice %}
-{% set heading = 'Where should your media live?' %}
-{% set intro = 'Pick one folder on this server. Movies, shows and downloads each get their own place inside it.' %}
+{% set heading = 'Your media folder' %}
+{% set intro = 'Movies, shows and downloads each get their own place inside one folder on this server.' %}
+{# Read-only: the folder is the one the installer gave Orama's Agent, so there is nothing to save in Settings. #}
+{% set read_only = true %}
+{% set submit_label = 'Continue' %}
 {% block fields %}
-{{ field('data_root', 'Data folder', values.data_root, errors.data_root,
-         'Write the whole path, like /mnt/media. It cannot be inside the Orama folder (' ~ values.config_root ~ ').', 'text', 'off') }}
-{% if applied %}
-{{ notice('wait', 'Orama does not move files that are already there. If you choose a different folder after your apps are running, move your existing media into it yourself first.') }}
-{% endif %}
+<p class="folder-fixed">Your media folder is <code>{{ values.data_root }}</code>. It was chosen when Orama was installed. To use another folder, run the installer again with <code>ORAMA_DATA_ROOT</code> set to it.</p>
 {% endblock %}

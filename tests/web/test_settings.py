@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -111,7 +112,6 @@ def test_sections_are_phone_friendly_and_have_no_inline_code(signed):
 
 SAVES = {
     "media": ({"server_plex": "on"}, lambda s: s.media_servers == frozenset({"plex"})),
-    "folders": ({"data_root": "/srv/other"}, lambda s: str(s.data_root) == "/srv/other"),
     "downloads": ({"usenet": "on", "torrent": "on"},
                   lambda s: s.download_methods == frozenset({"usenet", "torrent"})),
     "playback": ({"device": "lg", "quality": "1080p"},
@@ -132,6 +132,21 @@ def test_each_section_saves_and_starts_apply(signed, app, runner, section):
     assert not (sd(app) / "setup.draft.json").exists()
     body = page(signed.get("/settings?applied=1"))
     assert 'id="checklist-items"' in body
+
+
+def test_folders_section_is_read_only(signed, app, runner):
+    html = page(signed.get("/settings"))
+    start = html.index('id="folders"')
+    section = html[start:html.index("</section>", start)]
+    words = " ".join(re.sub(r"<[^>]+>", " ", section).split()).replace(" .", ".")
+    assert ("Your media folder is /srv/data. It was chosen when Orama was installed. To use "
+            "another folder, run the installer again with ORAMA_DATA_ROOT set to it.") in words
+    assert 'name="data_root"' not in section and "<button" not in section
+    before = (sd(app) / "setup.json").read_bytes()
+    response = post(signed, "/settings/folders", data_root="/srv/other")
+    assert response.status_code in (404, 405)
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert starts(runner) == []
 
 
 def test_graphics_save_starts_apply(signed, app, runner):

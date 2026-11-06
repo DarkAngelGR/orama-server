@@ -187,6 +187,32 @@ def test_bootstrap_keeps_existing_draft(capsys, roots):
     assert again.puid == 1000
 
 
+@pytest.mark.parametrize("files", [("setup.json",), ("setup.draft.json",),
+                                   ("setup.json", "setup.draft.json")])
+def test_bootstrap_sets_the_data_root_it_is_given(capsys, roots, files):
+    # The installer's folder is the Agent's root: a saved setup or draft follows it.
+    data, cfg = roots
+    (cfg / "orama").mkdir(parents=True)
+    for name in files:
+        make_setup(data_root=str(data.parent / "old-media"), config_root=str(cfg),
+                   ports={"jellyfin": 18096}).save(cfg / "orama" / name)
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0, out.err
+    for name in files:
+        again = DesiredSetup.load(cfg / "orama" / name)
+        assert str(again.data_root) == str(data)
+        assert again.ports["jellyfin"] == 18096  # nothing else changes
+    assert f"Your media folder is now {data}" in out.err
+    assert len(out.out.splitlines()) == 2  # the installer reads only the port and the code
+
+
+def test_bootstrap_same_data_root_prints_no_note(capsys, roots):
+    data, cfg = roots
+    run_bootstrap(capsys, bootstrap_args(cfg, data))
+    code, out, _ = run_bootstrap(capsys, bootstrap_args(cfg, data))
+    assert code == 0 and "media folder" not in out.err
+
+
 def test_bootstrap_awkward_data_root_survives(capsys, tmp_path):
     base = Path(os.path.realpath(tmp_path))
     data, cfg = base / AWKWARD / "data", base / f"cfg {AWKWARD}"
@@ -570,8 +596,8 @@ def test_apply_refusal_exits_nonzero_with_agent_message(capsys, caplog, roots, a
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr()
     assert code == 1
-    assert out.err.startswith("✗ The folder ")
-    assert "is not one Orama may create." in out.err
+    assert out.err == ("✗ The media folder in your setup is not the one the installer gave "
+                       "Orama. Run the installer again, or put the folder back.\n")
     assert agent.up_calls == 0
     for value in store_values(cfg):
         assert value not in out.out and value not in out.err and value not in caplog.text

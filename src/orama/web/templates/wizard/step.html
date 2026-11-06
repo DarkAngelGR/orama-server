@@ -10,6 +10,10 @@
   {% endif %}
   {% if errors %}{{ notice('problem', 'Some answers need another look. They are marked below.') }}{% endif %}
   {% if saved and not embedded %}{{ notice('ok', 'Saved.') }}{% endif %}
+  {% if embedded and read_only %}
+  {# Nothing to save: just the words. #}
+  {{ self.fields() }}
+  {% else %}
   <form method="post" action="{{ form_action|default('/setup/' ~ step.key, true) }}" class="wizard-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% block fields %}{% endblock %}
@@ -18,5 +22,6 @@
       {% if back_url and not embedded %}<a class="button button-secondary" href="{{ back_url }}">Back</a>{% endif %}
     </div>
   </form>
+  {% endif %}
 </div>
 {% endblock %}

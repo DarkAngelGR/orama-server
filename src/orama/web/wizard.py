@@ -116,8 +116,9 @@ def _working_setup(st) -> DesiredSetup | None:
 def _promote(st, setup: DesiredSetup) -> None:
     """Make ``setup`` the real setup and drop the draft. The caller holds ``setup.lock``.
 
-    The installer and apply write the machine's own facts (address, names, ports) only to
-    ``setup.json``, so a draft made earlier would carry stale ones: those come from the live file.
+    The installer and apply write the machine's own facts (address, names, ports and the data
+    folder, which is the Agent's own root) only to ``setup.json``, so a draft made earlier would
+    carry stale ones: those come from the live file.
     """
     try:
         live = DesiredSetup.load(st.state_dir / SETUP_FILE)
@@ -126,7 +127,7 @@ def _promote(st, setup: DesiredSetup) -> None:
     if live is not None:
         setup = setup.model_copy(update={
             field: getattr(live, field)
-            for field in ("lan_address", "host_name", "extra_host_names", "ports")
+            for field in ("lan_address", "host_name", "extra_host_names", "ports", "data_root")
         })
     setup.save(st.state_dir / SETUP_FILE)  # atomic: temp file and rename
     (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
@@ -154,16 +155,12 @@ def _wizard_pages() -> Blueprint:
         st = auth.web_state()
         step = next(s for s in STEPS if s.key == key)
         keys = [s.key for s in STEPS]
-        # The folder warning is for apps that have really been applied, not for a setup
-        # file whose first apply failed or never ran.
-        job = st.jobs.current()
-        applied = (st.state_dir / SETUP_FILE).exists() and bool(job and job.status == "done")
         first_time = key == "downloads" and _first_apply_due(st)
         return render_template(
             f"wizard/{key}.html",
             step=step, steps=step_list(key), position=keys.index(key) + 1,
             values=values, errors=errors, saved=request.args.get("saved") == "1",
-            back_url=_neighbour(key, -1), applied=applied, first_time=first_time,
+            back_url=_neighbour(key, -1), first_time=first_time,
         ), status
 
     def make_view(key: str):

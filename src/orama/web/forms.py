@@ -37,7 +37,6 @@ OPENSUBTITLES_PASSWORD_NAME = "opensubtitles:password"
 WIREGUARD_KEY = re.compile(r"[A-Za-z0-9+/]{43}=")
 MIN_JELLYFIN_PASSWORD = 12
 MAX_SECRET_TEXT = 256
-MAX_FOLDER_TEXT = 1024
 SUBTITLE_SLOTS = 5
 
 DEVICES = (
@@ -354,42 +353,15 @@ def read_folders(setup: DesiredSetup, store: SecretStore) -> dict[str, Any]:
 def echo_folders(
     setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
 ) -> dict[str, Any]:
-    values = read_folders(setup, store)
-    values["data_root"] = str(form.get("data_root", ""))[:MAX_FOLDER_TEXT]
-    return values
-
-
-def _folder_message(e: ValidationError, config_root: str) -> str:
-    for err in e.errors():
-        text = str(err["msg"])
-        if "same or nested" in text:
-            return (f"That folder is inside the Orama folder ({config_root}), or the Orama "
-                    "folder is inside it. Choose a different folder.")
-        if "absolute" in text:
-            return "Write the whole path, starting with /, like /mnt/media."
-        if '":"' in text:
-            return "The folder path cannot contain a colon (:). Choose a different folder."
-        if "'..'" in text:
-            return "Leave .. out of the folder path."
-        if "'/'" in text:
-            return "Choose a folder for your media, not the top of the disk (/)."
-    return "That folder cannot be used. Write a full path, like /mnt/media."
+    return read_folders(setup, store)
 
 
 def apply_folders(
     setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
 ) -> DesiredSetup:
-    value = _text(form, "data_root")
-    if not value:
-        raise Invalid({"data_root": "Type the folder where your media should live, "
-                                    "like /mnt/media."})
-    if len(value) > MAX_FOLDER_TEXT or not value.isprintable():
-        raise Invalid({"data_root": "That folder path cannot be used. Write a full path, "
-                                    "like /mnt/media."})
-    try:
-        return _rebuild(setup, data_root=value)
-    except ValidationError as e:
-        raise Invalid({"data_root": _folder_message(e, str(setup.config_root))}) from None
+    """The data folder is read-only here: it is the folder the installer gave the Agent (its
+    only data mount), so a typed one is ignored. The installer changes it (ORAMA_DATA_ROOT)."""
+    return setup
 
 
 # ---------------------------------------------------------------- downloads
