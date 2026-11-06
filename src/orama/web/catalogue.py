@@ -62,6 +62,15 @@ def _text(value, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
+# Names that hold a credential whatever the schema's privacy flag says (it can be missing).
+_SECRET_WORDS = ("apikey", "password", "passkey", "cookie", "token", "secret")
+
+
+def _secret_name(name: str) -> bool:
+    plain = name.lower().replace("_", "").replace("-", "")
+    return any(word in plain for word in _SECRET_WORDS)
+
+
 def _field(raw, *, cardigann: bool) -> IndexerField | None:
     if not isinstance(raw, dict) or raw.get("advanced") or raw.get("hidden"):
         return None
@@ -75,6 +84,7 @@ def _field(raw, *, cardigann: bool) -> IndexerField | None:
     secret = (
         field_type == "password" or privacy in ("apikey", "password")
         or cardigann and field_type in ("textbox", "text")
+        or _secret_name(name)
     )
     kind = "secret" if secret else _KINDS.get(field_type, "info")
     options = ()
