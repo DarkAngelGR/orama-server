@@ -1,0 +1,88 @@
+<%- include('../layout/header', { title: reqItem.title + ' · Requests · Orama', activeNav: 'home' }) %>
+
+<div class="settings">
+  <p><a class="button button-quiet" href="/<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">← Back to Home</a></p>
+
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+    <div>
+      <h1 style="margin: 0;"><%= reqItem.title %></h1>
+      <p class="field-help" style="margin-top: 0.25rem;">
+        <span style="text-transform: capitalize;"><%= reqItem.kind %></span>
+        <% if (reqItem.year) { %> · <%= reqItem.year %><% } %>
+        <% if (reqItem.season) { %> · Season <%= reqItem.season %><% } %>
+        <% if (reqItem.episode) { %> · Episode <%= reqItem.episode %><% } %>
+        · ID: <code><%= reqItem.id.slice(0, 8) %></code>
+      </p>
+    </div>
+
+    <div>
+      <% if (reqItem.stage === 'Ready') { %>
+        <span class="app-state" style="color: var(--ok); background: var(--ok-bg); padding: 0.35rem 0.85rem; border-radius: 0.35rem; font-size: 1.05rem;">Ready to Watch</span>
+      <% } else if (reqItem.stage === 'Downloading') { %>
+        <span class="app-state" style="color: var(--accent); background: var(--canvas); padding: 0.35rem 0.85rem; border-radius: 0.35rem; border: 1px solid var(--control-border); font-size: 1.05rem;">Downloading (<%= reqItem.progress %>%)</span>
+      <% } else if (reqItem.stage === 'Importing') { %>
+        <span class="app-state" style="color: var(--wait); background: var(--wait-bg); padding: 0.35rem 0.85rem; border-radius: 0.35rem; font-size: 1.05rem;">Importing</span>
+      <% } else { %>
+        <span class="app-state" style="color: var(--muted); background: var(--canvas); padding: 0.35rem 0.85rem; border-radius: 0.35rem; font-size: 1.05rem;">Searching for Releases</span>
+      <% } %>
+    </div>
+  </div>
+
+  <section class="settings-section" style="margin-top: 1.5rem;" id="request-live-status" hx-get="/requests/<%= reqItem.id %>/status<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" hx-trigger="every 5s" hx-swap="outerHTML">
+    <h2>Current Pipeline Progress</h2>
+    <% if (reqItem.stage === 'Downloading') { %>
+      <p style="margin-top: 0.5rem;">Download active via <%= setup.download_methods.includes('torrent') ? 'qBittorrent' : 'SABnzbd' %></p>
+      <div style="margin-top: 0.75rem; background: var(--canvas); height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line);">
+        <div style="background: var(--accent); height: 100%; width: <%= reqItem.progress %>%; transition: width 0.4s ease;"></div>
+      </div>
+    <% } else if (reqItem.stage === 'Ready') { %>
+      <div class="notice notice-ok" style="margin-top: 0.75rem;">
+        <p>This media item has been imported into your library and is ready for streaming.</p>
+      </div>
+    <% } else if (reqItem.stage === 'Importing') { %>
+      <div class="notice notice-wait" style="margin-top: 0.75rem;">
+        <p>Download finished. Media hardlink verification and media-info analysis in progress.</p>
+      </div>
+    <% } else { %>
+      <div class="notice notice-wait" style="margin-top: 0.75rem;">
+        <p><%= reqItem.waiting_reason || 'Searching indexers for compatible releases matching profile requirements.' %></p>
+      </div>
+    <% } %>
+
+    <dl class="settings-facts" style="margin-top: 1.25rem;">
+      <dt>Playback compatibility</dt>
+      <dd><%= reqItem.playback_note || 'Direct Play evaluation in progress...' %></dd>
+      <dt>Subtitle status</dt>
+      <dd><%= reqItem.subtitle_note || 'Checking Bazarr subtitle tracks...' %></dd>
+      <dt>Fallback wait window</dt>
+      <dd><%= setup.request_wait_mode === 'timed' ? setup.request_wait_hours + ' hours (Timed)' : setup.request_wait_mode === 'always' ? 'Always wait (Never fallback)' : 'Immediate fallback (Never wait)' %></dd>
+      <dt>Requested at</dt>
+      <dd><%= new Date(reqItem.created_at).toLocaleString() %></dd>
+    </dl>
+  </section>
+
+  <div class="wizard-actions" style="margin-top: 1.5rem;">
+    <% if (reqItem.stage === 'Ready') { %>
+      <a class="button button-primary" href="http://localhost:8096" target="_blank" rel="noopener noreferrer">Watch on Jellyfin</a>
+      <a class="button button-secondary" href="http://localhost:32400" target="_blank" rel="noopener noreferrer">Watch on Plex</a>
+    <% } else { %>
+      <form method="post" action="/requests/<%= reqItem.id %>/retry" style="margin: 0;">
+        <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+        <% if (typeof token !== 'undefined' && token) { %>
+          <input type="hidden" name="token" value="<%= token %>">
+        <% } %>
+        <button type="submit" class="button button-secondary">Recheck & Refresh</button>
+      </form>
+    <% } %>
+
+    <form method="post" action="/requests/<%= reqItem.id %>/delete" style="margin: 0; margin-left: auto;">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <button type="submit" class="button button-quiet" style="color: var(--problem);">Cancel & Delete Request</button>
+    </form>
+  </div>
+</div>
+
+<%- include('../layout/footer') %>

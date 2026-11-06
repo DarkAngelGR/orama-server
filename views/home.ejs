@@ -1,0 +1,58 @@
+<%- include('layout/header', { title: 'Home · Orama', activeNav: 'home' }) %>
+
+<div class="settings">
+  <% const freePct = Math.round((setup.storage.free_gb / setup.storage.total_gb) * 100); %>
+  <% if (freePct <= setup.disk_warning_percent) { %>
+    <div class="notice notice-problem" style="margin-bottom: 1.5rem;">
+      <p><strong>Low Storage Warning:</strong> Media storage is low with only <%= freePct %>% free space (<%= setup.storage.free_gb %> GB / <%= setup.storage.total_gb %> GB). Warning limit is set to <%= setup.disk_warning_percent %>%. Clean up space or attach storage in Settings.</p>
+    </div>
+  <% } %>
+
+  <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap;">
+    <div>
+      <h1 style="margin: 0;">Welcome to Orama</h1>
+      <% if (typeof summary !== 'undefined' && summary) { %>
+        <p class="field-help" style="margin-top: 0.25rem;"><%= summary %></p>
+      <% } %>
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+      <a class="button button-primary" href="/search<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">Search Media</a>
+      <a class="button button-secondary" href="/apps<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">Apps</a>
+      <a class="button button-secondary" href="/settings<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">Settings</a>
+    </div>
+  </div>
+
+  <section class="settings-section" style="margin-top: 1.5rem;">
+    <h2>Request Media</h2>
+    <p class="field-help">Search Radarr and Sonarr to request movies, entire shows, or individual episodes.</p>
+    <form method="get" action="/search" class="wizard-form" style="margin-top: 1rem;">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <div class="field">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <input id="q" name="q" type="text" placeholder="Search movies or TV shows, e.g. Dune, Severance..." required style="flex: 1 1 16rem;">
+          <button type="submit" class="button button-primary">Search</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <section style="margin-top: 2rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+      <h2 style="margin: 0; font-size: 1.35rem;">Tracked Media Requests</h2>
+      <div style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;">
+        <% const filter = typeof currentFilter !== 'undefined' ? currentFilter : 'all'; %>
+        <a class="button <%= filter === 'all' ? 'button-primary' : 'button-secondary' %>" style="min-height: 34px; padding: 0.25rem 0.65rem; font-size: 0.85rem;" href="/<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">All (<%= allCount %>)</a>
+        <a class="button <%= filter === 'active' ? 'button-primary' : 'button-secondary' %>" style="min-height: 34px; padding: 0.25rem 0.65rem; font-size: 0.85rem;" href="/?filter=active<%= typeof token !== 'undefined' && token ? '&token=' + token : '' %>">Active (<%= activeCount %>)</a>
+        <a class="button <%= filter === 'ready' ? 'button-primary' : 'button-secondary' %>" style="min-height: 34px; padding: 0.25rem 0.65rem; font-size: 0.85rem;" href="/?filter=ready<%= typeof token !== 'undefined' && token ? '&token=' + token : '' %>">Ready (<%= readyCount %>)</a>
+      </div>
+    </div>
+
+    <div id="requests-list" hx-get="/requests/list?filter=<%= filter %><%= typeof token !== 'undefined' && token ? '&token=' + token : '' %>" hx-trigger="every 5s" hx-swap="innerHTML">
+      <%- include('_requests_list') %>
+    </div>
+  </section>
+</div>
+
+<%- include('layout/footer') %>

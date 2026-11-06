@@ -1,0 +1,28 @@
+<%- include('layout/header', { title: 'Sign in · Orama', activeNav: '' }) %>
+
+<div class="entry-layout">
+  <section class="entry-intro">
+    <h1>Your media. Your place.</h1>
+    <p>Welcome back. Sign in to manage your home media setup.</p>
+  </section>
+  <section class="entry-panel" aria-labelledby="signin-title">
+    <h2 id="signin-title">Sign in to Orama</h2>
+    <% if (typeof error !== 'undefined' && error) { %>
+      <div id="password-error" class="notice notice-problem">
+        <p><%= error %></p>
+      </div>
+    <% } %>
+    <form action="/signin" method="post" class="form-stack">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <div class="field">
+        <label for="password">Orama password</label>
+        <input id="password" name="password" type="password" value="orama-stack-2026" autocomplete="current-password" required maxlength="256" <%- typeof error !== 'undefined' && error ? 'aria-invalid="true" aria-describedby="password-error"' : '' %>>
+      </div>
+      <button class="button button-primary" type="submit">Sign in</button>
+      <button class="button button-secondary" type="submit" name="quick_login" value="1" style="margin-top: 0.25rem;">One-click Demo Sign In</button>
+    </form>
+    <p class="entry-note">Default password: <code>orama-stack-2026</code> (or click One-click Demo Sign In).</p>
+  </section>
+</div>
+
+<%- include('layout/footer') %>

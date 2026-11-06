@@ -1,0 +1,188 @@
+<%- include('../layout/header', { title: 'Settings · Orama', activeNav: 'settings' }) %>
+
+<div class="settings">
+  <h1>Settings</h1>
+  <% if (typeof message !== 'undefined' && message) { %>
+    <div class="notice <%- typeof problem !== 'undefined' && problem ? 'notice-problem' : 'notice-ok' %>">
+      <p><%= message %></p>
+    </div>
+  <% } %>
+
+  <section class="settings-section" id="media-section">
+    <h2>Media servers</h2>
+    <p class="field-help">Your configured streaming servers.</p>
+    <dl class="settings-facts">
+      <dt>Enabled servers</dt>
+      <dd><%= setup.media_servers.join(', ') || 'None' %></dd>
+    </dl>
+  </section>
+
+  <section class="settings-section" id="storage-section">
+    <h2>Storage & Disk Health</h2>
+    <p class="field-help">Local storage metrics monitored by Orama Agent.</p>
+    <% const freePct = Math.round((setup.storage.free_gb / setup.storage.total_gb) * 100); %>
+    <% if (freePct <= setup.disk_warning_percent) { %>
+      <div class="notice notice-problem" style="margin-bottom: 0.75rem;">
+        <p><strong>Warning:</strong> Disk free space is low (<%= freePct %>% remaining). Warning threshold is <%= setup.disk_warning_percent %>%. Clean up space or attach storage.</p>
+      </div>
+    <% } %>
+    <dl class="settings-facts">
+      <dt>Media directory</dt>
+      <dd><%= setup.media_dir || '/data/media' %></dd>
+      <dt>Downloads directory</dt>
+      <dd><%= setup.downloads_dir || '/data/downloads' %></dd>
+      <dt>Disk capacity</dt>
+      <dd><%= setup.storage.total_gb %> GB total · <%= setup.storage.free_gb %> GB free (<%= freePct %>% available)</dd>
+    </dl>
+    <div style="margin-top: 0.5rem; background: var(--canvas); height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--line);">
+      <div style="background: <%= freePct <= setup.disk_warning_percent ? 'var(--problem)' : 'var(--ok)' %>; height: 100%; width: <%= 100 - freePct %>%;"></div>
+    </div>
+  </section>
+
+  <section class="settings-section" id="request-policy-section">
+    <h2>Request & Quality Fallback Policy</h2>
+    <p class="field-help">Plan 4 settings for release searching, fallback deadlines, and low-disk warnings.</p>
+
+    <form method="post" action="/settings/requests-policy" class="wizard-form" style="margin-top: 1rem;">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+
+      <div class="field">
+        <label>Playable-release wait mode</label>
+        <p class="field-help">How long Orama waits for an optimal Direct Play release before falling back to alternative releases.</p>
+        <div class="choices" style="margin-top: 0.5rem;">
+          <label class="choice">
+            <input type="radio" name="request_wait_mode" value="timed" <%- setup.request_wait_mode === 'timed' ? 'checked' : '' %>>
+            <span><strong>Timed wait window (Recommended)</strong> — Wait for highest scoring release, fallback if deadline passes.</span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="request_wait_mode" value="always" <%- setup.request_wait_mode === 'always' ? 'checked' : '' %>>
+            <span><strong>Always wait</strong> — Never download fallback releases; wait indefinitely for ideal profile match.</span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="request_wait_mode" value="never" <%- setup.request_wait_mode === 'never' ? 'checked' : '' %>>
+            <span><strong>Never wait</strong> — Download any available release immediately without waiting.</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="request_wait_hours">Fallback deadline window (hours)</label>
+        <p class="field-help">Default 24 hours (1 to 720 hours).</p>
+        <input id="request_wait_hours" name="request_wait_hours" type="number" min="1" max="720" value="<%= setup.request_wait_hours || 24 %>">
+      </div>
+
+      <div class="field">
+        <label for="disk_warning_percent">Low disk warning threshold (% free space)</label>
+        <p class="field-help">Show alert when disk free space drops below this percentage (1 to 50%).</p>
+        <input id="disk_warning_percent" name="disk_warning_percent" type="number" min="1" max="50" value="<%= setup.disk_warning_percent || 5 %>">
+      </div>
+
+      <div class="wizard-actions">
+        <button type="submit" class="button button-primary">Save Request Policy</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="settings-section" id="downloads-section">
+    <h2>Downloads and VPN</h2>
+    <p class="field-help">Download clients and optional VPN routing.</p>
+    <dl class="settings-facts">
+      <dt>Methods</dt>
+      <dd><%= setup.download_methods.join(', ') || 'None' %></dd>
+      <dt>VPN</dt>
+      <dd><%= setup.vpn ? setup.vpn.provider : 'Not active' %></dd>
+    </dl>
+  </section>
+
+  <section class="settings-section" id="indexers" aria-labelledby="indexers-title">
+    <h2 id="indexers-title">Indexers</h2>
+    <p><%= indexer_count %> indexer<%= indexer_count === 1 ? '' : 's' %><% if (setup.download_methods.includes('usenet')) { %> and <%= usenet_count %> Usenet server<%= usenet_count === 1 ? '' : 's' %><% } %> set up.</p>
+    <p style="margin-top: 1rem;"><a class="button button-secondary" href="/settings/indexers<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>">Manage indexers</a></p>
+  </section>
+
+  <section class="settings-section" id="addresses" aria-labelledby="addresses-title">
+    <h2 id="addresses-title">Addresses</h2>
+    <p class="field-help">Orama answers only at these addresses. Add a name here if you open Orama by another name, like a Tailscale name.</p>
+    <dl class="settings-facts">
+      <dt>Address on your home network</dt>
+      <dd><%= setup.lan_address || '192.168.1.100' %></dd>
+      <dt>Name of this server</dt>
+      <dd><%= setup.host_name || 'orama' %></dd>
+    </dl>
+    <% if (setup.extra_host_names && setup.extra_host_names.length > 0) { %>
+    <ul class="settings-names" style="margin-top: 1rem;">
+      <% setup.extra_host_names.forEach(function(name) { %>
+      <li>
+        <span><%= name %></span>
+        <form method="post" action="/settings/addresses" style="margin: 0;">
+          <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+          <% if (typeof token !== 'undefined' && token) { %>
+            <input type="hidden" name="token" value="<%= token %>">
+          <% } %>
+          <input type="hidden" name="remove" value="<%= name %>">
+          <button type="submit" class="button button-secondary" aria-label="Remove <%= name %>">Remove</button>
+        </form>
+      </li>
+      <% }); %>
+    </ul>
+    <% } %>
+    <form method="post" action="/settings/addresses" class="wizard-form" style="margin-top: 1rem;">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <div class="field">
+        <label for="add_name">Add a name</label>
+        <p class="field-help">Up to 8 names. Letters, digits, dots and hyphens.</p>
+        <input id="add_name" name="add_name" type="text" autocomplete="off" placeholder="e.g. media.tailscale.net">
+      </div>
+      <div class="wizard-actions">
+        <button type="submit" class="button button-primary">Add name</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="settings-section" id="change-setup" aria-labelledby="change-setup-title">
+    <h2 id="change-setup-title">Change setup</h2>
+    <p>Go through the whole setup wizard again to modify your stack configuration.</p>
+    <form method="post" action="/settings/change-setup" style="margin-top: 1rem;">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <button type="submit" class="button button-secondary">Change setup</button>
+    </form>
+  </section>
+
+  <section class="settings-section" id="password" aria-labelledby="password-title">
+    <h2 id="password-title">Orama password</h2>
+    <form method="post" action="/settings/password" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <div class="field">
+        <label for="current_password">Current password</label>
+        <input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="field">
+        <label for="new_password">New password</label>
+        <p class="field-help">At least 12 characters.</p>
+        <input id="new_password" name="new_password" type="password" autocomplete="new-password" required minlength="12">
+      </div>
+      <div class="field">
+        <label for="repeat_password">New password again</label>
+        <input id="repeat_password" name="repeat_password" type="password" autocomplete="new-password" required minlength="12">
+      </div>
+      <p class="field-help">Changing it signs you out of Orama on other devices.</p>
+      <div class="wizard-actions">
+        <button type="submit" class="button button-primary">Change password</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<%- include('../layout/footer') %>

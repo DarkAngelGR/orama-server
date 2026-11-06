@@ -1,0 +1,10 @@
+<%- include('layout/header', { title: 'Notice · Orama', activeNav: '' }) %>
+
+<div class="message-page">
+  <div class="notice notice-problem">
+    <p><%= typeof message !== 'undefined' ? message : 'Something went wrong in Orama.' %></p>
+  </div>
+  <p style="margin-top: 1.5rem;"><a class="button button-secondary" href="/">Return home</a></p>
+</div>
+
+<%- include('layout/footer') %>
