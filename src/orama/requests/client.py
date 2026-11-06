@@ -103,7 +103,13 @@ class MediaClient:
         return f"http://127.0.0.1:{port}", key
 
     def _request(
-        self, app_name: str, path: str, *, params: dict[str, Any] | None = None
+        self,
+        app_name: str,
+        path: str,
+        *,
+        method: str = "GET",
+        params: dict[str, Any] | None = None,
+        json_body: Any = None,
     ) -> Any:
         base_url, key = self._get_app_info(app_name)
         query_str = f"?{urllib.parse.urlencode(params)}" if params else ""
@@ -111,15 +117,17 @@ class MediaClient:
         headers = {"X-Api-Key": key}
 
         try:
-            resp = self.http.request("GET", url, headers=headers)
+            resp = self.http.request(method, url, headers=headers, json=json_body)
         except Unreachable:
             raise RequestError(f"{app_name.capitalize()} is unreachable or timed out") from None
 
         if resp.status == 401 or resp.status == 403:
             raise RequestError(f"Authentication failed for {app_name.capitalize()}")
-        if resp.status != 200:
+        if resp.status not in (200, 201, 202):
             raise RequestError(f"{app_name.capitalize()} returned HTTP {resp.status}")
 
+        if not resp.body:
+            return {}
         try:
             return resp.json()
         except ValueError:
@@ -265,3 +273,126 @@ class MediaClient:
             history=history,
             files=[],
         )
+
+    def _get_quality_profile_id(self, app_name: str) -> int:
+        profiles = self._request(app_name, "qualityprofile")
+        if isinstance(profiles, list):
+            for p in profiles:
+                if p.get("name") == "Orama":
+                    return p["id"]
+            if profiles:
+                return profiles[0]["id"]
+        return 1
+
+    def _get_root_folder_path(self, app_name: str) -> str:
+        folders = self._request(app_name, "rootfolder")
+        if isinstance(folders, list) and folders:
+            return folders[0].get("path", f"/data/media/{app_name}")
+        return f"/data/media/{'movies' if app_name == 'radarr' else 'tv'}"
+
+    def ensure_movie(self, tmdb_id: int) -> tuple[int, bool]:
+        """Ensure movie is added in Radarr without auto-searching; returns (remote_id, has_file)."""
+        existing_list = self._request("radarr", "movie")
+        if isinstance(existing_list, list):
+            for m in existing_list:
+                if m.get("tmdbId") == tmdb_id:
+                    return m["id"], bool(m.get("hasFile"))
+
+        lookup_res = self._request("radarr", "movie/lookup", params={"term": f"tmdb:{tmdb_id}"})
+        if not isinstance(lookup_res, list) or not lookup_res:
+            lookup_res = self._request("radarr", "movie/lookup", params={"term": str(tmdb_id)})
+        if not isinstance(lookup_res, list) or not lookup_res:
+            raise RequestError(f"Could not locate movie metadata for TMDB #{tmdb_id}")
+
+        movie_data = lookup_res[0]
+        qp_id = self._get_quality_profile_id("radarr")
+        root_path = self._get_root_folder_path("radarr")
+
+        payload = {
+            **movie_data,
+            "qualityProfileId": qp_id,
+            "rootFolderPath": root_path,
+            "monitored": True,
+            "addOptions": {"searchForMovie": False},
+        }
+        created = self._request("radarr", "movie", method="POST", json_body=payload)
+        return created["id"], bool(created.get("hasFile"))
+
+    def ensure_series(self, tvdb_id: int) -> tuple[int, bool]:
+        """Ensure series is added in Sonarr without auto-searching; returns (remote_id, has_file)."""
+        existing_list = self._request("sonarr", "series")
+        if isinstance(existing_list, list):
+            for s in existing_list:
+                if s.get("tvdbId") == tvdb_id:
+                    stats = s.get("statistics", {})
+                    has_file = bool(stats.get("episodeFileCount", 0) > 0)
+                    return s["id"], has_file
+
+        lookup_res = self._request("sonarr", "series/lookup", params={"term": f"tvdb:{tvdb_id}"})
+        if not isinstance(lookup_res, list) or not lookup_res:
+            lookup_res = self._request("sonarr", "series/lookup", params={"term": str(tvdb_id)})
+        if not isinstance(lookup_res, list) or not lookup_res:
+            raise RequestError(f"Could not locate series metadata for TVDB #{tvdb_id}")
+
+        series_data = lookup_res[0]
+        qp_id = self._get_quality_profile_id("sonarr")
+        root_path = self._get_root_folder_path("sonarr")
+
+        payload = {
+            **series_data,
+            "qualityProfileId": qp_id,
+            "rootFolderPath": root_path,
+            "monitored": True,
+            "addOptions": {"searchForMissingEpisodes": False},
+        }
+        created = self._request("sonarr", "series", method="POST", json_body=payload)
+        stats = created.get("statistics", {})
+        has_file = bool(stats.get("episodeFileCount", 0) > 0)
+        return created["id"], has_file
+
+    def monitor_episodes(
+        self, series_id: int, season: int | None, episode: int | None
+    ) -> list[int]:
+        """Set monitoring on targeted episodes only."""
+        episodes = self._request("sonarr", "episode", params={"seriesId": series_id})
+        target_ids: list[int] = []
+        if isinstance(episodes, list):
+            for ep in episodes:
+                if episode is not None:
+                    if ep.get("seasonNumber") == season and ep.get("episodeNumber") == episode:
+                        target_ids.append(ep["id"])
+                elif season is not None:
+                    if ep.get("seasonNumber") == season:
+                        target_ids.append(ep["id"])
+                else:
+                    target_ids.append(ep["id"])
+
+        if target_ids:
+            self._request(
+                "sonarr",
+                "episode/monitor",
+                method="PUT",
+                json_body={"episodeIds": target_ids, "monitored": True},
+            )
+        return target_ids
+
+    def search_targets(
+        self,
+        app_name: str,
+        remote_id: int,
+        season: int | None = None,
+        episode_ids: list[int] | None = None,
+    ) -> int:
+        """Trigger search command in Radarr or Sonarr."""
+        if app_name == "radarr":
+            cmd = {"name": "MoviesSearch", "movieIds": [remote_id]}
+        else:
+            if episode_ids:
+                cmd = {"name": "EpisodeSearch", "episodeIds": episode_ids}
+            elif season is not None:
+                cmd = {"name": "SeasonSearch", "seriesId": remote_id, "seasonNumber": season}
+            else:
+                cmd = {"name": "SeriesSearch", "seriesId": remote_id}
+
+        res = self._request(app_name, "command", method="POST", json_body=cmd)
+        return res.get("id", 0)
