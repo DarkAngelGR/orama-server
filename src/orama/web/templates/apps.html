@@ -4,6 +4,9 @@
 <section class="apps">
   <h1>Apps</h1>
   <p class="field-help">The apps Orama runs for you. This list refreshes by itself.</p>
-  {% include "_apps_list.html" %}
+  {# Only the children are swapped, so ids (and keyboard focus on them) survive a refresh. #}
+  <div id="apps-list" hx-get="/apps/list" hx-trigger="every 10s" hx-swap="innerHTML">
+    {% include "_apps_list.html" %}
+  </div>
 </section>
 {% endblock %}

@@ -22,12 +22,12 @@ _WORDS = {
     "exited": "Stopped", "stopped": "Stopped", "dead": "Stopped", "paused": "Stopped",
 }
 FIRST = ("plex", "jellyfin")
-EXTRA_NAMES = {"gluetun": "Gluetun"}
-NO_LINK = frozenset({"gluetun", "recyclarr"})
+NO_LINK = frozenset({"gluetun"})  # a VPN, not a web page (Recyclarr is never listed)
 
 
 @dataclass(frozen=True)
 class AppRow:
+    key: str
     name: str
     state: str | None
     url: str | None
@@ -60,7 +60,7 @@ def app_rows(setup: DesiredSetup, states: dict[str, str] | None) -> list[AppRow]
     for app in apps:
         port = setup.ports.get(app)
         url = f"http://{host}:{port}/" if port and app not in NO_LINK else None
-        rows.append(AppRow(EXTRA_NAMES.get(app) or display_name(app),
+        rows.append(AppRow(app, display_name(app),
                            None if states is None else state_word(states.get(app)), url))
     return rows
 
@@ -91,7 +91,7 @@ def _pages() -> Blueprint:
     @pages.get("/apps")
     @auth.requires("apps")
     def apps():
-        return render_template("apps.html", **context())
+        return render_template("apps.html", live=True, **context())
 
     @pages.get("/apps/list")
     @auth.requires("apps")

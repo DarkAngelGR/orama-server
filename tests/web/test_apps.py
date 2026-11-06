@@ -7,6 +7,7 @@ import re
 import pytest
 
 from orama.agent_client import AgentError
+from orama.setup_model import VpnConfig
 from web.conftest import EXTRA, HOST_NAME, LAN, csrf_from, signin, write_setup
 
 VPN_HOST = {"Host": "localhost"}
@@ -129,19 +130,35 @@ def test_no_link_for_gluetun_and_recyclarr(app, client, password, agent, state_d
     assert "Recyclarr" not in html
 
 
-def test_gluetun_row_has_state_but_no_link(app, client, password, agent, state_dir, monkeypatch):
-    import orama.web.apps as apps_mod
-
-    real = apps_mod.enabled_apps
-    monkeypatch.setattr(apps_mod, "enabled_apps", lambda s: [*real(s), "gluetun", "recyclarr"])
-    write_setup(state_dir, ports=PORTS_FOR_SETUP)
+def test_gluetun_row_has_state_but_no_link(app, client, password, agent, state_dir):
+    write_setup(state_dir, download_methods={"torrent"}, vpn=VpnConfig(),
+                ports={**PORTS_FOR_SETUP, "gluetun": 9999})
     signin(client, password, headers=VPN_HOST)
-    agent.states = {"gluetun": "running"}
+    agent.states = {"gluetun": "running", "qbittorrent": "exited"}
     html = get(client).get_data(as_text=True)
-    assert "Gluetun" in html
-    assert ":0/" not in html
-    assert html.count('href="http://localhost:') == len(real(app.extensions["orama"].setup.current()))
-    assert "Recyclarr" in html and "Open Recyclarr" not in html
+    assert "Gluetun" in html and "Recyclarr" not in html
+    assert 'id="app-open-gluetun"' not in html and ":9999/" not in html
+    assert 'href="http://localhost:8081/"' in html
+    row = html[html.index('id="app-row-gluetun"'):html.index('id="app-row-qbittorrent"')]
+    assert "Running" in row and "<a " not in row
+
+
+def test_rows_and_links_have_stable_ids_and_only_children_swap(signed):
+    page = get(signed).get_data(as_text=True)
+    part = get(signed, "/apps/list").get_data(as_text=True)
+    assert 'id="apps-list" hx-get="/apps/list" hx-trigger="every 10s" hx-swap="innerHTML"' in page
+    assert "hx-get" not in part and 'id="apps-list"' not in part
+    for html in (page, part):
+        assert 'id="app-row-plex"' in html and 'id="app-open-plex"' in html
+
+
+def test_helper_notice_is_live_only_on_the_full_page(signed, agent):
+    agent.error = AgentError("x")
+    page = get(signed).get_data(as_text=True)
+    part = get(signed, "/apps/list").get_data(as_text=True)
+    assert 'role="status"' in page
+    assert "Orama cannot reach its helper" in part and "role=" not in part
+    assert "aria-live" not in page and "aria-live" not in part
 
 
 def test_agent_down_message(signed, agent):
