@@ -549,13 +549,18 @@ def _pages() -> Blueprint:
                             label = entry.name if kind == "indexer" else entry.host
                             sent_before = bool(st.store.get(marker(
                                 f"indexer:{slug}" if kind == "indexer" else slug)))
-                            ok_name = f"test-ok:{kind}:{slug}"
-                            ok_before = st.store.get(ok_name)
                             # Test the candidate first; only a pass is saved and applied.
                             error = test(candidate, layer, st.http, slug)
                             if error:
-                                if ok_before is not None:
-                                    st.store.set(ok_name, ok_before)  # the old entry still stands
+                                if existing is not None:
+                                    # The test pushed the candidate into the app: put the old
+                                    # entry (old setup, old stored secret) back, same lock.
+                                    again = test(setup, st.store, st.http, slug)
+                                    error += " Nothing was saved."
+                                    if again:
+                                        error += (" Orama could not put the old settings back. "
+                                                  "Apply again to fix it.")
+                                    return render_indexers(setup, error, True, 400)
                                 if not sent_before and st.store.get(marker(
                                         f"indexer:{slug}" if kind == "indexer" else slug)):
                                     # The test created it in the app: have the next apply remove it.
