@@ -23,6 +23,7 @@ from orama.agent_client import AgentClient
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import auth, security
+from orama.web.apps import register_apps, running_summary
 from orama.web.assets import configure_assets
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
 from orama.web.plex import register_plex
@@ -138,6 +139,7 @@ def create_app(
     register_wizard(app)
     register_plex(app)
     register_settings(app)
+    register_apps(app)
     return app
 
 
@@ -212,9 +214,15 @@ def _auth_pages() -> Blueprint:
 
     @pages.get("/")
     def home():
+        st = auth.web_state()
+        if not st.passwords.exists():
+            return redirect(url_for("auth.setup_password"), 303)
         if g.principal is None:
             return redirect(url_for("auth.signin", next=_next_for_home()), 303)
-        return render_template("home.html")
+        if not (st.state_dir / SETUP_FILE).exists():
+            return redirect("/setup/media", 303)
+        setup = st.setup.current()
+        return render_template("home.html", summary=running_summary(setup) if setup else None)
 
     @pages.route("/signin", methods=["GET", "POST"])
     def signin():
