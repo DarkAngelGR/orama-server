@@ -30,7 +30,7 @@ operations subplan before Release 1 completion; see the Plan 4 notes.
 |---|---|---|---|
 | 1 | Verify pinned request, media-info and webhook contracts | in progress | Codex |
 | 2 | Durable request store and idempotent identities | needs review | Gemini |
-| 3 | Safe lookup and app read client | in progress | Gemini |
+| 3 | Safe lookup and app read client | needs review | Gemini |
 | 4 | Idempotent movie and TV submission | open | — |
 | 5 | Status reconciliation and background scheduling | open | — |
 | 6 | Playable-release waiting and per-request fallback | open | — |
