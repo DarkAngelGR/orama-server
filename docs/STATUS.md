@@ -32,7 +32,7 @@ operations subplan before Release 1 completion; see the Plan 4 notes.
 | 2 | Durable request store and idempotent identities | needs review | Gemini |
 | 3 | Safe lookup and app read client | needs review | Gemini |
 | 4 | Idempotent movie and TV submission | needs review | Gemini |
-| 5 | Status reconciliation and background scheduling | in progress | Gemini |
+| 5 | Status reconciliation and background scheduling | needs review | Gemini |
 | 6 | Playable-release waiting and per-request fallback | open | — |
 | 7 | Post-import playback and subtitle assessment | open | — |
 | 8 | Authenticated webhook refresh hints | open | — |
