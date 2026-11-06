@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from flask import Blueprint, Flask, current_app, g, redirect, render_template, request, url_for
 from flask.globals import request_ctx
@@ -105,6 +106,7 @@ def create_app(
     agent: AgentClient | None = None,
     http: Http | None = None,
     clock: Callable[[], float] = time.time,
+    request_worker: Any = None,
 ) -> Flask:
     state_dir = Path(state_dir)
     app = Flask(__name__)
@@ -127,6 +129,7 @@ def create_app(
         setup=SetupReader(state_dir),
         jobs=JobRunner(state_dir, redact=store_redactor(store), clock=clock),
     )
+    app.extensions["request_worker"] = request_worker
     app.jinja_env.globals["csrf_token"] = security.csrf_token
 
     configure_assets(app)
