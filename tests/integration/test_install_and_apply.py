@@ -475,6 +475,14 @@ def test_pinned_request_read_contracts(clean_host, applied, app):
                                      stored_secrets(clean_host)[f"apikey:{app}"])
 
 
+@pytest.mark.parametrize("app", ["sonarr", "radarr"])
+def test_pinned_title_request_contracts(clean_host, applied, app):
+    keys = stored_secrets(clean_host)
+    ports = applied["setup"]["ports"]
+    request_contracts.title_contracts(app, ports[app], keys[f"apikey:{app}"], clean_host,
+                                     ports["bazarr"], keys["apikey:bazarr"])
+
+
 def test_pinned_authenticated_request_webhooks(clean_host, applied, tmp_path):
     request_contracts.authenticated_webhooks(applied["setup"]["ports"],
                                              stored_secrets(clean_host), tmp_path)
