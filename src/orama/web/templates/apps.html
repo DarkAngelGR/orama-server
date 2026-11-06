@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Apps · Orama{% endblock %}
+{% block content %}
+<section class="apps">
+  <h1>Apps</h1>
+  <p class="field-help">The apps Orama runs for you. This list refreshes by itself.</p>
+  {% include "_apps_list.html" %}
+</section>
+{% endblock %}

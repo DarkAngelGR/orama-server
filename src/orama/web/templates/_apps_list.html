@@ -1,0 +1,18 @@
+<div id="apps-list" hx-get="/apps/list" hx-trigger="every 10s" hx-swap="outerHTML">
+  {% if down %}
+  <div class="notice notice-wait" role="status"><p>Orama cannot reach its helper right now — the apps keep running. Try again in a minute.</p></div>
+  {% endif %}
+  {% if rows %}
+  <ul class="app-list">
+    {% for row in rows %}
+    <li class="app-row">
+      <span class="app-name">{{ row.name }}</span>
+      {% if row.state %}<span class="app-state app-state-{{ row.state|lower|replace(' ', '-') }}">{{ row.state }}</span>{% endif %}
+      {% if row.url %}<a class="button button-secondary" href="{{ row.url }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ row.name }} in a new tab">Open</a>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>No apps are set up yet.</p>
+  {% endif %}
+</div>

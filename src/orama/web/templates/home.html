@@ -2,7 +2,12 @@
 {% block title %}Home · Orama{% endblock %}
 {% block content %}
 <section class="message-page">
-  <h1>Signed in</h1>
-  <p>Requests arrive in the next update.</p>
+  <h1>Welcome to Orama</h1>
+  <p>Signed in. Requests arrive in the next update.</p>
+  {% if summary %}<p class="field-help">{{ summary }}</p>{% endif %}
+  <p class="wizard-actions">
+    <a class="button button-primary" href="/apps">Apps</a>
+    <a class="button button-secondary" href="/settings">Settings</a>
+  </p>
 </section>
 {% endblock %}
