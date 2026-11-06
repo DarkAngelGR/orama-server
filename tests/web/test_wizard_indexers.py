@@ -443,3 +443,28 @@ def test_live_entry_never_sent_loses_its_credentials_on_removal(kind):
         forms.remove_usenet_server(setup, slug, store, keep_credentials=True)
         assert f"usenet:{slug}:password" not in store
     assert not [n for n in store if n.startswith("remove:")]
+
+
+def test_install_while_an_apply_runs_says_busy_and_keeps_the_draft(signed, app, state_dir, tmp_path):
+    # Two tabs, or Install pressed twice: the second press must not look like it worked.
+    from .test_wizard import blocking_runner
+
+    store, slug = _draft(app, state_dir, usenet=True)
+    store.set(f"test-ok:indexer:{slug}", "1")
+    store.set("test-ok:usenet:news-example", "1")
+    runner, log, gate = blocking_runner(app, tmp_path)
+    try:
+        first = _install(signed)
+        assert first.status_code == 303 and first.location == "/setup/finish"
+        assert not (state_dir / "setup.draft.json").exists()
+        # A change made in another tab while the apply runs, then Install again.
+        _draft(app, state_dir, usenet=True)
+        again = _install(signed)
+        assert again.status_code == 409
+        assert b"Orama is busy applying the setup. Try again in a moment." in again.data
+        assert b"Review" in again.data
+        assert (state_dir / "setup.draft.json").exists()  # not promoted, not lost
+    finally:
+        gate.write_text("x")
+        runner.wait(10)
+    assert log.read_text().split() == [str(state_dir / "setup.json")]
