@@ -84,7 +84,7 @@ def _field(raw, *, cardigann: bool) -> IndexerField | None:
     secret = (
         field_type == "password" or privacy in ("apikey", "password")
         or cardigann and field_type in ("textbox", "text")
-        or _secret_name(name)
+        or field_type in ("textbox", "text") and _secret_name(name)
     )
     kind = "secret" if secret else _KINDS.get(field_type, "info")
     options = ()
