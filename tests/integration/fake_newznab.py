@@ -36,26 +36,26 @@ RESULTS = b"""<?xml version="1.0" encoding="UTF-8"?>
     <title>Fake Newznab</title>
     <newznab:response offset="0" total="2" />
     <item>
-      <title>Fake.Show.S01E01.1080p.WEB-DL</title>
+      <title>Breaking.Bad.S01E01.1080p.WEB-DL.DTS.x264</title>
       <guid isPermaLink="true">http://fake-newznab:8000/details/1</guid>
       <link>http://fake-newznab:8000/getnzb/1.nzb</link>
       <pubDate>Mon, 03 Nov 2025 12:00:00 +0000</pubDate>
       <category>TV &gt; HD</category>
-      <enclosure url="http://fake-newznab:8000/getnzb/1.nzb" length="1048576" type="application/x-nzb" />
+      <enclosure url="http://fake-newznab:8000/getnzb/1.nzb" length="2147483648" type="application/x-nzb" />
       <newznab:attr name="category" value="5000" />
       <newznab:attr name="category" value="5040" />
-      <newznab:attr name="size" value="1048576" />
+      <newznab:attr name="size" value="2147483648" />
     </item>
     <item>
-      <title>Fake.Movie.2025.1080p.WEB-DL</title>
+      <title>Inception.2010.1080p.WEB-DL.DTS.x264</title>
       <guid isPermaLink="true">http://fake-newznab:8000/details/2</guid>
       <link>http://fake-newznab:8000/getnzb/2.nzb</link>
       <pubDate>Mon, 03 Nov 2025 12:00:00 +0000</pubDate>
       <category>Movies &gt; HD</category>
-      <enclosure url="http://fake-newznab:8000/getnzb/2.nzb" length="1048576" type="application/x-nzb" />
+      <enclosure url="http://fake-newznab:8000/getnzb/2.nzb" length="2147483648" type="application/x-nzb" />
       <newznab:attr name="category" value="2000" />
       <newznab:attr name="category" value="2040" />
-      <newznab:attr name="size" value="1048576" />
+      <newznab:attr name="size" value="2147483648" />
     </item>
   </channel>
 </rss>

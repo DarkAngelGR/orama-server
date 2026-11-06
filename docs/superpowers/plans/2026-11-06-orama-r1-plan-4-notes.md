@@ -20,3 +20,21 @@
 - Plan self-review checked release-spec coverage, task ordering and API references.
   Pinned-app details are deliberately established in Task 1 before consumer tasks;
   implementers must record observed contracts and update dependent interfaces together.
+
+### Task 1 implementation in progress
+
+- First probe commit: `2f8f03b`. Local checks: 1,906 non-integration tests passed,
+  Ruff and ShellCheck passed. Real-container CI is still pending; no contracts are
+  called verified yet.
+- The add APIs fetch Skyhook metadata internally even when callers supply lookup
+  data (confirmed by upstream AddSeriesService/AddMovieService source). The title
+  probes therefore require catalogue connectivity and fail visibly on outages.
+  This changes the plan's optional-online expectation for the add path: keeping it
+  optional would leave the required submission contract untested. Cost: external
+  metadata outages can fail CI. Source inspection is a hint, not pinned-image proof.
+- Test video and indexer releases are synthetic. Only catalogue metadata is fetched;
+  no real release is downloaded. A separate profile tests the incompatible DTS score
+  floor; the strict profile is compared unchanged and temporary entries are removed.
+- Remaining before Task 1 handoff: green real-container evidence, minimal offline
+  response fixtures, exact observed version/endpoint notes, independent review and
+  report. Do not begin Task 2 or mark Task 1 complete from these notes alone.
