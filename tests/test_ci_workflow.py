@@ -45,3 +45,14 @@ def test_version_tag_published_only_after_integration_on_main():
     assert 'imagetools create' in script
     assert '-t "ghcr.io/darkangelgr/$image:$VERSION" "ghcr.io/darkangelgr/$image:$SHA"' in script
     assert set(JOBS["integration"]["needs"]) >= {"unit", "images"}
+
+
+def test_browser_job_is_separate_pinned_and_does_not_gate_publish():
+    browser = JOBS["browser"]
+    assert "needs" not in browser  # unit results stay visible whatever the browser does
+    assert "browser" not in JOBS["publish"]["needs"]  # until it has been green three times
+    script = "\n".join(s.get("run", "") for s in browser["steps"])
+    assert "playwright@$PLAYWRIGHT_VERSION" in script and "install --with-deps chromium" in script
+    assert browser["env"]["PLAYWRIGHT_VERSION"].count(".") == 2  # an exact version
+    assert "pytest tests/web/test_browser.py -m integration" in script
+    assert _steps_using("browser", "actions/setup-node")

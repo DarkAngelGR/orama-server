@@ -67,6 +67,35 @@ jobs:
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ghcr.io/darkangelgr/orama-agent:${{ steps.tags.outputs.sha }}
 
+  browser:
+    # Real Chromium drives the whole web app (tests/web/test_browser.py), with fakes for the
+    # Agent, Prowlarr, SABnzbd, Plex and the apply child. A separate job on purpose: a browser
+    # install hiccup must be visible without hiding the unit results.
+    # `publish` does NOT need this job yet. Make it a requirement once it has been green on
+    # three pushes in a row, so a flaky browser install cannot block the version tag.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_VERSION: "1.63.0"
+      PLAYWRIGHT_DIR: ${{ github.workspace }}/.playwright-node
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Playwright and Chromium (pinned)
+        run: |
+          npm install --prefix "$PLAYWRIGHT_DIR" --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          "$PLAYWRIGHT_DIR/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Test dependencies
+        run: uv sync --frozen
+      - name: Real-browser tests
+        # NODE_PATH lets the test's node scripts find the pinned playwright package.
+        run: NODE_PATH="$PLAYWRIGHT_DIR/node_modules" uv run pytest tests/web/test_browser.py -m integration -v -p no:cacheprovider
+
   integration:
     # Plan 1 on a real Docker host: install twice, deploy the apps, nothing leaks.
     needs: [unit, images]
