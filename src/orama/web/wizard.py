@@ -19,7 +19,7 @@ from orama import state
 from orama.secrets import JELLYFIN_USER_NAME, PLEX_TOKEN_NAME, VPN_KEY_NAME
 from orama.setup_model import DesiredSetup
 from orama.web import auth, catalogue, forms
-from orama.web.jobs import TEST_BUSY, apply_operation
+from orama.web.jobs import TEST_BUSY, apply_operation, poll_view
 from orama.wiring import jellyfin, prowlarr, sabnzbd
 
 SETUP_FILE = "setup.json"
@@ -55,17 +55,38 @@ def _is_ready(key: str) -> bool:
     return any(rule.rule == path for rule in current_app.url_map.iter_rules())
 
 
+def _indexers_tested(st) -> bool:
+    """True when the working setup has what the Indexers step asks for: a tested indexer
+    and, with Usenet on, a tested Usenet server."""
+    setup = _working_setup(st)
+    if setup is None:
+        return False
+    if not any(st.store.get(f"test-ok:indexer:{i.slug}") == "1" for i in setup.indexers):
+        return False
+    return "usenet" not in setup.download_methods or any(
+        st.store.get(f"test-ok:usenet:{s.slug}") == "1" for s in setup.usenet_servers)
+
+
 def step_list(current: str) -> list[dict[str, Any]]:
-    """Every step with its state: done, current or next, and whether it has a page."""
+    """Every step with its state: done, current, next or todo, and whether it has a page.
+
+    A step before the current one is "done" because every other step has working answers
+    from the installer once you have passed it; Indexers is the exception, it is "todo"
+    until something has been added and tested.
+    """
     at = [s.key for s in STEPS].index(current)
+    indexers_ok = _indexers_tested(auth.web_state())
     rows = []
     for i, s in enumerate(STEPS):
         ready = _is_ready(s.key)
+        state = "done" if i < at else "current" if i == at else "next"
+        if s.key == "indexers" and state == "done" and not indexers_ok:
+            state = "todo"
         rows.append({
             "key": s.key,
             "label": s.label,
             "ready": ready,
-            "state": "done" if i < at else "current" if i == at else "next",
+            "state": state,
             "url": f"/setup/{s.key}" if ready and s.key != "password" else None,
         })
     return rows
@@ -133,7 +154,10 @@ def _wizard_pages() -> Blueprint:
         st = auth.web_state()
         step = next(s for s in STEPS if s.key == key)
         keys = [s.key for s in STEPS]
-        applied = (st.state_dir / SETUP_FILE).exists()
+        # The folder warning is for apps that have really been applied, not for a setup
+        # file whose first apply failed or never ran.
+        job = st.jobs.current()
+        applied = (st.state_dir / SETUP_FILE).exists() and bool(job and job.status == "done")
         first_time = key == "downloads" and _first_apply_due(st)
         return render_template(
             f"wizard/{key}.html",
@@ -194,12 +218,14 @@ def _wizard_pages() -> Blueprint:
         st = auth.web_state()
         job = st.jobs.current()
         # The page polls itself, so the Continue button appears when the job ends.
+        htmx = request.headers.get("HX-Request") == "true"
+        context, headers = poll_view(job) if htmx else ({}, {})
         return render_template(
-            "_job_poll.html" if request.headers.get("HX-Request") == "true"
-            else "wizard/starting.html",
+            "_job_poll.html" if htmx else "wizard/starting.html",
             job=job, running=bool(job and job.status == "running"),
             next_url=_neighbour("downloads", 1), starting=True, poll_url="/setup/starting",
-        )
+            **context,
+        ), 200, headers
 
     def render_indexers(setup, message="", problem=False, status=200):
         st = auth.web_state()

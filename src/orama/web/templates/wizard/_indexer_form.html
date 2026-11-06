@@ -4,7 +4,7 @@
 <section class="wizard-form" id="indexer-catalogue"
   hx-get="{{ url_for(ep, q=query, definition=definition, edit=editing.slug if editing else None) }}"
   hx-trigger="every 5s" hx-swap="outerHTML">
-  <p role="status">Prowlarr is still starting. This page updates by itself.</p>
+  <p>Prowlarr is still starting. This page updates by itself.</p>
 </section>
 {% else %}
 <section class="wizard-form" id="indexer-catalogue">

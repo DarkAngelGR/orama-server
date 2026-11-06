@@ -4,7 +4,8 @@
 {% elif job is none %}
 {{ notice('wait', 'Nothing has been applied yet.') }}
 {% elif job.status == 'running' %}
-{{ notice('wait', 'Applying your setup…') }}
+{# quiet: this notice is re-sent while the job runs; the final state is the one announced #}
+{{ notice('wait', 'Applying your setup…', true) }}
 {% elif job.status == 'done' %}
 {{ notice('ok', 'All done') }}
 {% elif job.status == 'failed' %}
@@ -16,6 +17,6 @@
 <form action="/jobs/apply" method="post" hx-post="/jobs/apply" hx-target="#checklist-items" hx-swap="outerHTML">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   {% if starting %}<input type="hidden" name="return" value="starting">{% endif %}
-  <button type="submit" class="button button-primary">{{ 'Apply again' if job else 'Apply setup' }}</button>
+  <button type="submit" class="button {{ 'button-secondary' if job else 'button-primary' }}">{{ 'Apply again' if job else 'Apply setup' }}</button>
 </form>
 {% endif %}

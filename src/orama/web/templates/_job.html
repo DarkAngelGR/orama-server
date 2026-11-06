@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import checklist %}
+{% from "_macros.html" import checklist, poller %}
 {% block title %}Applying · Orama{% endblock %}
 {% block content %}
 <h1>Your setup</h1>
@@ -8,7 +8,7 @@
 </div>
 {# The poller lives outside the live region; it swaps only the list inside it. #}
 {% if running -%}
-<div id="job-poller" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+{{ poller('/jobs/current', job) }}
 {%- else -%}
 <div id="job-poller"></div>
 {%- endif %}

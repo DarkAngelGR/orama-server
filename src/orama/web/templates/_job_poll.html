@@ -1,12 +1,18 @@
-{#- Partial for htmx: the list (swapped into #checklist-items) plus out-of-band status and poller. -#}
-{% from "_macros.html" import checklist_items %}
-{{ checklist_items(job.lines if job else []) }}
+{#- Partial for htmx, swapped into #checklist-items. While the job runs and the page already
+    shows every line, the answer carries only the new lines (new_lines, appended) or nothing,
+    so screen readers hear each line once. A whole list (new_lines none) replaces the old one.
+    Status, poller and Continue button are sent out-of-band, and only when they change. -#}
+{% from "_macros.html" import checklist_items, poller %}
+{%- set partial = new_lines is defined and new_lines is not none -%}
+{%- if partial -%}{% for line in new_lines %}<li>{{ line }}</li>{% endfor %}{%- else -%}{{ checklist_items(job.lines if job else []) }}{%- endif -%}
+{%- if not (running and partial) %}
 <div id="job-status" hx-swap-oob="true">
 {%- include "_job_status.html" -%}
 </div>
-{% if running -%}
-<div id="job-poller" hx-swap-oob="true" hx-get="{{ poll_url|default('/jobs/current', true) }}" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
-{%- else -%}
+{% endif -%}
+{%- if running and not (partial and not new_lines) -%}
+{{ poller(poll_url|default('/jobs/current', true), job, true) }}
+{%- elif not running %}
 <div id="job-poller" hx-swap-oob="true"></div>
-{%- endif %}
-{% if starting %}{% with oob = true %}{% include "wizard/_starting_next.html" %}{% endwith %}{% endif %}
+{% endif -%}
+{%- if starting %}{% with oob = true %}{% include "wizard/_starting_next.html" %}{% endwith %}{% endif %}

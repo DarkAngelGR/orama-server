@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import notice, checklist %}
+{% from "_macros.html" import notice, checklist, poller %}
 {% block title %}Starting · Setup · Orama{% endblock %}
 {% block content %}
 <div class="wizard">
@@ -9,7 +9,7 @@
 {%- include "_job_status.html" -%}
   </div>
   {% if running -%}
-  <div id="job-poller" hx-get="{{ poll_url }}" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+  {{ poller(poll_url, job) }}
   {%- else -%}
   <div id="job-poller"></div>
   {%- endif %}

@@ -33,6 +33,8 @@ from orama.wiring import prowlarr, sabnzbd
 OPENSUBTITLES_USER_NAME = "opensubtitles:username"
 OPENSUBTITLES_PASSWORD_NAME = "opensubtitles:password"
 
+# A WireGuard private key is 32 bytes in base64: 43 characters and one "=".
+WIREGUARD_KEY = re.compile(r"[A-Za-z0-9+/]{43}=")
 MIN_JELLYFIN_PASSWORD = 12
 MAX_SECRET_TEXT = 256
 MAX_FOLDER_TEXT = 1024
@@ -324,8 +326,8 @@ def apply_media(setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
                 )
         elif not MIN_JELLYFIN_PASSWORD <= len(password) <= MAX_SECRET_TEXT:
             errors["jellyfin_password"] = (
-                f"Use a password between {MIN_JELLYFIN_PASSWORD} and {MAX_SECRET_TEXT} "
-                "characters long."
+                f"Use at least {MIN_JELLYFIN_PASSWORD} characters (no more than "
+                f"{MAX_SECRET_TEXT})."
             )
         elif not password.isprintable():
             errors["jellyfin_password"] = "The password may not contain line breaks."
@@ -454,10 +456,10 @@ def apply_downloads(
             if store.get(VPN_KEY_NAME) is None:
                 errors["vpn_key"] = ("Paste the WireGuard private key from your VPN "
                                      "service.")
-        elif not ENV_FILE_VALUE.fullmatch(new_key):
-            errors["vpn_key"] = ("That does not look like a WireGuard key. It has only "
-                                 "letters, digits and + / = and no spaces — copy it again "
-                                 "from your VPN service.")
+        elif not (ENV_FILE_VALUE.fullmatch(new_key) and WIREGUARD_KEY.fullmatch(new_key)):
+            errors["vpn_key"] = ("That does not look like a WireGuard key. A key is 44 "
+                                 "characters long and ends with =. Copy it again from "
+                                 "your VPN service, with no spaces.")
         address = None
         if provider is not None and provider.needs_address:
             text = _text(form, "vpn_address")

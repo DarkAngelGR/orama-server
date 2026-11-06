@@ -1,11 +1,11 @@
 {# The apply checklist, in place. htmx swaps only the list inside it (see _job_poll.html). #}
-{% from "_macros.html" import checklist %}
+{% from "_macros.html" import checklist, poller %}
 <div class="settings-job" id="apply-progress">
   <div id="job-status">
 {%- include "_job_status.html" -%}
   </div>
   {% if running -%}
-  <div id="job-poller" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+  {{ poller('/jobs/current', job) }}
   {%- else -%}
   <div id="job-poller"></div>
   {%- endif %}

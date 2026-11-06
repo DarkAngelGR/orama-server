@@ -1,7 +1,7 @@
 <section id="finish-actions" class="wizard-actions"
   {% if running %}hx-get="{{ url_for('wizard.finish') }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   {% if running %}
-  <a href="{{ url_for('wizard.finish') }}">Refresh installation status</a>
+  <a class="back-link" href="{{ url_for('wizard.finish') }}">Refresh installation status</a>
   {% elif job and job.status == 'done' %}
   {% if 'plex' in setup.media_servers %}
     {% if plex_connected %}<p>Plex sign-in is saved.</p>

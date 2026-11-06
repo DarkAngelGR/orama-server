@@ -9,7 +9,7 @@
   {% if message %}{{ notice('problem' if problem else 'ok', message) }}{% endif %}
   {% include "wizard/_indexer_form.html" %}
   {% for item in setup.indexers %}
-  <section class="wizard-form" aria-label="{{ item.name }}">
+  <section class="wizard-group" aria-label="{{ item.name }}">
     <h2>{{ item.name }}</h2>
     <p>{{ 'Test passed' if item.slug in tested_indexers else 'Needs a successful test' }}</p>
     <div class="wizard-actions">
@@ -24,7 +24,7 @@
   </section>
   {% endfor %}
   {% if 'usenet' in setup.download_methods %}
-  <section class="wizard-form">
+  <section class="wizard-group">
     <h2>Usenet servers</h2>
     <p>Enter the connection details from your Usenet provider.</p>
     <form class="form-stack" method="post" action="{{ url_for('wizard.usenet') }}">
@@ -40,7 +40,7 @@
     </form>
   </section>
   {% for server in setup.usenet_servers %}
-  <section class="wizard-form" aria-label="{{ server.host }}">
+  <section class="wizard-group" aria-label="{{ server.host }}">
     <h3>{{ server.host }}</h3>
     <p>{{ 'Test passed' if server.slug in tested_servers else 'Needs a successful test' }}</p>
     <div class="wizard-actions">

@@ -3,7 +3,7 @@
 {% block title %}Indexers · Settings · Orama{% endblock %}
 {% block content %}
 <div class="settings">
-  <p><a href="/settings#indexers">Back to Settings</a></p>
+  <p><a class="back-link" href="/settings#indexers">Back to Settings</a></p>
   <h1>Indexers</h1>
   <p class="wizard-lead">Indexers help Orama find releases. Changes are applied to your apps as soon as you save.</p>
   {% if message %}{{ notice('problem' if problem else 'ok', message) }}{% endif %}

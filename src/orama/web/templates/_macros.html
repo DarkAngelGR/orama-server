@@ -67,6 +67,12 @@
 <ul id="checklist-items">{% for line in lines %}<li>{{ line }}</li>{% else %}<li>Waiting to start.</li>{% endfor %}</ul>
 {%- endmacro %}
 
+{# The 2 s poller. hx-vals tell the server which lines the page already shows, so a poll
+   brings only new ones (see jobs.poll_view). oob: sent inside a poll answer. #}
+{% macro poller(url, job, oob=false) -%}
+<div id="job-poller"{% if oob %} hx-swap-oob="true"{% endif %} hx-get="{{ url }}" hx-vals='{"seen": {{ job.lines|length }}, "since": {{ (job.started * 1000)|int }}}' hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+{%- endmacro %}
+
 {# lines: plain checklist strings from the job runner, already redacted server-side. #}
 {% macro checklist(lines, running=false) -%}
 <section class="checklist" aria-label="Setup progress" aria-live="polite" aria-relevant="additions text">
@@ -76,9 +82,10 @@
 </section>
 {%- endmacro %}
 
-{% macro notice(kind, text) -%}
+{# quiet: no live-region role, for a notice that is re-sent while something is still going on #}
+{% macro notice(kind, text, quiet=false) -%}
 {% set severity = kind if kind in ('ok', 'wait', 'problem') else 'wait' %}
-<div class="notice notice-{{ severity }}" role="{{ 'alert' if severity == 'problem' else 'status' }}">
+<div class="notice notice-{{ severity }}"{% if not quiet %} role="{{ 'alert' if severity == 'problem' else 'status' }}"{% endif %}>
   <span class="notice-label">{{ {'ok': 'Done', 'wait': 'Please note', 'problem': 'Needs attention'}[severity] }}</span>
   <p>{{ text|default('', true) }}</p>
 </div>

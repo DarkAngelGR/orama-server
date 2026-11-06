@@ -58,6 +58,8 @@ WRONG_PASSWORD = "That is not your current password."
 CHANGED_MEANWHILE = "Settings changed while Orama was testing. Nothing was saved. Try again."
 SAVE_FAILED = "Orama could not save the settings. Nothing was saved."
 RESTORE_FAILED = "Orama could not put the old settings back. Apply again to fix it."
+STUCK = ("Orama saved part of this change but not all of it, and could not undo that. "
+         "Open this entry, type its password again and save it, then check your apps.")
 GRAPHICS_BAD = ("Orama cannot use what the installer found. Run the installer again, then "
                 "try once more.")
 IN_USE = ("You are using Orama through that name right now. Open it with another address "
@@ -180,19 +182,26 @@ def _write_back(path, data: bytes) -> None:
 
 
 def _undo_candidate(st, path, reference: DesiredSetup | None, kind: str, slug: str,
-                    name: str, test, marker_name: str, sent_before: bool) -> bool:
+                    name: str, test, marker_name: str, sent_before: bool,
+                    candidate: DesiredSetup | None = None,
+                    layer: _Candidate | None = None) -> bool:
     """Undo a candidate entry's test in the app when the candidate is not saved.
 
     The test sent the candidate to Prowlarr or SABnzbd. ``reference`` is the setup that stands
     (None: ``setup.json`` as it is now). An entry it has is tested again with the stored
     secrets, which puts its values back in the app; one it lacks that the test created gets a
     removal marker for the next apply. The candidate's ``test-ok`` is dropped either way.
+    A candidate that is the setup itself, with no secret of its own (a replayed form), changed
+    nothing in the app: there is nothing to undo, so no second test runs on the old values.
     Returns False when this could not be done.
     """
     try:
         if reference is None:
             reference = DesiredSetup.load(path)
         st.store.delete(f"test-ok:{kind}:{slug}")
+        if (candidate is not None and layer is not None and candidate == reference
+                and not any(not name.startswith("test-ok:") for name in layer.pending)):
+            return True
         entries = reference.indexers if kind == "indexer" else reference.usenet_servers
         if any(i.slug == slug for i in entries):
             return test(reference, st.store, st.http, slug) is None
@@ -599,7 +608,8 @@ def _pages() -> Blueprint:
                         def undo(reference: DesiredSetup | None = None) -> str:
                             """Undo what the candidate's test did in the app (same apply.lock)."""
                             ok = _undo_candidate(st, path, reference, kind, slug, label,
-                                                 test, marker_name, sent_before)
+                                                 test, marker_name, sent_before,
+                                                 candidate, layer)
                             return "" if ok else f" {RESTORE_FAILED}"
 
                         # Test the candidate first; only a pass is saved and applied.
@@ -612,25 +622,30 @@ def _pages() -> Blueprint:
                         # setup.json first: a failed write must not leave new secrets with
                         # the old setup. If the secrets then fail, the old bytes go back.
                         outcome = ""
-                        with state.locked(state.setup_lock(st.state_dir)):
-                            if (st.state_dir / DRAFT_FILE).exists():
-                                outcome = "draft"
-                            elif path.read_bytes() != snapshot:
-                                outcome = "changed"
-                            else:
-                                try:
-                                    candidate.save(path)
-                                except OSError:
-                                    outcome = "unsaved"
+                        try:
+                            with state.locked(state.setup_lock(st.state_dir)):
+                                if (st.state_dir / DRAFT_FILE).exists():
+                                    outcome = "draft"
+                                elif path.read_bytes() != snapshot:
+                                    outcome = "changed"
                                 else:
                                     try:
-                                        layer.commit()
-                                    except (OSError, ValueError):
+                                        candidate.save(path)
+                                    except OSError:
                                         outcome = "unsaved"
+                                    else:
                                         try:
-                                            _write_back(path, snapshot)
-                                        except OSError:
-                                            outcome = "stuck"
+                                            layer.commit()
+                                        except (OSError, ValueError):
+                                            outcome = "unsaved"
+                                            try:
+                                                _write_back(path, snapshot)
+                                            except OSError:
+                                                outcome = "stuck"
+                        except OSError:
+                            # Lock, read or write failed after a pass: not saved, so the
+                            # undo below must still run.
+                            outcome = outcome or "unsaved"
                         # Not saved after a pass: the app holds the candidate. Undo it now,
                         # with setup.lock released and apply.lock still held.
                         if outcome == "draft":
@@ -641,10 +656,13 @@ def _pages() -> Blueprint:
                             return render_indexers(
                                 _load(st, SETUP_FILE) or setup,
                                 f"{CHANGED_MEANWHILE}{tail}", True, 409)
+                        if outcome == "stuck":
+                            # setup.json holds the candidate, the secrets do not: nothing
+                            # true can be said except what is half done.
+                            return render_indexers(_load(st, SETUP_FILE) or setup, STUCK,
+                                                   True, 500)
                         if outcome:
                             tail = undo(setup)
-                            if outcome == "stuck":
-                                tail = f" {RESTORE_FAILED}"
                             return render_indexers(setup, f"{SAVE_FAILED}{tail}", True, 500)
                         setup = candidate
                         message = f"{label} works. Applying it now."
