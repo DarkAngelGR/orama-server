@@ -490,3 +490,48 @@ def test_redacting_filter_public_redact(tmp_path):
     flt = RedactingFilter(st)
     assert flt.redact(f"hello {value} there") == "hello *** there"
     assert "abc123" not in flt.redact("password: abc123")
+
+
+# Names whose values are bookkeeping, not secrets: shown in checklist lines as they are.
+PUBLIC = {
+    "remove:indexer:nyaa": "Nyaa Tracker",
+    "remove:usenet:news-example": "news-example",
+    "user:jellyfin": "movie-owner",
+    "test-ok:indexer:nyaa": "1",
+    "prowlarr:indexer:nyaa:sent": "pending",
+    "prowlarr:sync:pending": "1",
+    "usenet:news-example:sent": "pending",
+    "arr:sonarr:sabnzbd:sent": "digest-value",
+    "bazarr:opensubtitles:sent": "digest-value-2",
+    "plex:client_id": "client-id-value",
+    "plex:network:sent": "network-value",
+    "restart:gluetun-qbittorrent": "done",
+    "draft:del:remove:indexer:nyaa": "1",
+}
+
+
+def test_redaction_leaves_bookkeeping_values_alone(tmp_path):
+    st = SecretStore(tmp_path / "s.bin")
+    st.update(PUBLIC)
+    flt = RedactingFilter(st)
+    line = "✓ Prowlarr: removed the Nyaa Tracker indexer; news-example removed; movie-owner"
+    assert flt.redact(line) == line
+    assert flt.redact("still pending") == "still pending"
+
+
+SECRET_NAMES = [
+    "vpn:wireguard_private_key", "password:jellyfin", "password:qbittorrent",
+    "password:gluetun-proxy", "apikey:sonarr", "apikey:bazarr", "nzbkey:sabnzbd", "token:plex",
+    "indexer:nyaa:apiKey", "indexer:nyaa:cookie", "indexer:nyaa:sent",
+    "usenet:news-example:password", "qbhash:qbittorrent", "opensubtitles:password",
+    "opensubtitles:username", "draft:set:vpn:wireguard_private_key",
+    "draft:set:indexer:nyaa:apiKey", "something:new",
+]
+
+
+@pytest.mark.parametrize("name", SECRET_NAMES)
+def test_redaction_still_hides_every_secret_family(tmp_path, name):
+    st = SecretStore(tmp_path / "s.bin")
+    value = random_secret("s")
+    st.update({**PUBLIC, name: value})
+    assert RedactingFilter(st).redact(f"before {value} after") == "before *** after"
