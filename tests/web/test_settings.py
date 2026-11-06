@@ -695,3 +695,75 @@ def test_post_without_csrf_token_is_refused(signed, app):
     response = signed.post("/settings/playback", data={"device": "lg", "quality": "4k"})
     assert response.status_code == 403
     assert (sd(app) / "setup.json").read_bytes() == before
+
+
+# ------------------------------------------------------------------ no network under setup.lock
+
+
+def test_slow_test_does_not_hold_setup_lock(signed, app, runner, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    _store, slug, _key = seeded_indexer(app)
+    started, release = threading.Event(), threading.Event()
+    got = {}
+
+    def slow(setup, store_, http, slug_):
+        started.set()
+        release.wait(10)
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+
+    monkeypatch.setattr(prowlarr, "test_indexer", slow)
+    edit = signed.get(f"/settings/indexers?edit={slug}")
+    form = {"csrf_token": csrf_from(edit), "edit": slug, "definition": "Newznab",
+            "field:apiKey": secrets.token_urlsafe(20), "field:baseUrl": "https://indexer.example"}
+    worker = threading.Thread(
+        target=lambda: got.setdefault("r", signed.post("/settings/indexers", data=form)))
+    worker.start()
+    try:
+        assert started.wait(10)
+        # While the test is "on the network", setup.lock is free for everyone else.
+        with state.locked(state.setup_lock(sd(app)), blocking=False):
+            got["free"] = True
+    finally:
+        release.set()
+        worker.join(10)
+    assert got["free"] and got["r"].status_code == 200
+
+
+def test_setup_changed_during_test_saves_nothing(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+
+    def changes_meanwhile(setup, store_, http, slug_):
+        forms._rebuild(live(app), device="lg").save(sd(app) / "setup.json")
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+
+    monkeypatch.setattr(prowlarr, "test_indexer", changes_meanwhile)
+    response = edit_with(signed, slug, secrets.token_urlsafe(20))
+    assert response.status_code == 409
+    assert "Settings changed while Orama was testing. Nothing was saved. Try again." in page(response)
+    assert live(app).device == "lg"  # the other change stands
+    assert live(app).indexers[0].fields["baseUrl"] == "https://indexer.example"
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert starts(runner) == []
+
+
+def test_replayed_usenet_server_that_fails_is_not_queued_for_removal(
+        signed, app, runner, monkeypatch):
+    store = app.extensions["orama"].store
+    form = {"host": "news.example", "port": "563", "connections": "20", "username": "me",
+            "ssl": "on", "password": secrets.token_urlsafe(20)}
+    setup, slug = forms.add_usenet_server(live(app), form, store)
+    setup.save(sd(app) / "setup.json")
+
+    def created_then_failed(setup_, store_, http, slug_):
+        store_.set(sabnzbd.sent_marker_name(slug_), "recorded")
+        return "Login refused."
+
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", created_then_failed)
+    replay = {k: v for k, v in form.items() if k != "password"}
+    response = post(signed, "/settings/usenet", token_from="/settings/indexers", **replay)
+    assert response.status_code == 400 and "Login refused." in page(response)
+    assert store.get(sabnzbd.REMOVE_PREFIX + slug) is None
+    assert live(app).usenet_servers[0].slug == slug

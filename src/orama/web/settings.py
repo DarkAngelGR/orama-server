@@ -52,6 +52,7 @@ RETYPE = {
 
 PASSWORD_MISMATCH = "The two new passwords do not match."
 WRONG_PASSWORD = "That is not your current password."
+CHANGED_MEANWHILE = "Settings changed while Orama was testing. Nothing was saved. Try again."
 GRAPHICS_BAD = ("Orama cannot use what the installer found. Run the installer again, then "
                 "try once more.")
 IN_USE = ("You are using Orama through that name right now. Open it with another address "
@@ -505,80 +506,97 @@ def _pages() -> Blueprint:
                 job = st.jobs.current()
                 if job and job.status == "running":
                     raise state.Busy
+                # apply.lock (non-blocking) serialises this with every apply and test. No
+                # network call happens while setup.lock is held: it is taken only to write.
                 with state.locked(state.apply_lock(st.state_dir), blocking=False):
-                    with state.locked(state.setup_lock(st.state_dir)):
-                        if (st.state_dir / DRAFT_FILE).exists():
-                            return draft_page()
-                        setup = DesiredSetup.load(path)
-                        if kind == "indexer":
-                            items, remove = setup.indexers, forms.remove_indexer
-                            test = prowlarr.test_indexer
-                            marker = prowlarr.sent_marker_name
-                        else:
-                            items, remove = setup.usenet_servers, forms.remove_usenet_server
-                            test = sabnzbd.test_usenet_server
-                            marker = sabnzbd.sent_marker_name
-                        if action != "add" and not any(i.slug == slug for i in items):
+                    if (st.state_dir / DRAFT_FILE).exists():
+                        return draft_page()
+                    snapshot = path.read_bytes()
+                    setup = DesiredSetup.model_validate_json(snapshot)
+                    if kind == "indexer":
+                        items, remove = setup.indexers, forms.remove_indexer
+                        test = prowlarr.test_indexer
+                        marker = prowlarr.sent_marker_name
+                    else:
+                        items, remove = setup.usenet_servers, forms.remove_usenet_server
+                        test = sabnzbd.test_usenet_server
+                        marker = sabnzbd.sent_marker_name
+                    if action != "add" and not any(i.slug == slug for i in items):
+                        abort(404)
+                    if action == "add":
+                        edit_key = "edit" if kind == "indexer" else "edit-usenet"
+                        edit_slug = request.form.get(edit_key)
+                        existing = next((i for i in items if i.slug == edit_slug), None)
+                        if edit_slug and existing is None:
                             abort(404)
-                        if action == "add":
-                            edit_key = "edit" if kind == "indexer" else "edit-usenet"
-                            edit_slug = request.form.get(edit_key)
-                            existing = next((i for i in items if i.slug == edit_slug), None)
-                            if edit_slug and existing is None:
-                                abort(404)
-                            # Build the candidate without touching the real secret store.
-                            layer = _Candidate(st.store)
-                            buffer = layer.buffer()
-                            if kind == "indexer":
-                                choice = (existing.definition if existing
-                                          else request.form.get("definition"))
-                                definition = next(
-                                    (d for d in definitions or ()
-                                     if d.definition.casefold() == (choice or "").casefold()),
-                                    None)
-                                if definition is None:
-                                    raise forms.Invalid(
-                                        {"definition": "Choose an indexer from the list."})
-                                candidate, slug = forms.add_indexer(
-                                    setup, definition, request.form, buffer, existing=existing)
-                            else:
-                                candidate, slug = forms.add_usenet_server(
-                                    setup, request.form, buffer, existing=existing)
-                            entries = candidate.indexers if kind == "indexer" else candidate.usenet_servers
-                            entry = next(i for i in entries if i.slug == slug)
-                            label = entry.name if kind == "indexer" else entry.host
-                            sent_before = bool(st.store.get(marker(
-                                f"indexer:{slug}" if kind == "indexer" else slug)))
-                            # Test the candidate first; only a pass is saved and applied.
-                            error = test(candidate, layer, st.http, slug)
-                            if error:
-                                if existing is not None:
-                                    # The test pushed the candidate into the app: put the old
-                                    # entry (old setup, old stored secret) back, same lock.
-                                    again = test(setup, st.store, st.http, slug)
-                                    error += " Nothing was saved."
-                                    if again:
-                                        error += (" Orama could not put the old settings back. "
-                                                  "Apply again to fix it.")
-                                    return render_indexers(setup, error, True, 400)
-                                if not sent_before and st.store.get(marker(
-                                        f"indexer:{slug}" if kind == "indexer" else slug)):
-                                    # The test created it in the app: have the next apply remove it.
-                                    if kind == "indexer":
-                                        st.store.set(prowlarr.REMOVE_PREFIX + slug, entry.name)
-                                    else:
-                                        st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+                        # Build the candidate without touching the real secret store.
+                        layer = _Candidate(st.store)
+                        buffer = layer.buffer()
+                        if kind == "indexer":
+                            choice = (existing.definition if existing
+                                      else request.form.get("definition"))
+                            definition = next(
+                                (d for d in definitions or ()
+                                 if d.definition.casefold() == (choice or "").casefold()),
+                                None)
+                            if definition is None:
+                                raise forms.Invalid(
+                                    {"definition": "Choose an indexer from the list."})
+                            candidate, slug = forms.add_indexer(
+                                setup, definition, request.form, buffer, existing=existing)
+                        else:
+                            candidate, slug = forms.add_usenet_server(
+                                setup, request.form, buffer, existing=existing)
+                        entries = candidate.indexers if kind == "indexer" else candidate.usenet_servers
+                        entry = next(i for i in entries if i.slug == slug)
+                        label = entry.name if kind == "indexer" else entry.host
+                        marker_name = marker(f"indexer:{slug}" if kind == "indexer" else slug)
+                        sent_before = bool(st.store.get(marker_name))
+                        # Test the candidate first; only a pass is saved and applied.
+                        error = test(candidate, layer, st.http, slug)
+                        if error:
+                            if existing is not None:
+                                # The test pushed the candidate into the app: put the old
+                                # entry (old setup, old stored secret) back, same apply.lock.
+                                again = test(setup, st.store, st.http, slug)
+                                error += " Nothing was saved."
+                                if again:
+                                    error += (" Orama could not put the old settings back. "
+                                              "Apply again to fix it.")
+                                return render_indexers(setup, error, True, 400)
+                            if (not sent_before and st.store.get(marker_name)
+                                    and not any(i.slug == slug for i in items)):
+                                # The test created it in the app and it is not in the setup:
+                                # have the next apply remove it.
+                                if kind == "indexer":
+                                    st.store.set(prowlarr.REMOVE_PREFIX + slug, entry.name)
+                                else:
+                                    st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+                            return render_indexers(
+                                setup, f"{error} Nothing was saved.", True, 400)
+                        with state.locked(state.setup_lock(st.state_dir)):
+                            if (st.state_dir / DRAFT_FILE).exists():
+                                return draft_page()
+                            if path.read_bytes() != snapshot:
                                 return render_indexers(
-                                    setup, f"{error} Nothing was saved.", True, 400)
+                                    DesiredSetup.load(path), CHANGED_MEANWHILE, True, 409)
                             layer.commit()
                             candidate.save(path)
-                            setup = candidate
-                            message = f"{label} works. Applying it now."
-                        elif action == "remove":
+                        setup = candidate
+                        message = f"{label} works. Applying it now."
+                    elif action == "remove":
+                        with state.locked(state.setup_lock(st.state_dir)):
+                            if (st.state_dir / DRAFT_FILE).exists():
+                                return draft_page()
+                            setup = DesiredSetup.load(path)
+                            if not any(i.slug == slug for i in (
+                                    setup.indexers if kind == "indexer"
+                                    else setup.usenet_servers)):
+                                abort(404)
                             # A live entry: its removal step in the next apply deletes it.
                             setup = remove(setup, slug, st.store, keep_credentials=True)
                             setup.save(path)
-                            message = "Removed."
+                        message = "Removed."
                     if action == "test":
                         error = test(setup, st.store, st.http, slug)
                         entries = setup.indexers if kind == "indexer" else setup.usenet_servers
