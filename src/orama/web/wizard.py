@@ -1,7 +1,8 @@
 """The setup wizard: one page per step, editing ``setup.draft.json``.
 
 The draft is the installer's ``setup.draft.json``; when only ``setup.json`` exists the first
-save copies it into a draft. The saved setup is never changed here. The step list is data:
+save copies it into a draft. The draft becomes ``setup.json`` (see :func:`_promote`) only when
+an apply starts from the wizard: the first one (after Downloads) and Install. The step list is data:
 a step is "ready" (linked) once a page for ``/setup/<key>`` is registered, so later tasks
 add their steps by adding the page.
 """
@@ -19,7 +20,7 @@ from orama.secrets import JELLYFIN_USER_NAME, PLEX_TOKEN_NAME, VPN_KEY_NAME
 from orama.setup_model import DesiredSetup
 from orama.web import auth, catalogue, forms
 from orama.web.jobs import TEST_BUSY, apply_operation
-from orama.wiring import prowlarr, sabnzbd
+from orama.wiring import jellyfin, prowlarr, sabnzbd
 
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
@@ -91,6 +92,12 @@ def _working_setup(st) -> DesiredSetup | None:
     return None
 
 
+def _promote(st, setup: DesiredSetup) -> None:
+    """Make ``setup`` the real setup and drop the draft. The caller holds ``setup.lock``."""
+    setup.save(st.state_dir / SETUP_FILE)  # atomic: temp file and rename
+    (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
+
+
 def register_wizard(app: Flask) -> None:
     app.register_blueprint(_wizard_pages())
 
@@ -149,7 +156,13 @@ def _wizard_pages() -> Blueprint:
                 try:
                     with apply_operation(st):
                         if _first_apply_due(st):
-                            st.jobs.start(st.state_dir / DRAFT_FILE)
+                            # Promote the draft, so "Apply again" has a setup to apply
+                            # even when this first apply fails.
+                            with state.locked(state.setup_lock(st.state_dir)):
+                                draft = _working_setup(st)
+                                if draft is not None:
+                                    _promote(st, draft)
+                            st.jobs.start(st.state_dir / SETUP_FILE)
                 except state.Busy:
                     return render_template("rejected.html", message=TEST_BUSY), 409
                 return redirect("/setup/starting", 303)
@@ -167,9 +180,12 @@ def _wizard_pages() -> Blueprint:
     def starting():
         st = auth.web_state()
         job = st.jobs.current()
+        # The page polls itself, so the Continue button appears when the job ends.
         return render_template(
-            "wizard/starting.html", job=job, running=bool(job and job.status == "running"),
-            next_url=_neighbour("downloads", 1),
+            "_job_poll.html" if request.headers.get("HX-Request") == "true"
+            else "wizard/starting.html",
+            job=job, running=bool(job and job.status == "running"),
+            next_url=_neighbour("downloads", 1), starting=True, poll_url="/setup/starting",
         )
 
     def render_indexers(setup, message="", problem=False, status=200):
@@ -221,7 +237,11 @@ def _wizard_pages() -> Blueprint:
         setup = _working_setup(st)
         if setup is None:
             abort(409)
+        definitions = None
         try:
+            if kind == "indexer" and action == "add":
+                # Up to a few seconds of HTTP: read it before taking any lock.
+                definitions = catalogue.load(st.store, st.http, setup.download_methods)
             with (apply_operation(st),
                   state.locked(state.apply_lock(st.state_dir), blocking=False)):
                 job = st.jobs.current()
@@ -248,10 +268,9 @@ def _wizard_pages() -> Blueprint:
                         if edit_slug and existing is None:
                             abort(404)
                         if kind == "indexer":
-                            definitions = catalogue.load(st.store, st.http, setup.download_methods)
                             choice = existing.definition if existing else request.form.get("definition")
                             definition = next(
-                                (d for d in definitions if d.definition.casefold() ==
+                                (d for d in definitions or () if d.definition.casefold() ==
                                  (choice or "").casefold()), None,
                             )
                             if definition is None:
@@ -364,8 +383,7 @@ def _wizard_pages() -> Blueprint:
                         return render_review(
                             setup, "Test at least one Usenet server before installing.", 400,
                         )
-                    setup.save(st.state_dir / SETUP_FILE)
-                    (st.state_dir / DRAFT_FILE).unlink(missing_ok=True)
+                    _promote(st, setup)
                 # The child acquires the same apply lock. Release it before starting the child.
                 st.jobs.start(st.state_dir / SETUP_FILE)
         except state.Busy:
@@ -390,7 +408,7 @@ def _wizard_pages() -> Blueprint:
             job=job, setup=setup,
             running=bool(job and job.status == "running"),
             plex_connected=bool(st.store.get(PLEX_TOKEN_NAME)),
-            jellyfin_custom_user=bool(st.store.get(JELLYFIN_USER_NAME)),
+            jellyfin_user=st.store.get(JELLYFIN_USER_NAME) or jellyfin.ADMIN_USER,
         )
 
     return pages

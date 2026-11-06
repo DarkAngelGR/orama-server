@@ -9,14 +9,11 @@
 {%- include "_job_status.html" -%}
   </div>
   {% if running -%}
-  <div id="job-poller" hx-get="/jobs/current" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
+  <div id="job-poller" hx-get="{{ poll_url }}" hx-trigger="every 2s" hx-target="#checklist-items" hx-swap="outerHTML"></div>
   {%- else -%}
   <div id="job-poller"></div>
   {%- endif %}
   {{ checklist(job.lines if job else [], false) }}
-  {% if next_url %}
-  <p class="wizard-lead">When the list says all done, carry on with the next step.</p>
-  <div class="wizard-actions"><a class="button button-primary" href="{{ next_url }}">Continue</a></div>
-  {% endif %}
+  {% with oob = false %}{% include "wizard/_starting_next.html" %}{% endwith %}
 </div>
 {% endblock %}

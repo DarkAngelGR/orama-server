@@ -253,14 +253,21 @@ def test_downloads_save_starts_one_job(app, signed, first_time, tmp_path):
             if log.exists() and log.read_text().strip():
                 break
             deadline.wait(0.02)
-        assert log.read_text().split() == [str(state_dir / "setup.draft.json")]
+        assert log.read_text().split() == [str(state_dir / "setup.json")]
         page = text(signed.get("/setup/starting"))
         assert "Starting your apps — this can take a few minutes the first time" in page
-        assert 'id="checklist-items"' in page and 'hx-get="/jobs/current"' in page
+        assert 'id="checklist-items"' in page and 'hx-get="/setup/starting"' in page
+        assert "Continue" not in page  # not while the apps are still starting
+        poll = text(signed.get("/setup/starting", headers={"HX-Request": "true"}))
+        assert 'id="starting-next" hx-swap-oob="true"' in poll and "Continue" not in poll
     finally:
         gate.write_text("x")
         runner.wait(10)
-    assert log.read_text().split() == [str(state_dir / "setup.draft.json")]
+    assert log.read_text().split() == [str(state_dir / "setup.json")]
+    poll = text(signed.get("/setup/starting", headers={"HX-Request": "true"}))
+    assert 'id="starting-next" hx-swap-oob="true"' in poll and "Continue" in poll
+    assert "every 2s" not in poll
+    assert "Continue" in text(signed.get("/setup/starting"))
 
 
 def test_downloads_save_after_setup_exists_starts_nothing(app, signed, tmp_path):
@@ -287,7 +294,35 @@ def test_second_visit_before_any_setup_does_not_start_again(app, signed, first_t
     runner.wait(10)
     post(signed, "/setup/downloads", usenet="on")
     assert log.read_text().split() == [str(app.extensions["orama"].state_dir
-                                           / "setup.draft.json")]
+                                           / "setup.json")]
+
+
+def test_failed_first_apply_can_be_applied_again(app, signed, first_time, tmp_path):
+    state_dir = app.extensions["orama"].state_dir
+    log = tmp_path / "starts.log"
+    code = f"import sys\nopen({str(log)!r},'a').write(sys.argv[1]+'\\n')\nraise SystemExit(1)\n"
+    runner = JobRunner(state_dir, lambda p: [sys.executable, "-c", code, str(p)])
+    app.extensions["orama"].jobs = runner
+    response = post(signed, "/setup/downloads", torrent="on")
+    assert response.headers["Location"] == "/setup/starting"
+    assert runner.wait(10) and runner.current().status == "failed"
+    # The first apply promoted the draft: there is a real setup to apply again.
+    assert not (state_dir / "setup.draft.json").exists()
+    assert DesiredSetup.load(state_dir / "setup.json").download_methods == frozenset({"torrent"})
+    page = text(signed.get("/setup/downloads"))
+    assert re.search(r'name="torrent" value="on"\s*checked', page)
+    assert not re.search(r'name="usenet" value="on"\s*checked', page)
+    token = csrf_from(signed.get("/setup/starting"))
+    again = signed.post("/jobs/apply", data={"csrf_token": token})
+    assert again.status_code == 303
+    assert runner.wait(10)
+    assert log.read_text().split() == [str(state_dir / "setup.json")] * 2
+    # A later step edits a new draft made from the saved setup; the saved one stays.
+    saved = DesiredSetup.load(state_dir / "setup.json")
+    assert post(signed, "/setup/playback", device="lg", quality="4k").status_code == 303
+    assert draft_of(app).download_methods == frozenset({"torrent"})
+    assert draft_of(app).device == "lg"
+    assert DesiredSetup.load(state_dir / "setup.json") == saved
 
 
 def test_starting_page_needs_sign_in(client, password):

@@ -12,7 +12,7 @@ empty secret input keeps the stored value. Nothing here ever returns a secret.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from ipaddress import AddressValueError, IPv4Interface
 from typing import Any
 
@@ -118,15 +118,27 @@ def _model_messages(e: ValidationError, default_field: str) -> dict[str, str]:
 # ---------------------------------------------------------------- indexers and Usenet
 
 
-def _new_slug(name: str, fallback: str, used: set[str], pending_prefix: str, store) -> str:
+def _new_slug(name: str, fallback: str, used: set[str], pending_prefix: str, store,
+              same_entry: Callable[[str, str], bool]) -> tuple[str, bool]:
+    """A slug for a new entry, and whether it takes back an entry waiting to be removed.
+
+    An entry removed but not yet deleted from the app (``<pending_prefix><slug>`` set, and
+    ``same_entry(slug, value)`` true) is taken back under its old slug, so the app's existing
+    item is updated instead of a second one being refused as "not set up by Orama".
+    """
     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40].rstrip("-") or fallback
     slug = base
     suffix = 2
-    while slug in used or store.get(pending_prefix + slug):
+    while True:
+        if slug not in used:
+            pending = store.get(pending_prefix + slug)
+            if not pending:
+                return slug, False
+            if same_entry(slug, pending):
+                return slug, True
         tail = f"-{suffix}"
         slug = base[:40 - len(tail)].rstrip("-") + tail
         suffix += 1
-    return slug
 
 
 def _indexer_value(field: IndexerField, raw: str) -> str | int | bool:
@@ -148,9 +160,12 @@ def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
     if definition.protocol not in setup.download_methods:
         raise Invalid({"definition": "Choose an indexer for a download method you turned on."})
     name = existing.name if existing else _text(form, "name") or definition.name
-    slug = existing.slug if existing else _new_slug(
-        name, "indexer", {item.slug for item in setup.indexers}, prowlarr.REMOVE_PREFIX, store,
-    )
+    if existing:
+        slug, reused = existing.slug, False
+    else:
+        # Prowlarr knows an indexer by its exact name: take back only the same name.
+        slug, reused = _new_slug(name, "indexer", {item.slug for item in setup.indexers},
+                                 prowlarr.REMOVE_PREFIX, store, lambda _, old: old == name)
     fields = dict(existing.fields) if existing else {}
     private_fields = set(existing.secret_fields) if existing else set()
     secrets: dict[str, str] = {}
@@ -169,6 +184,8 @@ def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
                 secrets[field.name] = raw
             elif isinstance(prior, str):
                 secrets[field.name] = prior
+            elif reused and store.get(f"indexer:{slug}:{field.name}") is not None:
+                private_fields.add(field.name)  # kept from before the removal
             continue
         if not raw and field.kind != "checkbox":
             continue  # Leave the Prowlarr template default in place.
@@ -187,7 +204,9 @@ def add_indexer(setup: DesiredSetup, definition: IndexerDefinition,
         raise Invalid({"name": "Check the indexer details and use a different name."}) from None
     for field_name, value in secrets.items():
         store.set(f"indexer:{slug}:{field_name}", value)
-    if existing:
+    if reused:
+        store.delete(prowlarr.REMOVE_PREFIX + slug)  # its sent marker stays: it is still Orama's
+    if existing or reused:
         store.delete(f"test-ok:indexer:{slug}")
     return updated, slug
 
@@ -200,18 +219,23 @@ def add_usenet_server(setup: DesiredSetup, form: Mapping[str, str],
     password = form.get("password", "")
     if password and not _printable_line(password):
         raise Invalid({"password": "Enter a shorter password on one line."})
-    slug = existing.slug if existing else _new_slug(
-        host, "usenet", {server.slug for server in setup.usenet_servers}, sabnzbd.REMOVE_PREFIX, store,
-    )
+    if existing:
+        slug, reused = existing.slug, False
+    else:
+        # SABnzbd knows a server by its slug.
+        slug, reused = _new_slug(host, "usenet", {server.slug for server in setup.usenet_servers},
+                                 sabnzbd.REMOVE_PREFIX, store, lambda new, old: old == new)
     try:
         server = UsenetServer(slug=slug, host=host, port=_text(form, "port") or "563",
                               ssl=_on(form, "ssl"), connections=_text(form, "connections") or "20",
                               username=_text(form, "username"))
         if existing is None:
-            # A refresh can replay the add form. Re-test the same entry on an exact match.
+            # A refresh can replay the add form. Re-test the same entry on an exact match;
+            # an empty password means "keep the saved one", as on the edit form.
             for item in setup.usenet_servers:
+                saved = store.get(f"usenet:{item.slug}:password") or ""
                 if (item == server.model_copy(update={"slug": item.slug})
-                        and (store.get(f"usenet:{item.slug}:password") or "") == password):
+                        and (not password or saved == password)):
                     return setup, item.slug
         others = tuple(item for item in setup.usenet_servers if item.slug != slug)
         updated = _rebuild(setup, usenet_servers=(*others, server))
@@ -219,7 +243,9 @@ def add_usenet_server(setup: DesiredSetup, form: Mapping[str, str],
         raise Invalid({"host": "Check the server address, port and number of connections."}) from None
     if password:
         store.set(f"usenet:{slug}:password", password)
-    if existing:
+    if reused:
+        store.delete(sabnzbd.REMOVE_PREFIX + slug)  # its sent marker stays: it is still Orama's
+    if existing or reused:
         store.delete(f"test-ok:usenet:{slug}")
     return updated, slug
 
@@ -229,9 +255,12 @@ def remove_indexer(setup: DesiredSetup, slug: str, store, *, keep_credentials=Fa
     if item is None:
         return setup
     updated = _rebuild(setup, indexers=tuple(other for other in setup.indexers if other != item))
-    if store.get(prowlarr.sent_marker_name(f"indexer:{slug}")):
+    sent = bool(store.get(prowlarr.sent_marker_name(f"indexer:{slug}")))
+    if sent:
         store.set(prowlarr.REMOVE_PREFIX + slug, item.name)
-    if not keep_credentials:
+    # Credentials of a live entry stay until the removal step deletes them; one never sent
+    # has no removal step, so nothing else would ever delete them.
+    if not (keep_credentials and sent):
         for field_name in item.secret_fields:
             store.delete(f"indexer:{slug}:{field_name}")
     store.delete(f"test-ok:indexer:{slug}")
@@ -243,9 +272,11 @@ def remove_usenet_server(setup: DesiredSetup, slug: str, store, *, keep_credenti
     if len(remaining) == len(setup.usenet_servers):
         return setup
     updated = _rebuild(setup, usenet_servers=remaining)
-    if store.get(sabnzbd.sent_marker_name(slug)):
+    sent = bool(store.get(sabnzbd.sent_marker_name(slug)))
+    if sent:
         store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
-    if not keep_credentials:
+    # As for indexers: a server never sent has no removal step to delete its password.
+    if not (keep_credentials and sent):
         store.delete(f"usenet:{slug}:password")
     store.delete(f"test-ok:usenet:{slug}")
     return updated
@@ -494,7 +525,10 @@ def apply_playback(
         errors["quality"] = "Choose the quality you prefer."
     if errors:
         raise Invalid(errors)
-    return _rebuild(setup, device=device, quality=quality)
+    try:
+        return _rebuild(setup, device=device, quality=quality)
+    except ValidationError as e:
+        raise Invalid(_model_messages(e, "device")) from None
 
 
 # ---------------------------------------------------------------- subtitles

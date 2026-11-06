@@ -242,3 +242,37 @@ def test_test_usenet_server_missing_password_points_to_settings(tmp_path):
     store.delete("usenet:eweka:password")
     msg = check_usenet_server(setup, store, sab.http, "eweka")
     assert "set-secret" not in msg and "Settings" in msg
+
+
+def test_marker_is_pending_before_create_and_lost_answer_is_adopted(tmp_path):
+    from orama.wiring.http import Unreachable
+
+    sab = FakeSab()
+    setup, store = make(tmp_path)
+    seen = []
+
+    def lost(call):
+        if call.form["mode"] == "set_config" and call.form["section"] == "servers":
+            seen.append(store.get(sent_marker_name("eweka")))
+            sab.handle(call)
+            raise Unreachable("sabnzbd")
+        return sab.handle(call)
+
+    sab.http.route("POST", "/api", lost)
+    results = run_steps(sabnzbd_steps(setup, store, sab.http))
+    assert statuses(results)["sabnzbd:server:eweka"] == "failed"
+    assert seen == ["pending"]
+    assert store.get(sent_marker_name("eweka")) == "pending"
+    sab.http.route("POST", "/api", sab.handle)
+    assert check_usenet_server(setup, store, sab.http, "eweka") is None
+    assert list(sab.servers) == ["eweka"]
+    assert sab.passwords["eweka"] == AWKWARD
+    assert store.get(sent_marker_name("eweka")) not in (None, "pending")
+
+
+def test_server_without_any_marker_is_still_refused_by_test(tmp_path):
+    sab = FakeSab()
+    setup, store = make(tmp_path)
+    sab.servers["eweka"] = {"name": "eweka", "host": "existing.example"}
+    assert "did not set up" in check_usenet_server(setup, store, sab.http, "eweka")
+    assert sab.servers["eweka"]["host"] == "existing.example"

@@ -711,3 +711,58 @@ def test_messages_point_to_settings_not_set_secret(tmp_path):
     by = {r.name: r for r in run(setup, store, pw)}
     assert "set-secret" not in by["prowlarr:indexer:geek"].message
     assert "in Settings" in by["prowlarr:indexer:geek"].message
+
+
+def _lost_answer(pw, seen, store):
+    """POST /indexer saves the row, then the answer never arrives (timeout or a kill)."""
+    from orama.wiring.http import Unreachable
+
+    def handler(call):
+        seen.append(store.get(sent_marker_name("indexer:geek")))
+        pw.post(call, "indexer", pw.indexers)
+        raise Unreachable("prowlarr")
+
+    return pw.guard(handler)
+
+
+def test_marker_is_pending_before_create_and_lost_answer_is_adopted(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    seen = []
+    pw.http.route("POST", f"{API}/indexer", _lost_answer(pw, seen, store))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "failed"
+    marker = sent_marker_name("indexer:geek")
+    assert seen == ["pending"]  # written before Prowlarr was asked to create it
+    assert store.get(marker) == "pending"
+    assert len(pw.indexers) == 1
+    pw.http.route("POST", f"{API}/indexer", pw.guard(lambda c: pw.post(c, "indexer", pw.indexers)))
+    assert check_indexer(setup, store, pw.http, "geek") is None
+    assert len(pw.indexers) == 1  # adopted and finished, not created again
+    assert store.get(marker) == sha256(json.dumps({"apikey": TRICKY}).encode()).hexdigest()
+    assert pw.value(pw.by_name(pw.indexers, "NZBGeek"), "apikey") == TRICKY
+
+
+def test_refused_create_leaves_no_pending_marker(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)
+    pw.http.route("POST", f"{API}/indexer", pw.guard(lambda c: Response(400, {}, b"[]")))
+    by = {r.name: r for r in run(setup, store, pw)}
+    assert by["prowlarr:indexer:geek"].status == "failed"
+    assert store.get(sent_marker_name("indexer:geek")) is None
+    mine = pw.add_user_indexer("NZBGeek")  # made by the user afterwards: never adopted
+    mine["definitionName"] = "geek"
+    pw.http.route("POST", f"{API}/indexer", pw.guard(lambda c: pw.post(c, "indexer", pw.indexers)))
+    assert "did not set up" in check_indexer(setup, store, pw.http, "geek")
+
+
+def test_pending_removal_is_skipped_only_while_the_setup_has_its_slug(tmp_path):
+    pw = FakeProwlarr()
+    setup, store = make(tmp_path)  # GEEK, slug "geek", name "NZBGeek"
+    store.set("remove:indexer:geek", "NZBGeek")
+    names = [s.name for s in prowlarr_steps(setup, store, pw.http)]
+    assert "prowlarr:remove:geek" not in names
+    store.delete("remove:indexer:geek")
+    store.set("remove:indexer:other", "NZBGeek")  # same name, another slug: still removed
+    names = [s.name for s in prowlarr_steps(setup, store, pw.http)]
+    assert "prowlarr:remove:other" in names

@@ -2,7 +2,7 @@
   {% if running %}hx-get="{{ url_for('wizard.finish') }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   {% if running %}
   <a href="{{ url_for('wizard.finish') }}">Refresh installation status</a>
-  {% else %}
+  {% elif job and job.status == 'done' %}
   {% if 'plex' in setup.media_servers %}
     {% if plex_connected %}<p>Plex sign-in is saved.</p>
     {% else %}
@@ -12,8 +12,8 @@
     </form>
     {% endif %}
   {% endif %}
-  {% if 'jellyfin' in setup.media_servers and job and job.status == 'done' %}
-  <p>Jellyfin is ready. Sign in as {{ 'the admin you chose' if jellyfin_custom_user else 'orama-admin' }}.</p>
+  {% if 'jellyfin' in setup.media_servers %}
+  <p>Jellyfin is ready — sign in as {{ jellyfin_user }}.</p>
   {% endif %}
   {% endif %}
 </section>
