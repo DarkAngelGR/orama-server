@@ -1,0 +1,7 @@
+{
+  "name": "Orama Server",
+  "description": "Control application and web interface for Orama media stack deployment and management.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
