@@ -1,0 +1,23 @@
+<% if (typeof down !== 'undefined' && down) { %>
+<div id="apps-notice" class="notice notice-wait" role="status">
+  <p>Orama cannot reach its helper right now — the apps keep running. Try again in a minute.</p>
+</div>
+<% } %>
+
+<% if (typeof rows !== 'undefined' && rows.length > 0) { %>
+<ul class="app-list">
+  <% rows.forEach(function(row) { %>
+  <li class="app-row" id="app-row-<%= row.key %>">
+    <span class="app-name"><%= row.name %></span>
+    <% if (row.state) { %>
+      <span class="app-state app-state-<%= row.state.toLowerCase().replace(/\s+/g, '-') %>"><%= row.state %></span>
+    <% } %>
+    <% if (row.url) { %>
+      <a class="button button-secondary" id="app-open-<%= row.key %>" href="<%= row.url %>" target="_blank" rel="noopener noreferrer" aria-label="Open <%= row.name %> in a new tab">Open</a>
+    <% } %>
+  </li>
+  <% }); %>
+</ul>
+<% } else { %>
+<p style="margin-top: 1rem;">No apps are set up yet.</p>
+<% } %>

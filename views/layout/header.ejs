@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Orama Server: control app that deploys and manages a Docker Compose home media stack.">
+  <meta property="og:title" content="<%= typeof title !== 'undefined' ? title : 'Orama' %>">
+  <meta property="og:description" content="Orama Server: control app that deploys and manages a Docker Compose home media stack.">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyCacheSize":0}'>
+  <title><%= typeof title !== 'undefined' ? title : 'Orama' %></title>
+  <link rel="stylesheet" href="/orama.css?v=7">
+  <script src="/htmx-2.0.11.min.js" defer></script>
+  <script src="/orama.js?v=2" defer></script>
+  <script>
+    (function() {
+      try {
+        var urlParams = new URLSearchParams(window.location.search);
+        var token = urlParams.get('token');
+        if (token) {
+          sessionStorage.setItem('orama_token', token);
+        } else {
+          var stored = sessionStorage.getItem('orama_token');
+          if (stored && window.location.pathname !== '/signin' && !document.cookie.includes('orama_session=')) {
+            var url = new URL(window.location.href);
+            url.searchParams.set('token', stored);
+            if (url.href !== window.location.href) {
+              window.location.replace(url.href);
+            }
+          }
+        }
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>"<% if (typeof token !== 'undefined' && token) { %>, "Authorization": "Bearer <%= token %>"<% } %>}' hx-history="false">
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" aria-label="Orama home"><span class="brand-mark" aria-hidden="true"></span>Orama</a>
+      <% if (typeof isAuthenticated !== 'undefined' && isAuthenticated) { %>
+      <nav aria-label="Main navigation">
+        <a href="/<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" <%- typeof activeNav !== 'undefined' && activeNav === 'home' ? 'aria-current="page"' : '' %>>Home</a>
+        <a href="/apps<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" <%- typeof activeNav !== 'undefined' && activeNav === 'apps' ? 'aria-current="page"' : '' %>>Apps</a>
+        <a href="/settings<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" <%- typeof activeNav !== 'undefined' && activeNav === 'settings' ? 'aria-current="page"' : '' %>>Settings</a>
+        <form action="/signout<%= typeof token !== 'undefined' && token ? '?token=' + token : '' %>" method="post" style="margin:0;">
+          <input type="hidden" name="csrf_token" value="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>">
+          <button class="button button-quiet" type="submit" onclick="sessionStorage.removeItem('orama_token');">Sign out</button>
+        </form>
+      </nav>
+      <% } %>
+    </div>
+  </header>
+  <main id="content" class="page" tabindex="-1">
