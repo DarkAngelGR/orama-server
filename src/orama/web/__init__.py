@@ -26,6 +26,7 @@ from orama.web import auth, security
 from orama.web.assets import configure_assets
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
 from orama.web.plex import register_plex
+from orama.web.settings import register_settings
 from orama.web.wizard import register_wizard
 from orama.wiring.http import Http
 
@@ -136,6 +137,7 @@ def create_app(
     register_jobs(app)
     register_wizard(app)
     register_plex(app)
+    register_settings(app)
     return app
 
 

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% from "_macros.html" import notice, button, field, secret_field %}
+{% block title %}Settings · Orama{% endblock %}
+{% block content %}
+<div class="settings">
+  <h1>Settings</h1>
+  {% if message %}{{ notice('problem' if problem else 'ok', message) }}{% endif %}
+  {% if show_job %}{% include "settings/_job_panel.html" %}{% endif %}
+
+  {% if draft %}
+  <section class="settings-section" aria-labelledby="draft-title">
+    <h2 id="draft-title">An unfinished change</h2>
+    {{ notice('wait', 'You have an unfinished setup change.') }}
+    <p class="field-help">Settings stays closed until you finish it or throw it away. Nothing is applied until you press Install at the end of the setup.</p>
+    <div class="wizard-actions">
+      <a class="button button-primary" href="/setup/media">Continue it</a>
+      <form method="post" action="/settings/discard-draft">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {{ button('Throw it away', 'secondary') }}
+      </form>
+    </div>
+  </section>
+  {% elif not setup %}
+  <section class="settings-section">
+    {{ notice('wait', 'Orama has not been set up yet. Finish the setup first, then come back here.') }}
+    <p><a class="button button-primary" href="/setup/media">Open the setup</a></p>
+  </section>
+  {% else %}
+  {% for s in sections %}{% include "settings/_section.html" %}{% endfor %}
+
+  <section class="settings-section" id="indexers" aria-labelledby="indexers-title">
+    <h2 id="indexers-title">Indexers</h2>
+    <p>{{ indexer_count }} indexer{{ '' if indexer_count == 1 else 's' }}{% if 'usenet' in setup.download_methods %} and {{ usenet_count }} Usenet server{{ '' if usenet_count == 1 else 's' }}{% endif %} set up.</p>
+    <p><a class="button button-secondary" href="/settings/indexers">Manage indexers</a></p>
+  </section>
+
+  <section class="settings-section" id="addresses" aria-labelledby="addresses-title">
+    <h2 id="addresses-title">Addresses</h2>
+    <p class="field-help">Orama answers only at these addresses. Add a name here if you open Orama by another name, like a Tailscale name.</p>
+    <dl class="settings-facts">
+      <dt>Address on your home network</dt><dd>{{ setup.lan_address or 'Not known yet' }}</dd>
+      <dt>Name of this server</dt><dd>{{ setup.host_name or 'Not known yet' }}</dd>
+    </dl>
+    {% if setup.extra_host_names %}
+    <ul class="settings-names">
+      {% for name in setup.extra_host_names %}
+      <li><span>{{ name }}</span>
+        <form method="post" action="/settings/addresses">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="remove" value="{{ name }}">
+          <button type="submit" class="button button-secondary" aria-label="Remove {{ name }}">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <form method="post" action="/settings/addresses" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ field('add_name', 'Add a name', '', address_errors.add_name, 'Up to ' ~ max_names ~ ' names. Letters, digits, dots and hyphens.', 'text', 'off') }}
+      <div class="wizard-actions">{{ button('Add name') }}</div>
+    </form>
+  </section>
+
+  {% if graphics_found %}
+  <section class="settings-section" id="graphics" aria-labelledby="graphics-title">
+    <h2 id="graphics-title">Graphics</h2>
+    <p>The installer found: {{ graphics_found }}.</p>
+    <p class="field-help">Orama is set up for: {{ graphics_now }}.</p>
+    <form method="post" action="/settings/graphics" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="wizard-actions">{{ button('Use this') }}</div>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="settings-section" id="change-setup" aria-labelledby="change-setup-title">
+    <h2 id="change-setup-title">Change setup</h2>
+    <p>Go through the whole setup again with your answers filled in, including indexers. Nothing changes until you press Install at the end.</p>
+    <form method="post" action="/settings/change-setup">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ button('Change setup', 'secondary') }}
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="settings-section" id="password" aria-labelledby="password-title">
+    <h2 id="password-title">Orama password</h2>
+    <form method="post" action="/settings/password" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ secret_field('current_password', 'Current password', false, password_errors.current_password) }}
+      {{ secret_field('new_password', 'New password', false, password_errors.new_password, 'At least 12 characters.') }}
+      {{ secret_field('repeat_password', 'New password again', false, password_errors.repeat_password) }}
+      <p class="field-help">Changing it signs you out of Orama on other devices.</p>
+      <div class="wizard-actions">{{ button('Change password') }}</div>
+    </form>
+  </section>
+</div>
+{% endblock %}
