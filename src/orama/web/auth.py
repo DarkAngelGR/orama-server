@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from flask import abort, current_app, g, redirect, request, url_for
+from flask import abort, current_app, g, make_response, redirect, request, url_for
 
 from orama import state
 
@@ -429,6 +429,12 @@ def requires(permission: str) -> Callable:
         def wrapper(*args, **kwargs):
             principal = g.get("principal")
             if principal is None:
+                if request.headers.get("HX-Request") == "true":
+                    # An htmx poll would swap the sign-in page into the part it updates:
+                    # tell htmx to load the sign-in page as a whole page instead.
+                    response = make_response("", 200)
+                    response.headers["HX-Redirect"] = url_for("auth.signin")
+                    return response
                 path = request.full_path.rstrip("?") if request.query_string else request.path
                 return redirect(url_for("auth.signin", next=safe_next(path)), 303)
             if permission not in principal.permissions:
