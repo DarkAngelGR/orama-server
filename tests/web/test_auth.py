@@ -679,3 +679,19 @@ def test_finish_records_the_failure_with_no_gap(clock, scope):
     lock.hook = None
     # After every release inside finish, a parallel check must already be refused.
     assert seen and not any(seen)
+
+
+@pytest.mark.parametrize("path", ["/jobs/current", "/apps/list"])
+def test_expired_session_sends_htmx_polls_to_sign_in(client, password, clock, path):
+    # htmx swaps whatever answers a poll into the page, so a sign-in page would land inside
+    # the checklist or the apps list: htmx is told to leave the page instead.
+    assert signin(client, password).status_code == 303
+    assert client.get(path).status_code == 200
+    clock.advance(31 * DAY)  # past every session limit
+    response = client.get(path, headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert response.headers["HX-Redirect"] == "/signin"
+    assert response.get_data() == b""
+    # A plain request still goes to the sign-in page and comes back.
+    plain = client.get(path)
+    assert plain.status_code == 303 and "/signin" in plain.headers["Location"]
