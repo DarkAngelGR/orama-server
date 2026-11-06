@@ -123,6 +123,18 @@ class SecretStore:
             del data[name]
             self._save(data)
 
+    def update(self, changes: dict[str, str | None]) -> None:
+        """Set (a value) or delete (``None``) several names in one atomic write: all or none."""
+        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with state.locked(self._lock_path):
+            data = self._load()
+            for name, value in changes.items():
+                if value is None:
+                    data.pop(name, None)
+                else:
+                    data[name] = value
+            self._save(data)
+
     def _save(self, data: dict[str, str]) -> None:
         """Encrypt and write ``data``; the caller holds the store lock."""
         token = self._fernet(create=True).encrypt(json.dumps(data).encode())

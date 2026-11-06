@@ -11,9 +11,10 @@ import pytest
 from conftest import make_setup, random_secret
 
 from orama import state
-from orama.secrets import VPN_KEY_NAME
+from orama.secrets import VPN_KEY_NAME, SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import catalogue, forms, wizard
+from orama.web import settings as settings_module
 from orama.web.jobs import JobRunner
 from orama.wiring import prowlarr, sabnzbd
 
@@ -767,3 +768,193 @@ def test_replayed_usenet_server_that_fails_is_not_queued_for_removal(
     assert response.status_code == 400 and "Login refused." in page(response)
     assert store.get(sabnzbd.REMOVE_PREFIX + slug) is None
     assert live(app).usenet_servers[0].slug == slug
+
+
+# ------------------------------------------------------------------ a passing test that is not saved is undone
+
+RESTORE_FAILED = "Orama could not put the old settings back. Apply again to fix it."
+CHANGED = settings_module.CHANGED_MEANWHILE
+
+
+def changed_by_someone_else(app):
+    forms._rebuild(live(app), device="lg").save(sd(app) / "setup.json")
+
+
+def draft_appears(app):
+    (sd(app) / "setup.draft.json").write_bytes((sd(app) / "setup.json").read_bytes())
+
+
+def created_and_passed(app, meanwhile, marker, kind):
+    """The real test's effect: the app now holds it (sent marker) and test-ok is set."""
+    def run(setup, store_, http, slug_):
+        store_.set(marker(slug_), "recorded")
+        meanwhile(app)
+        store_.set(f"test-ok:{kind}:{slug_}", "1")
+    return run
+
+
+@pytest.mark.parametrize("meanwhile, status, text", [
+    (changed_by_someone_else, 409, CHANGED),
+    (draft_appears, 409, "Nothing was saved."),
+])
+def test_new_indexer_passed_but_not_saved_is_queued_for_removal(
+        signed, app, runner, monkeypatch, meanwhile, status, text):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store = app.extensions["orama"].store
+    monkeypatch.setattr(prowlarr, "test_indexer", created_and_passed(
+        app, meanwhile, lambda s: prowlarr.sent_marker_name(f"indexer:{s}"), "indexer"))
+    key = secrets.token_urlsafe(20)
+    response = post(signed, "/settings/indexers", token_from="/settings/indexers",
+                    definition="Newznab", name="Fresh", **{"field:apiKey": key})
+    after_test = (sd(app) / "setup.json").read_bytes()
+    assert response.status_code == status and text in page(response)
+    assert RESTORE_FAILED not in page(response)
+    assert store.get(prowlarr.REMOVE_PREFIX + "fresh") == "Fresh"
+    assert store.get("test-ok:indexer:fresh") is None
+    assert store.get("indexer:fresh:apiKey") is None
+    assert (sd(app) / "setup.json").read_bytes() == after_test
+    assert not any(i.slug == "fresh" for i in live(app).indexers)
+    assert starts(runner) == []
+
+
+def test_new_usenet_server_passed_but_not_saved_is_queued_for_removal(
+        signed, app, runner, monkeypatch):
+    store = app.extensions["orama"].store
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", created_and_passed(
+        app, changed_by_someone_else, sabnzbd.sent_marker_name, "usenet"))
+    response = post(signed, "/settings/usenet", token_from="/settings/indexers",
+                    host="news.example", port="563", connections="10", username="me",
+                    password=secrets.token_urlsafe(20), ssl="on")
+    assert response.status_code == 409 and CHANGED in page(response)
+    queued = [n for n in store.names() if n.startswith(sabnzbd.REMOVE_PREFIX)]
+    assert len(queued) == 1
+    slug = queued[0][len(sabnzbd.REMOVE_PREFIX):]
+    assert store.get(queued[0]) == slug
+    assert store.get(f"test-ok:usenet:{slug}") is None
+    assert store.get(f"usenet:{slug}:password") is None
+    assert not live(app).usenet_servers
+    assert starts(runner) == []
+
+
+def recording_prowlarr(app, calls, meanwhile, *, restore_fails=False):
+    """Records what each test sent; runs ``meanwhile`` during the first (candidate) test."""
+    def run(setup, store_, http, slug_):
+        item = next(i for i in setup.indexers if i.slug == slug_)
+        calls.append((store_.get(f"indexer:{slug_}:apiKey"), setup.device))
+        if len(calls) == 1:
+            meanwhile(app)
+        elif restore_fails:
+            store_.delete(f"test-ok:indexer:{slug_}")
+            return "Prowlarr does not answer."
+        assert item.fields.get("baseUrl") == "https://indexer.example"
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+        return None
+    return run
+
+
+@pytest.mark.parametrize("meanwhile, text", [
+    (changed_by_someone_else, settings_module.CHANGED_MEANWHILE),
+    (draft_appears, "Nothing was saved."),
+])
+def test_indexer_edit_passed_but_not_saved_puts_the_old_one_back(
+        signed, app, runner, monkeypatch, meanwhile, text):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    calls = []
+    monkeypatch.setattr(prowlarr, "test_indexer", recording_prowlarr(app, calls, meanwhile))
+    new = secrets.token_urlsafe(20)
+    before_device = live(app).device
+    response = edit_with(signed, slug, new)
+    after_test = (sd(app) / "setup.json").read_bytes()
+    html = page(response)
+    assert response.status_code == 409 and text in html and RESTORE_FAILED not in html
+    # The candidate first, then the old key on the setup as it is now.
+    now_device = live(app).device
+    assert calls == [(new, before_device), (key, now_device)]
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert store.get(f"test-ok:indexer:{slug}") == "1"  # recorded by the restore, for the old key
+    assert (sd(app) / "setup.json").read_bytes() == after_test
+    assert new not in html
+    assert starts(runner) == []
+
+
+def test_failed_undo_after_settings_changed_says_so(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    calls = []
+    monkeypatch.setattr(prowlarr, "test_indexer", recording_prowlarr(
+        app, calls, changed_by_someone_else, restore_fails=True))
+    response = edit_with(signed, slug, secrets.token_urlsafe(20))
+    html = page(response)
+    assert response.status_code == 409
+    assert f"{settings_module.CHANGED_MEANWHILE} {RESTORE_FAILED}" in html
+    assert len(calls) == 2
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert store.get(f"test-ok:indexer:{slug}") is None
+    assert starts(runner) == []
+
+
+def test_setup_is_saved_before_the_new_secret(signed, app, runner, monkeypatch):
+    """A failed setup.json write leaves the old secret and puts the old entry back."""
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    calls = []
+    monkeypatch.setattr(prowlarr, "test_indexer", recording_prowlarr(app, calls, lambda _: None))
+    before = (sd(app) / "setup.json").read_bytes()
+    real_save = DesiredSetup.save
+
+    def broken_save(self, path):
+        if Path(path).name == "setup.json":
+            raise OSError("disk full")
+        real_save(self, path)
+
+    monkeypatch.setattr(DesiredSetup, "save", broken_save)
+    new = secrets.token_urlsafe(20)
+    response = edit_with(signed, slug, new)
+    html = page(response)
+    assert response.status_code == 500
+    assert settings_module.SAVE_FAILED in html and RESTORE_FAILED not in html
+    assert "disk full" not in html and new not in html
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert [c[0] for c in calls] == [new, key]
+    assert starts(runner) == []
+
+
+def test_failed_secret_write_puts_setup_json_back(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    calls = []
+    monkeypatch.setattr(prowlarr, "test_indexer", recording_prowlarr(app, calls, lambda _: None))
+    before = (sd(app) / "setup.json").read_bytes()
+    order = []
+    real_save = DesiredSetup.save
+
+    def logged_save(self, path):
+        order.append("setup")
+        real_save(self, path)
+
+    def broken_update(self, changes):
+        order.append("secrets")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(DesiredSetup, "save", logged_save)
+    monkeypatch.setattr(SecretStore, "update", broken_update)
+    new = secrets.token_urlsafe(20)
+    response = edit_with(signed, slug, new)
+    html = page(response)
+    assert order == ["setup", "secrets"]
+    assert response.status_code == 500 and settings_module.SAVE_FAILED in html
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert [c[0] for c in calls] == [new, key]
+    assert starts(runner) == []
+
+
+def test_secret_store_update_is_one_write(tmp_path):
+    store = SecretStore(tmp_path / "secrets.bin")
+    store.set("a", "one-value")
+    store.set("b", "two-value")
+    store.update({"a": None, "b": "three-value", "c": "four-value"})
+    assert sorted(store.names()) == ["b", "c"]
+    assert store.get("b") == "three-value"

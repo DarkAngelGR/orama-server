@@ -9,6 +9,9 @@ Wizard sections are rendered by their own step templates, so the fields stay the
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -53,6 +56,8 @@ RETYPE = {
 PASSWORD_MISMATCH = "The two new passwords do not match."
 WRONG_PASSWORD = "That is not your current password."
 CHANGED_MEANWHILE = "Settings changed while Orama was testing. Nothing was saved. Try again."
+SAVE_FAILED = "Orama could not save the settings. Nothing was saved."
+RESTORE_FAILED = "Orama could not put the old settings back. Apply again to fix it."
 GRAPHICS_BAD = ("Orama cannot use what the installer found. Run the installer again, then "
                 "try once more.")
 IN_USE = ("You are using Orama through that name right now. Open it with another address "
@@ -117,13 +122,11 @@ class _Candidate:
         return _Buffer(self)
 
     def commit(self) -> None:
-        for name, value in self.pending.items():
-            if name.startswith("test-ok:"):
-                continue  # the test just recorded the real answer
-            if value is None:
-                self._store.delete(name)
-            else:
-                self._store.set(name, value)
+        """Write the buffered secrets in one atomic write: all of them or none."""
+        changes = {name: value for name, value in self.pending.items()
+                   if not name.startswith("test-ok:")}  # the test recorded the real answer
+        if changes:
+            self._store.update(changes)
 
     # What the entry's test writes goes to the real store.
     def set(self, name: str, value: str) -> None:
@@ -160,6 +163,47 @@ def _load(st, name: str) -> DesiredSetup | None:
         return DesiredSetup.load(st.state_dir / name)
     except FileNotFoundError:
         return None
+
+
+def _write_back(path, data: bytes) -> None:
+    """Put ``data`` back in ``path`` atomically (temp file in the same folder + replace)."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _undo_candidate(st, path, reference: DesiredSetup | None, kind: str, slug: str,
+                    name: str, test, marker_name: str, sent_before: bool) -> bool:
+    """Undo a candidate entry's test in the app when the candidate is not saved.
+
+    The test sent the candidate to Prowlarr or SABnzbd. ``reference`` is the setup that stands
+    (None: ``setup.json`` as it is now). An entry it has is tested again with the stored
+    secrets, which puts its values back in the app; one it lacks that the test created gets a
+    removal marker for the next apply. The candidate's ``test-ok`` is dropped either way.
+    Returns False when this could not be done.
+    """
+    try:
+        if reference is None:
+            reference = DesiredSetup.load(path)
+        st.store.delete(f"test-ok:{kind}:{slug}")
+        entries = reference.indexers if kind == "indexer" else reference.usenet_servers
+        if any(i.slug == slug for i in entries):
+            return test(reference, st.store, st.http, slug) is None
+        if not sent_before and st.store.get(marker_name):
+            if kind == "indexer":
+                st.store.set(prowlarr.REMOVE_PREFIX + slug, name)
+            else:
+                st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def _hardware(st) -> tuple[int | None, bool] | None:
@@ -552,36 +596,56 @@ def _pages() -> Blueprint:
                         label = entry.name if kind == "indexer" else entry.host
                         marker_name = marker(f"indexer:{slug}" if kind == "indexer" else slug)
                         sent_before = bool(st.store.get(marker_name))
+                        def undo(reference: DesiredSetup | None = None) -> str:
+                            """Undo what the candidate's test did in the app (same apply.lock)."""
+                            ok = _undo_candidate(st, path, reference, kind, slug, label,
+                                                 test, marker_name, sent_before)
+                            return "" if ok else f" {RESTORE_FAILED}"
+
                         # Test the candidate first; only a pass is saved and applied.
                         error = test(candidate, layer, st.http, slug)
                         if error:
-                            if existing is not None:
-                                # The test pushed the candidate into the app: put the old
-                                # entry (old setup, old stored secret) back, same apply.lock.
-                                again = test(setup, st.store, st.http, slug)
-                                error += " Nothing was saved."
-                                if again:
-                                    error += (" Orama could not put the old settings back. "
-                                              "Apply again to fix it.")
-                                return render_indexers(setup, error, True, 400)
-                            if (not sent_before and st.store.get(marker_name)
-                                    and not any(i.slug == slug for i in items)):
-                                # The test created it in the app and it is not in the setup:
-                                # have the next apply remove it.
-                                if kind == "indexer":
-                                    st.store.set(prowlarr.REMOVE_PREFIX + slug, entry.name)
-                                else:
-                                    st.store.set(sabnzbd.REMOVE_PREFIX + slug, slug)
+                            tail = undo()
                             return render_indexers(
-                                setup, f"{error} Nothing was saved.", True, 400)
+                                _load(st, SETUP_FILE) or setup,
+                                f"{error} Nothing was saved.{tail}", True, 400)
+                        # setup.json first: a failed write must not leave new secrets with
+                        # the old setup. If the secrets then fail, the old bytes go back.
+                        outcome = ""
                         with state.locked(state.setup_lock(st.state_dir)):
                             if (st.state_dir / DRAFT_FILE).exists():
-                                return draft_page()
-                            if path.read_bytes() != snapshot:
-                                return render_indexers(
-                                    DesiredSetup.load(path), CHANGED_MEANWHILE, True, 409)
-                            layer.commit()
-                            candidate.save(path)
+                                outcome = "draft"
+                            elif path.read_bytes() != snapshot:
+                                outcome = "changed"
+                            else:
+                                try:
+                                    candidate.save(path)
+                                except OSError:
+                                    outcome = "unsaved"
+                                else:
+                                    try:
+                                        layer.commit()
+                                    except (OSError, ValueError):
+                                        outcome = "unsaved"
+                                        try:
+                                            _write_back(path, snapshot)
+                                        except OSError:
+                                            outcome = "stuck"
+                        # Not saved after a pass: the app holds the candidate. Undo it now,
+                        # with setup.lock released and apply.lock still held.
+                        if outcome == "draft":
+                            return render_page(
+                                409, message=f"Nothing was saved.{undo()}", problem=True)
+                        if outcome == "changed":
+                            tail = undo()
+                            return render_indexers(
+                                _load(st, SETUP_FILE) or setup,
+                                f"{CHANGED_MEANWHILE}{tail}", True, 409)
+                        if outcome:
+                            tail = undo(setup)
+                            if outcome == "stuck":
+                                tail = f" {RESTORE_FAILED}"
+                            return render_indexers(setup, f"{SAVE_FAILED}{tail}", True, 500)
                         setup = candidate
                         message = f"{label} works. Applying it now."
                     elif action == "remove":
