@@ -248,6 +248,27 @@ def store_redactor(store: SecretStore) -> Callable[[str], str]:
     return RedactingFilter(store).redact
 
 
+def poll_view(job: Job | None) -> tuple[dict, dict]:
+    """Template context and headers for an htmx poll of the checklist.
+
+    The poller says how many lines the page already shows and which job they belong to.
+    When they match, only the new lines are appended (and nothing at all when there are
+    none), so a screen reader hears each line once instead of the whole list every 2 s.
+    Anything else (a new job, a bad count, a POST) sends the whole list.
+    """
+    seen = request.args.get("seen", type=int)
+    since = request.args.get("since", type=int)
+    # With nothing shown yet the page holds the "Waiting to start." placeholder: replace it.
+    if (request.method != "GET" or job is None or not seen or since != job_stamp(job)
+            or not 0 < seen <= len(job.lines)):
+        return {"new_lines": None}, {}
+    return {"new_lines": job.lines[seen:]}, {"HX-Reswap": "beforeend"}
+
+
+def job_stamp(job: Job) -> int:
+    return int(job.started * 1000)
+
+
 def register_jobs(app: Flask) -> None:
     app.register_blueprint(_job_pages())
 
@@ -269,8 +290,9 @@ def _job_pages() -> Blueprint:
     def render(job: Job | None, **extra):
         htmx = request.headers.get("HX-Request") == "true"
         template = "_job_poll.html" if htmx else "_job.html"
+        context, headers = poll_view(job) if htmx else ({}, {})
         return render_template(template, job=job, running=bool(job and job.status == "running"),
-                               **extra)
+                               **context, **extra), 200, headers
 
     @pages.get("/jobs/current")
     @auth.requires("setup")

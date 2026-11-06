@@ -9,13 +9,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
-from conftest import random_secret
 
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web.jobs import JobRunner
 
-from .conftest import csrf_from, signin
+from .conftest import csrf_from, signin, wireguard_key
 
 STEPS = ("media", "folders", "downloads", "playback", "subtitles")
 
@@ -44,7 +43,7 @@ def text(response) -> str:
 
 
 def key() -> str:
-    return random_secret(nbytes=16)
+    return wireguard_key()
 
 
 @pytest.fixture
@@ -222,9 +221,17 @@ def test_address_help_says_bare_address_gets_slash_32(signed):
     assert "/32" in html
 
 
-def test_folders_note_only_after_setup_exists(app, signed, state_dir):
+def test_folders_note_only_after_apps_were_applied(app, signed, state_dir):
+    note = "Orama does not move files that are already there"
+    st = app.extensions["orama"]
+    # setup.json exists but nothing has been applied: no warning about moving files
+    assert note not in text(signed.get("/setup/folders"))
+    d = state_dir
+    st.jobs = JobRunner(d, lambda p: [sys.executable, "-c", "print('ok')"])
+    st.jobs.start(d / "setup.json")
+    assert st.jobs.wait(10)
     html = text(signed.get("/setup/folders"))
-    assert "Orama does not move files that are already there" in html
+    assert note in html
     (state_dir / "setup.json").rename(state_dir / "setup.draft.json")
     html = text(signed.get("/setup/folders"))
     assert "Orama does not move files that are already there" not in html
@@ -340,3 +347,21 @@ def test_subtitle_language_error_shown_next_to_field(signed):
     response = post(signed, "/setup/subtitles", language_1="en", language_2="en")
     assert response.status_code == 400
     assert "Pick each language once" in text(response)
+
+
+def test_indexers_step_is_not_called_done_until_something_is_tested(app, signed):
+    html = text(signed.get("/setup/playback"))
+    assert "Needs a test" in html
+    store = SecretStore(app.extensions["orama"].state_dir / "secrets.bin")
+    setup = DesiredSetup.load(app.extensions["orama"].state_dir / "setup.json")
+    from orama.web import forms
+    from orama.web.catalogue import IndexerDefinition
+    definition = IndexerDefinition("Newznab", "Generic Newznab", "usenet", "private", ())
+    setup, slug = forms.add_indexer(setup, definition, {"name": "One"}, store)
+    server, server_slug = forms.add_usenet_server(
+        setup, {"host": "news.example", "port": "563"}, store)
+    server.save(app.extensions["orama"].state_dir / "setup.draft.json")
+    store.set(f"test-ok:indexer:{slug}", "1")
+    assert "Needs a test" in text(signed.get("/setup/playback"))  # the Usenet server is untested
+    store.set(f"test-ok:usenet:{server_slug}", "1")
+    assert "Needs a test" not in text(signed.get("/setup/playback"))

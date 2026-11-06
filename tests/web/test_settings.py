@@ -438,7 +438,7 @@ def test_turning_off_app_warns_and_keeps_folder(signed, app, runner):
     assert response.status_code == 200
     html = page(response)
     assert "This stops Jellyfin. Its settings folder is kept and no media is deleted." in html
-    assert "Yes, stop it" in html and 'name="confirm" value="1"' in html
+    assert "Yes, turn it off" in html and 'name="confirm" value="1"' in html
     assert (sd(app) / "setup.json").read_bytes() == before
     assert starts(runner) == []
     done = post(signed, "/settings/media", server_plex="on", confirm="1")
@@ -467,7 +467,7 @@ def test_confirm_page_never_echoes_typed_secrets(signed, app):
 def test_invalid_form_is_not_asked_to_confirm(signed, app):
     write_setup(sd(app), media_servers={"plex", "jellyfin"})
     response = post(signed, "/settings/media")  # nothing ticked
-    assert response.status_code == 400 and "Yes, stop it" not in page(response)
+    assert response.status_code == 400 and "Yes, turn it off" not in page(response)
 
 
 # ------------------------------------------------------------------ only a passing test is saved
@@ -660,7 +660,7 @@ def test_usenet_off_with_servers_is_refused_not_confirmed(signed, app):
     assert write_setup_methods["usenet_servers"]
     response = post(signed, "/settings/downloads", torrent="on")
     assert response.status_code == 400
-    assert "Yes, stop it" not in page(response) and "Usenet servers" in page(response)
+    assert "Yes, turn it off" not in page(response) and "Usenet servers" in page(response)
     assert "usenet" in live(app).download_methods
 
 
@@ -958,3 +958,115 @@ def test_secret_store_update_is_one_write(tmp_path):
     store.update({"a": None, "b": "three-value", "c": "four-value"})
     assert sorted(store.names()) == ["b", "c"]
     assert store.get("b") == "three-value"
+
+
+# ------------------------------------------------------------------ undo after a test (Task 12)
+
+
+def seeded_usenet(app):
+    store = app.extensions["orama"].store
+    password = secrets.token_urlsafe(20)
+    setup, slug = forms.add_usenet_server(live(app), {
+        "host": "news.example", "port": "563", "username": "me", "password": password,
+        "ssl": "on",
+    }, store)
+    setup.save(sd(app) / "setup.json")
+    store.set(f"test-ok:usenet:{slug}", "1")
+    return store, slug, password
+
+
+def replay_usenet(signed, password=""):
+    token = csrf_from(signed.get("/settings/indexers"))
+    return signed.post("/settings/usenet", data={
+        "csrf_token": token, "host": "news.example", "port": "563", "connections": "20",
+        "username": "me", "password": password, "ssl": "on",
+    })
+
+
+def test_failed_replay_of_a_saved_usenet_server_does_not_claim_a_failed_restore(
+        signed, app, runner, monkeypatch):
+    """A refreshed add form changes nothing in SABnzbd: no second test, no false sentence."""
+    store, slug, password = seeded_usenet(app)
+    calls = []
+
+    def down(setup, store_, http, slug_):
+        calls.append(slug_)
+        store_.delete(f"test-ok:usenet:{slug_}")
+        return "SABnzbd does not answer."
+
+    monkeypatch.setattr(sabnzbd, "test_usenet_server", down)
+    before = (sd(app) / "setup.json").read_bytes()
+    response = replay_usenet(signed)
+    html = page(response)
+    assert response.status_code == 400
+    assert "SABnzbd does not answer. Nothing was saved." in html
+    assert "could not put the old settings back" not in html
+    assert calls == [slug]  # tested once, not again on the old values
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"usenet:{slug}:password") == password
+    assert starts(runner) == []
+
+
+def test_lock_failure_after_a_pass_still_undoes_the_test(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    store, slug, key = seeded_indexer(app)
+    wrong = secrets.token_urlsafe(20)
+    calls = []
+
+    def passing_then_recorded(setup, store_, http, slug_):
+        item = next(i for i in setup.indexers if i.slug == slug_)
+        calls.append((store_.get(f"indexer:{slug_}:apiKey"), item.fields.get("baseUrl")))
+        store_.set(f"test-ok:indexer:{slug_}", "1")
+
+    monkeypatch.setattr(prowlarr, "test_indexer", passing_then_recorded)
+
+    def broken(_dir):
+        raise OSError("disk")
+
+    monkeypatch.setattr(settings_module.state, "setup_lock", broken)
+    before = (sd(app) / "setup.json").read_bytes()
+    response = edit_with(signed, slug, wrong)
+    html = page(response)
+    assert response.status_code == 500 and "Orama could not save the settings." in html
+    assert wrong not in html
+    assert calls == [(wrong, "https://indexer.example"), (key, "https://indexer.example")]
+    assert (sd(app) / "setup.json").read_bytes() == before
+    assert store.get(f"indexer:{slug}:apiKey") == key
+    assert starts(runner) == []
+
+
+def test_double_fault_says_what_is_true(signed, app, runner, monkeypatch):
+    monkeypatch.setattr(catalogue, "load", lambda *args: [DEFINITION])
+    monkeypatch.setattr(prowlarr, "test_indexer", passing("indexer"))
+    _store, slug, _key = seeded_indexer(app)
+
+    def no_commit(self):
+        raise OSError("disk")
+
+    monkeypatch.setattr(settings_module._Candidate, "commit", no_commit)
+    monkeypatch.setattr(settings_module, "_write_back", lambda *a: (_ for _ in ()).throw(OSError("disk")))
+    response = edit_with(signed, slug, secrets.token_urlsafe(20))
+    html = page(response)
+    assert response.status_code == 500
+    assert settings_module.STUCK in html
+    assert "Nothing was saved" not in html
+    assert starts(runner) == []
+
+
+def test_candidate_secrets_are_not_logged(signed, app, caplog):
+    """The real test steps and the page must never log what the owner typed."""
+    import logging
+
+    from orama.wiring.http import FakeHttp, Response
+    http = FakeHttp()  # Prowlarr is up, and every other path answers "not found"
+    http.route("GET", "/api/v1/system/status", lambda _: Response(200, {}, b"{}"))
+    app.extensions["orama"].http = http
+    caplog.set_level(logging.DEBUG)
+    store = app.extensions["orama"].store
+    store.set("apikey:prowlarr", "k" * 32)
+    secret = secrets.token_urlsafe(24)
+    setup, slug = forms.add_indexer(live(app), DEFINITION, {
+        "name": "Mine", "field:apiKey": secret, "field:baseUrl": "https://indexer.example",
+    }, store)
+    prowlarr.test_indexer(setup, store, app.extensions["orama"].http, slug)
+    assert secret not in caplog.text

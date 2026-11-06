@@ -8,7 +8,7 @@
         {% if s.ready and s.url and s.state != 'current' %}<a href="{{ s.url }}">{{ s.label }}</a>
         {% elif s.state == 'current' %}<span aria-current="step">{{ s.label }}</span>
         {% else %}<span>{{ s.label }}</span>{% endif %}
-        <span class="wizard-step-state">{% if not s.ready %}Not available yet{% elif s.state == 'done' %}Done{% elif s.state == 'current' %}You are here{% else %}Next{% endif %}</span>
+        <span class="wizard-step-state">{% if not s.ready %}Not available yet{% elif s.state == 'done' %}Done{% elif s.state == 'todo' %}Needs a test{% elif s.state == 'current' %}You are here{% else %}Next{% endif %}</span>
       </li>
     {% endfor %}
     </ol>

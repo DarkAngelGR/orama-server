@@ -10,7 +10,7 @@
   {% if errors.media_servers %}<p class="field-error" id="media_servers-error">{{ errors.media_servers }}</p>{% endif %}
 </fieldset>
 <div class="wizard-group" data-visible-if="server_jellyfin"{% if not values.jellyfin %} hidden{% endif %}>
-  <h2>Jellyfin administrator</h2>
+  <{{ "h3" if embedded else "h2" }}>Jellyfin administrator</{{ "h3" if embedded else "h2" }}>
   {{ field('jellyfin_user', 'Administrator name', values.user, errors.jellyfin_user,
            ('Saved — leave empty to keep. ' if values.user_saved else '') ~ 'Letters, digits and . _ @ - only, up to 64 characters.', 'text', 'username') }}
   {{ secret_field('jellyfin_password', 'Administrator password', values.password_saved, errors.jellyfin_password, 'At least 12 characters. Orama signs in with it to set Jellyfin up for you.') }}

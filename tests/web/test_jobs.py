@@ -312,3 +312,42 @@ def test_busy_apply_htmx_shows_notice_in_page(app, signed, state_dir):
     assert APPLY_BUSY in body and 'id="checklist-items"' in body
     assert 'id="job-status" hx-swap-oob="true"' in body
     assert plain.status_code == 409 and "<html" in plain.get_data(as_text=True).lower()
+
+
+def test_polling_sends_only_new_lines_and_stays_quiet(app, signed):
+    """A screen reader must hear each checklist line once, not the whole list every 2 s."""
+    d = app.extensions["orama"].state_dir
+    gate = d / "go"
+    code = (
+        "import sys,time,pathlib\nprint('✓ one',flush=True)\n"
+        "g=pathlib.Path(sys.argv[1]).parent/'go'\n"
+        "while not g.exists(): time.sleep(0.02)\n"
+        "print('✓ two',flush=True)\n"
+    )
+    runner = JobRunner(d, script_argv(code))
+    swap_runner(app, runner)
+    runner.start(d / "setup.json")
+    for _ in range(200):
+        if runner.current().lines:
+            break
+        threading.Event().wait(0.02)
+    stamp = int(runner.current().started * 1000)
+    htmx = {"HX-Request": "true"}
+    first = signed.get("/jobs/current", headers=htmx)
+    assert 'id="checklist-items"' in first.get_data(as_text=True)  # no count: the whole list
+    assert f'"seen": 1, "since": {stamp}' in first.get_data(as_text=True)
+    same = signed.get(f"/jobs/current?seen=1&since={stamp}", headers=htmx)
+    assert same.headers["HX-Reswap"] == "beforeend"
+    assert same.get_data(as_text=True).strip() == ""  # nothing new: nothing sent, no status swap
+    assert "role=" not in first.get_data(as_text=True)  # the running notice is not a live region
+    gate.write_text("x")
+    assert runner.wait(10)
+    more = signed.get(f"/jobs/current?seen=1&since={stamp}", headers=htmx)
+    body = more.get_data(as_text=True)
+    assert more.headers["HX-Reswap"] == "beforeend"
+    assert "<li>✓ two</li>" in body and "✓ one" not in body and 'id="checklist-items"' not in body
+    assert 'role="status"' in body and "All done" in body  # the final state is announced
+    other_job = signed.get(f"/jobs/current?seen=1&since={stamp + 1}", headers=htmx)
+    assert "HX-Reswap" not in other_job.headers and "✓ one" in other_job.get_data(as_text=True)
+    too_many = signed.get(f"/jobs/current?seen=99&since={stamp}", headers=htmx)
+    assert "HX-Reswap" not in too_many.headers

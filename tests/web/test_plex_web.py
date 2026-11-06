@@ -55,3 +55,11 @@ def test_plex_done_starts_apply(plex_client):
     st.jobs.start.assert_called_once_with(st.state_dir / "setup.json")
     client.post("/plex/sign-in/status", data={"csrf_token": csrf})
     st.jobs.start.assert_called_once()
+
+
+def test_polled_waiting_text_is_not_a_live_region(plex_client):
+    """The Plex status is re-sent every 2 s: a live region would be read out every time."""
+    client, _st, csrf, _code, _token = plex_client
+    assert client.post("/plex/sign-in", data={"csrf_token": csrf}).status_code == 303
+    html = client.get("/plex/sign-in/status", headers={"HX-Request": "true"}).get_data(as_text=True)
+    assert "Waiting for Plex approval." in html and "role=" not in html

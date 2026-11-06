@@ -20,6 +20,8 @@ from orama.secrets import (
 )
 from orama.web import forms
 
+from .conftest import wireguard_key
+
 
 @pytest.fixture
 def store(tmp_path: Path) -> SecretStore:
@@ -31,7 +33,7 @@ def long_password() -> str:
 
 
 def vpn_key() -> str:
-    return random_secret(nbytes=16)
+    return wireguard_key()
 
 
 # ------------------------------------------------------------------ media
@@ -314,3 +316,11 @@ def test_opensubtitles_needs_both(store):
         forms.apply_subtitles(make_setup(), form, store)
     assert "opensubtitles_password" in e.value.errors
     assert store.get("opensubtitles:username") is None
+
+
+@pytest.mark.parametrize("key", ["k" * 44, "abcd1234" * 4, "A" * 43 + "x", "A" * 42 + "=", "A" * 45 + "="])
+def test_vpn_key_that_is_not_shaped_like_a_wireguard_key_is_refused(store, key):
+    with pytest.raises(forms.Invalid) as e:
+        forms.apply_downloads(make_setup(), downloads_form(vpn_key=key), store)
+    assert "does not look like a WireGuard key" in e.value.errors["vpn_key"]
+    assert store.get(VPN_KEY_NAME) is None

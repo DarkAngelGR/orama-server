@@ -13,7 +13,7 @@
     {{ secret_field(name, 'Type the ' ~ label|lower ~ ' again', false, '', 'Orama does not keep what you typed. Leave it empty to keep the saved one.') }}
     {% endfor %}
     <div class="wizard-actions">
-      {{ button('Yes, stop it', 'danger') }}
+      {{ button('Yes, turn it off', 'danger') }}
       <a class="button button-secondary" href="/settings#{{ section }}">No, go back</a>
     </div>
   </form>

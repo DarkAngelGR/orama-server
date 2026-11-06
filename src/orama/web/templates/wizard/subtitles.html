@@ -4,14 +4,14 @@
 {% set intro = 'Orama looks for subtitles in these languages, first choice first. Pick each language once.' %}
 {% block fields %}
 <div class="wizard-group">
-  <h2>Languages</h2>
+  <{{ "h3" if embedded else "h2" }}>Languages</{{ "h3" if embedded else "h2" }}>
   {% for label in ['First choice', 'Second choice', 'Third choice', 'Fourth choice', 'Fifth choice'] %}
     {% set n = loop.index %}
     {{ select('language_' ~ n, label, values.options, values.languages[n - 1], errors['language_' ~ n], '', none if n == 1 else 'None') }}
   {% endfor %}
 </div>
 <div class="wizard-group">
-  <h2>OpenSubtitles account (optional)</h2>
+  <{{ "h3" if embedded else "h2" }}>OpenSubtitles account (optional)</{{ "h3" if embedded else "h2" }}>
   <p class="field-help">A free OpenSubtitles account gives Bazarr more downloads a day. You can skip this.</p>
   {{ field('opensubtitles_username', 'Username', '', errors.opensubtitles_username, 'Saved — leave empty to keep.' if values.username_saved else '', 'text', 'off') }}
   {{ secret_field('opensubtitles_password', 'Password', values.password_saved, errors.opensubtitles_password) }}

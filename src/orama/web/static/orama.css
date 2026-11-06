@@ -152,7 +152,7 @@ nav form { margin: 0; }
 .wizard-form { display: grid; gap: var(--space-3); min-width: 0; }
 .wizard-group { display: grid; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
 .wizard-group > * { margin: 0; }
-.wizard-group h2 { font-size: 1.125rem; }
+.wizard-group h2, .wizard-group h3 { font-size: 1.125rem; }
 .wizard-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 .wizard-actions .button { display: inline-flex; align-items: center; justify-content: center; }
 .field select { max-width: 100%; }
@@ -183,3 +183,15 @@ nav.wizard-steps { display: block; }
 .app-name { font-weight: 650; flex: 1 1 8rem; overflow-wrap: anywhere; }
 .app-state { font-weight: 600; }
 .app-row .button { min-height: 44px; min-width: 44px; }
+
+/* Review fixes (Plan 3, Task 12) */
+.wizard h1, .settings h1, .apps h1, .message-page h1 { font-size: clamp(1.75rem, 4.5vw, 2.5rem); letter-spacing: -.03em; }
+.apps > h1 + p { margin-top: var(--space-1); }
+#job-status { display: grid; gap: var(--space-2); justify-items: start; }
+#job-status > .notice { justify-self: stretch; }
+.back-link { display: inline-flex; align-items: center; min-height: 44px; }
+@media (max-width: 700px) {
+  .header-inner { gap: .25rem 1rem; }
+  nav { gap: .25rem; }
+  nav a { padding: .5rem .6rem; }
+}

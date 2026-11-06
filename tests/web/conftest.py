@@ -5,6 +5,7 @@ Addresses and secrets are built at run time: the repository is public.
 
 from __future__ import annotations
 
+import base64
 import re
 import secrets as _secrets
 from pathlib import Path
@@ -44,6 +45,11 @@ def write_setup(state_dir: Path, name: str = "setup.json", **overrides) -> None:
     values = {"lan_address": LAN, "host_name": HOST_NAME, "extra_host_names": (EXTRA,)}
     values.update(overrides)
     make_setup(**values).save(state_dir / name)
+
+
+def wireguard_key() -> str:
+    """A key shaped like a real WireGuard private key (32 random bytes in base64)."""
+    return base64.b64encode(_secrets.token_bytes(32)).decode()
 
 
 def new_password() -> str:
