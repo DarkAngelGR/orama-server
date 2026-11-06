@@ -116,3 +116,23 @@ Plan 5:
   answers from the installer by the time you pass it).
 - A pre-existing duplicate: `/plex/sign-in/status` and `/setup/finish` poll separately while a job runs.
 - axe-core is optional in the browser test (`ORAMA_TEST_AXE=<axe.min.js>`); it is not a CI dependency.
+
+## Final fix wave (after the whole-plan review)
+
+- **Media folder is read-only in the web app (decision for the owner).** The Agent's only data
+  mount and `ORAMA_DATA_ROOT` are fixed when the installer writes `core.compose.yaml`, so a
+  folder typed in the wizard or Settings could never be used. The Folders step now only shows
+  the folder and says to run the installer again with `ORAMA_DATA_ROOT` set; Settings shows it
+  without a Save button (no `/settings/folders` save route). `bootstrap` moves a saved setup
+  and draft to the folder it is given (a note on stderr), the installer allows a different
+  data folder only when `ORAMA_DATA_ROOT` is set on purpose, Install keeps the live folder,
+  and `apply` turns the Agent's refusal of a data folder into a plain sentence. Making the
+  folder editable from the web would need a root-side rewrite of the Agent's compose.
+- **Change setup keeps typed secrets in the draft** (`src/orama/web/draft.py`): while
+  `setup.json` exists, wizard writes go to `draft:set:` / `draft:del:` names and are read over
+  the live store; Install and the first apply move them in one `store.update` under
+  `setup.lock`; Throw it away drops every `draft:` name and tests again (shared
+  `undo_candidate`, apply.lock held, setup.lock not) the live entries the draft's tests sent
+  (`draft:touched:`). A draft test's `test-ok` stays in the draft; its sent markers go live.
+- Redaction hides only the values of secret names (`secrets.is_secret_name`): bookkeeping
+  names (`remove:`, `test-ok:`, sent markers, `user:`, `plex:`...) are shown as they are.
