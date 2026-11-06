@@ -12,8 +12,33 @@ Read `AGENTS.md` first.
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `b41db6a`. Owner Claude Security scan pending. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
-| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | not written |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Draft plan written (Codex); awaiting plan review. Task board in `docs/tasks/plan-4/`. |
 | 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
+
+## Current handoff (Codex, 2026-11-06)
+
+Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
+project work. The Plan 2b and Plan 3 scans below remain pending; they are not development blockers.
+Latest checked baseline: `56ac787`, CI run 42178338615 passed.
+Next: review `docs/superpowers/plans/2026-11-06-orama-r1-plan-4-requests.md`, then start Task 1.
+Plan 4 product implementation has not started. Self-update remains a separate outstanding
+operations subplan before Release 1 completion; see the Plan 4 notes.
+
+## Plan 4 — task board
+
+| # | Task | State | Owner |
+|---|---|---|---|
+| 1 | Verify pinned request, media-info and webhook contracts | open | — |
+| 2 | Durable request store and idempotent identities | open | — |
+| 3 | Safe lookup and app read client | open | — |
+| 4 | Idempotent movie and TV submission | open | — |
+| 5 | Status reconciliation and background scheduling | open | — |
+| 6 | Playable-release waiting and per-request fallback | open | — |
+| 7 | Post-import playback and subtitle assessment | open | — |
+| 8 | Authenticated webhook refresh hints | open | — |
+| 9 | Search, request detail and live Home | open | — |
+| 10 | Reboot/drift reconciliation and disk warning | open | — |
+| 11 | Real request pipeline and browser proof | open | — |
 
 ## Resume here (updated by ChatGPT/Codex, 2026-11-05)
 
