@@ -82,5 +82,14 @@ check remains. Pinned Radarr v6.4.4.10685 LanguageParser returns Unknown for tit
 without a language tag, and LanguageSpecification can reject with a message containing
 neither "language" nor the other original diagnostic categories. The movie fixture now
 explicitly names English and asserts the parsed language before testing score changes;
-production quality and language requirements remain unchanged. Container confirmation
-pending for this fixture correction.
+production quality and language requirements remain unchanged.
+
+Run 42347591614 (`5b733b1`) reported `reason categories: ['wanted']` on the Radarr
+synthetic release. Orama's default `"mixed"` quality setting compiles Radarr to
+`uhd-bluray-web` (which allows only `Bluray-2160p` and `WEB 2160p`, minimum 34.5 MiB/min
+for `WEBDL-2160p`) while compiling Sonarr to `web-1080p`. Radarr's
+`QualityAllowedByProfileSpecification` therefore rejected the 1080p movie fixture with
+`"WEBDL-1080p is not wanted in profile"`. Updating the synthetic movie fixture in
+`fake_newznab.py` to `2160p` (`8589934592` bytes, ~55.3 MiB/min for a 148-minute movie)
+matches the default `uhd-bluray-web` quality profile while keeping `DTS` as the sole
+score-based rejection under the strict profile.
