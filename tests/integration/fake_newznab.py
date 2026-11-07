@@ -47,7 +47,7 @@ RESULTS = b"""<?xml version="1.0" encoding="UTF-8"?>
       <newznab:attr name="size" value="2147483648" />
     </item>
     <item>
-      <title>Inception.2010.1080p.WEB-DL.DTS.x264</title>
+      <title>Inception.2010.1080p.WEB-DL.English.DTS.x264</title>
       <guid isPermaLink="true">http://fake-newznab:8000/details/2</guid>
       <link>http://fake-newznab:8000/getnzb/2.nzb</link>
       <pubDate>Mon, 03 Nov 2025 12:00:00 +0000</pubDate>

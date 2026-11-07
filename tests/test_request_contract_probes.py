@@ -50,7 +50,8 @@ def test_movie_score_probe_ignores_tv_releases(monkeypatch):
                 {"title": "Breaking.Bad.S01E01.1080p.WEB-DL.DTS.x264",
                  "customFormatScore": -10000, "rejected": True,
                  "rejections": ["Custom format score", "Wrong title"]},
-                {"title": "Inception.2010.1080p.WEB-DL.DTS.x264",
+                {"title": "Inception.2010.1080p.WEB-DL.English.DTS.x264",
+                 "languages": [{"id": 1, "name": "English"}],
                  "customFormatScore": -10000, "rejected": item["qualityProfileId"] == 1,
                  "rejections": ["Custom format score"] if item["qualityProfileId"] == 1 else []},
             ]
