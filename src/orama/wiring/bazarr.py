@@ -154,16 +154,18 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         profiles = read("languages/profiles")
         mine = next((p for p in profiles if p.get("name") == PROFILE_NAME), None)
         items = [
-            {"id": n, "language": code, "audio_exclude": "False", "hi": "False", "forced": "False"}
+            {"id": n, "language": code, "audio_exclude": "False", "audio_only_include": "False",
+             "hi": "False", "forced": "False"}
             for n, code in enumerate(wanted, 1)
         ]
         current = (
-            [(i.get("language"), _text(i.get("hi")).lower(), _text(i.get("forced")).lower())
+            [(i.get("language"), _text(i.get("hi")).lower(), _text(i.get("forced")).lower(),
+              _text(i.get("audio_exclude")).lower(), _text(i.get("audio_only_include")).lower())
              for i in mine.get("items", [])]
             if mine
             else None
         )
-        if current != [(c, "false", "false") for c in wanted]:
+        if current != [(c, "false", "false", "false", "false") for c in wanted]:
             if mine is None:
                 ids = [int(p["profileId"]) for p in profiles if str(p.get("profileId")).isdigit()]
                 mine = {"profileId": max(ids, default=0) + 1, "name": PROFILE_NAME,
