@@ -300,7 +300,13 @@ def fallback_contract(port, key, resource, identifier, strict, target):
              body={**item, "qualityProfileId": saved["id"]}, expected=202)
         allowed = release()
         assert allowed["customFormatScore"] == score
-        assert allowed["rejected"] is False, "alternate score floor did not allow synthetic DTS release"
+        if allowed["rejected"]:
+            reasons = [str(r).lower() for r in allowed.get("rejections", [])]
+            categories = [c for c in ("size", "language", "quality", "score", "available", "age",
+                                      "retention", "delay", "title", "already", "release", "indexer")
+                          if any(c in r for r in reasons)]
+            pytest.fail("alternate score floor still rejected synthetic DTS release; "
+                        f"reason categories: {categories} (raw reasons withheld)")
         unchanged = call(port, key, f"qualityprofile/{strict['id']}")
         assert unchanged == strict, "shared strict quality profile changed"
     finally:

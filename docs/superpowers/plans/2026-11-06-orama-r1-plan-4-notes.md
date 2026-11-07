@@ -65,3 +65,12 @@ Other Gemini review findings remain unresolved.
 
 Local validation of this follow-up: 1,935 non-integration tests passed, Ruff and
 ShellCheck passed; the four real Chromium scenarios passed after the driver rename.
+
+Run 42317584294 (`d790359`) passed unit, browser and images. Integration passed 36
+tests and failed two title probes. Bazarr returned 500 on assigning the language
+profile. Its pinned v1.6.2 subtitle indexer reads `language['audio_only_include']`
+unconditionally; Orama's profile omitted that field. Wiring now supplies `False`
+and repairs older managed profiles on apply, with fresh-profile and repair/idempotence
+regressions. Other profiles remain preserved. Radarr still rejects the movie after
+changing the score floor; the probe now reports only fixed rejection categories to
+identify the remaining rule without exposing raw upstream data or credentials.

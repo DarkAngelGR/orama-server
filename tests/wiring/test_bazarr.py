@@ -312,3 +312,26 @@ def test_unreachable_and_bad_key_are_plain_failures(tmp_path):
     results = run(bz2, setup, store)
     assert statuses(results)["bazarr:apps"] == "failed"
     assert "did not accept" in next(r for r in results if r.name == "bazarr:apps").message
+
+
+def test_profile_supplies_required_audio_filters(tmp_path):
+    bz = FakeBazarr()
+    setup, store = make(tmp_path)
+    run(bz, setup, store)
+    for item in bz.orama_profile()["items"]:
+        assert item["audio_exclude"] == "False"
+        assert item["audio_only_include"] == "False"
+
+
+def test_old_profile_missing_audio_filter_is_repaired_once(tmp_path):
+    bz = FakeBazarr()
+    setup, store = make(tmp_path)
+    run(bz, setup, store)
+    for item in bz.orama_profile()["items"]:
+        item.pop("audio_only_include", None)
+    before = len(bz.writes)
+    result = run(bz, setup, store)
+    assert statuses(result)["bazarr:languages"] == "changed"
+    assert bz.fields_written()[before:] == [["languages-profiles"]]
+    assert all(i["audio_only_include"] == "False" for i in bz.orama_profile()["items"])
+    assert statuses(run(bz, setup, store))["bazarr:languages"] == "unchanged"
