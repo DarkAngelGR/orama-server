@@ -24,6 +24,15 @@ Owner approved Plan 4 on 2026-11-06. Task 1 (pinned request contracts) in progre
 Plan 4 product implementation has not started. Self-update remains a separate outstanding
 operations subplan before Release 1 completion; see the Plan 4 notes.
 
+## Test branch CI repair (Codex, 2026-11-07)
+
+The owner requested a CI run and repair on `test`. Run 42316368427 executed and failed:
+the web entry point imported `SetupReader` from `orama.setup_model`, although the class
+is defined in `orama.web`. Both unit and browser jobs hit that import error; image and
+integration jobs were skipped. The import is corrected in this repair. Source CI is
+pending. Other findings from the review of Gemini's request implementation and demo
+remain unresolved; this repair does not mark Tasks 2–5 or Plan 5 verified.
+
 ## Plan 4 — task board
 
 | # | Task | State | Owner |

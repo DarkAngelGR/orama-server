@@ -17,8 +17,7 @@ from orama.requests.client import MediaClient
 from orama.requests.store import RequestStore
 from orama.requests.worker import RequestWorker
 from orama.secrets import SecretStore, install_redaction
-from orama.setup_model import SetupReader
-from orama.web import MAX_REQUEST_BYTES, SECRETS_FILE, create_app
+from orama.web import MAX_REQUEST_BYTES, SECRETS_FILE, SetupReader, create_app
 from orama.wiring.http import Http
 
 HOST = "0.0.0.0"
