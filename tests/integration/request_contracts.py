@@ -286,6 +286,9 @@ def fallback_contract(port, key, resource, identifier, strict, target):
         return matches[0]
 
     blocked = release()
+    if resource == "movie":
+        assert any(lang.get("name") == "English" for lang in blocked["languages"]), (
+            "synthetic movie language must be explicit to isolate the codec score")
     score = blocked["customFormatScore"]
     assert score < strict["minFormatScore"]
     assert blocked["rejected"] is True
@@ -303,7 +306,8 @@ def fallback_contract(port, key, resource, identifier, strict, target):
         if allowed["rejected"]:
             reasons = [str(r).lower() for r in allowed.get("rejections", [])]
             categories = [c for c in ("size", "language", "quality", "score", "available", "age",
-                                      "retention", "delay", "title", "already", "release", "indexer")
+                                      "retention", "delay", "title", "already", "release", "indexer",
+                                      "wanted", "unknown", "parse", "download client")
                           if any(c in r for r in reasons)]
             pytest.fail("alternate score floor still rejected synthetic DTS release; "
                         f"reason categories: {categories} (raw reasons withheld)")

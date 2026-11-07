@@ -74,3 +74,13 @@ and repairs older managed profiles on apply, with fresh-profile and repair/idemp
 regressions. Other profiles remain preserved. Radarr still rejects the movie after
 changing the score floor; the probe now reports only fixed rejection categories to
 identify the remaining rule without exposing raw upstream data or credentials.
+
+Run 42346816151 (`97cc09f`) passed unit/browser/images and 37 container tests. The
+Sonarr title, generated-file media info, and Greek/English missing-subtitle assertions
+now pass, confirming the Bazarr repair. Only the Radarr synthetic-release acceptance
+check remains. Pinned Radarr v6.4.4.10685 LanguageParser returns Unknown for titles
+without a language tag, and LanguageSpecification can reject with a message containing
+neither "language" nor the other original diagnostic categories. The movie fixture now
+explicitly names English and asserts the parsed language before testing score changes;
+production quality and language requirements remain unchanged. Container confirmation
+pending for this fixture correction.
