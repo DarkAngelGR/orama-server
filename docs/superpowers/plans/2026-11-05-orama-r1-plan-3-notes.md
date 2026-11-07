@@ -19,7 +19,7 @@ How the web app was actually built. Where this differs from the plan text, these
 - Polling pages (checklist, starting, Apps) swap only what changed. The checklist appends new lines
   only. The Apps list swaps children, so keyboard focus survives a refresh.
 - Plex sign-in: the PIN lives on the server; checking it is a CSRF-protected POST.
-- A real browser now tests the whole app (`tests/web/test_browser.py`, `browser_pass.js`), and runs in a
+- A real browser now tests the whole app (`tests/web/test_browser.py`, `browser_pass.cjs`), and runs in a
   separate CI job.
 
 ## Security decisions worth knowing

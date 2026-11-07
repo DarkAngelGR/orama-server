@@ -6,7 +6,7 @@ run never needs a browser. The browser is what finds what Flask's test client ca
 phone width. No network is used: the Agent, Prowlarr, SABnzbd, Plex and the apply child are
 fakes, and the secrets are made at run time.
 
-The driver is ``browser_pass.js``; it fails on any console error, script error, failed or
+The driver is ``browser_pass.cjs``; it fails on any console error, script error, failed or
 refused request, sideways scrolling, unlabelled control or secret echoed back in a page.
 """
 
@@ -31,7 +31,7 @@ from orama.wiring.http import FakeHttp, Response
 from .conftest import write_setup
 from .test_wizard_indexers import DEFINITION
 
-SCRIPT = Path(__file__).with_name("browser_pass.js")
+SCRIPT = Path(__file__).with_name("browser_pass.cjs")
 NO_BROWSER = 3
 PORTS = {"plex": 32400, "jellyfin": 8096, "sonarr": 8989, "radarr": 7878, "prowlarr": 9696,
          "bazarr": 6767, "sabnzbd": 8080, "qbittorrent": 8081}

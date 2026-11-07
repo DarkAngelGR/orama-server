@@ -29,8 +29,11 @@ operations subplan before Release 1 completion; see the Plan 4 notes.
 The owner requested a CI run and repair on `test`. Run 42316368427 executed and failed:
 the web entry point imported `SetupReader` from `orama.setup_model`, although the class
 is defined in `orama.web`. Both unit and browser jobs hit that import error; image and
-integration jobs were skipped. The import is corrected in this repair. Source CI is
-pending. Other findings from the review of Gemini's request implementation and demo
+integration jobs were skipped. The import is corrected in this repair. Run 42316906235 passed unit and image jobs, then exposed a browser-driver module
+conflict from the new root package.json. The driver now has an explicit `.cjs` extension;
+all four real Chromium scenarios passed locally. Container probes also inherited three
+failures from main's unfinished Task 1 (run 42279371718); their fixes and validation are
+recorded in the Plan 4 notes. New source CI is pending. Other findings from the review of Gemini's request implementation and demo
 remain unresolved; this repair does not mark Tasks 2–5 or Plan 5 verified.
 
 ## Plan 4 — task board
