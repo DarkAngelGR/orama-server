@@ -17,6 +17,7 @@ from .conftest import run
 
 
 def call(port, key, path, *, method="GET", body=None, expected=200):
+    __tracebackhide__ = True
     endpoint = path if path.startswith("/") else "/api/v3/" + path
     try:
         response = Http().request(method, f"http://127.0.0.1:{port}{endpoint}",
@@ -34,6 +35,7 @@ def call(port, key, path, *, method="GET", body=None, expected=200):
 
 
 def read_contracts(app, port, key):
+    __tracebackhide__ = True
     status = call(port, key, "system/status")
     assert isinstance(status.get("version"), str)
     for resource in ("queue", "history"):
@@ -45,7 +47,10 @@ def read_contracts(app, port, key):
     library = "series" if app == "sonarr" else "movie"
     assert isinstance(call(port, key, library), list)
     file_path = "episodefile?seriesId=2147483647" if app == "sonarr" else "moviefile?movieId=2147483647"
-    assert call(port, key, file_path) == []
+    if app == "sonarr":
+        call(port, key, file_path, expected=404)
+    else:
+        assert call(port, key, file_path) == []
     profiles = call(port, key, "qualityprofile")
     mine = [p for p in profiles if p["name"] == "Orama"]
     assert len(mine) == 1
@@ -57,6 +62,7 @@ def read_contracts(app, port, key):
 
 
 def authenticated_webhooks(ports, keys, folder):
+    __tracebackhide__ = True
     token = secrets.token_hex(32)
     (folder / "token").write_text(token)
     (folder / "token").chmod(0o600)
@@ -103,16 +109,28 @@ def authenticated_webhooks(ports, keys, folder):
             assert matched and all(e["authenticated"] for e in matched)
             assert any(e["eventType"] == "Test" for e in matched)
             assert all("eventType" in e["fields"] for e in matched)
+        for app in ("sonarr", "radarr"):
+            output = run(["docker", "logs", f"orama-{app}"])
+            assert output.returncode == 0, "app logs unavailable for webhook credential check"
+            if token in output.stdout:
+                pytest.fail("webhook credential present in app logs (output withheld)")
     finally:
         try:
+            cleanup_failed = False
             for port, key, identifier in created:
-                call(port, key, f"notification/{identifier}", method="DELETE")
+                try:
+                    call(port, key, f"notification/{identifier}", method="DELETE")
+                except pytest.fail.Exception:
+                    cleanup_failed = True
+            if cleanup_failed:
+                pytest.fail("request webhook notification cleanup failed")
         finally:
             run(["docker", "rm", "-f", name])
             (folder / "token").unlink(missing_ok=True)
 
 
 def wait_command(port, key, body):
+    __tracebackhide__ = True
     command = call(port, key, "command", method="POST", body=body, expected=201)
     assert isinstance(command["id"], int)
     deadline = time.monotonic() + 180
@@ -134,6 +152,7 @@ def title_contracts(app, port, key, host, bazarr_port, bazarr_key):
     Adding a title always contacts Skyhook in these pins. Catalogue unavailability
     deliberately fails this required contract instead of silently skipping coverage.
     """
+    __tracebackhide__ = True
     tv = app == "sonarr"
     resource, external, source = ("series", "tvdbId", 81189) if tv else ("movie", "tmdbId", 27205)
     term = "tvdb:81189" if tv else "tmdb:27205"
@@ -151,18 +170,28 @@ def title_contracts(app, port, key, host, bazarr_port, bazarr_key):
                        "searchForMissingEpisodes": False, "searchForCutoffUnmetEpisodes": False})
     else:
         payload.update(minimumAvailability="released", addOptions={"searchForMovie": False})
+    observation = {"lookup": {k: item[k] for k in (external, "title", "year")}}
     identifier = None
     try:
         added = call(port, key, resource, method="POST", body=payload, expected=201)
         identifier = added["id"]
         assert added[external] == source and isinstance(identifier, int)
+        observation["added"] = {k: added[k] for k in ("id", external, "monitored", "qualityProfileId")}
         have = call(port, key, f"{resource}?{external}={source}")
         assert [r["id"] for r in have] == [identifier]
         if tv:
             wait_command(port, key, {"name": "RefreshSeries", "seriesId": identifier})
             episodes = call(port, key, f"episode?seriesId={identifier}")
             target = next(e for e in episodes if e["seasonNumber"] == e["episodeNumber"] == 1)
+            observation["episode"] = {k: target[k] for k in (
+                "id", "seriesId", "seasonNumber", "episodeNumber", "monitored", "hasFile")}
+            assert len(episodes) > 1 and all(e["monitored"] is False for e in episodes)
+            # An existing unrelated selection must survive an episode-only request.
+            other = next(e for e in episodes if e["id"] != target["id"])
+            call(port, key, "episode/monitor", method="PUT",
+                 body={"episodeIds": [other["id"]], "monitored": True}, expected=202)
             before = {e["id"]: e["monitored"] for e in episodes}
+            before[other["id"]] = True
             call(port, key, "episode/monitor", method="PUT",
                  body={"episodeIds": [target["id"]], "monitored": True}, expected=202)
             after = call(port, key, f"episode?seriesId={identifier}")
@@ -198,14 +227,19 @@ def title_contracts(app, port, key, host, bazarr_port, bazarr_key):
         assert info["videoBitDepth"] == 8
         assert isinstance(info["audioLanguages"], str)
         assert isinstance(info.get("subtitles", ""), str)
-        subtitle_contract(bazarr_port, bazarr_key, tv, identifier,
-                          target["id"] if tv else identifier)
+        observation["mediaInfo"] = {k: info.get(k) for k in (
+            "videoCodec", "audioCodec", "resolution", "videoBitDepth", "audioLanguages",
+            "videoDynamicRange", "videoDynamicRangeType", "subtitles")}
+        observation["subtitles"] = subtitle_contract(
+            bazarr_port, bazarr_key, tv, identifier, target["id"] if tv else identifier)
+        return observation
     finally:
         if identifier is not None:
             call(port, key, f"{resource}/{identifier}?deleteFiles=true", method="DELETE")
 
 
 def subtitle_contract(port, key, tv, identifier, file_target):
+    __tracebackhide__ = True
     resource = "series" if tv else "movies"
     id_field = "seriesid" if tv else "radarrid"
     call(port, key, f"/api/{resource}", method="PATCH",
@@ -220,20 +254,34 @@ def subtitle_contract(port, key, tv, identifier, file_target):
         if time.monotonic() >= deadline:
             pytest.fail("Bazarr did not synchronize synthetic media")
         time.sleep(1)
+    # Initial synchronization may expose the row before subtitle indexing finishes.
+    # Assign the test profile explicitly and index the synthetic file synchronously.
+    profiles = call(port, key, "/api/system/languages/profiles")
+    profile = next(p for p in profiles if p["name"] == "Orama")
+    call(port, key, f"/api/{resource}", method="POST",
+         body={id_field: [identifier], "profileid": [str(profile["profileId"])]}, expected=204)
+    call(port, key, f"/api/{resource}", method="PATCH",
+         body={id_field: identifier, "action": "scan-disk"}, expected=204)
+    data = call(port, key, query)
     assert len(data["data"]) == 1
     item = data["data"][0]
     assert item["sonarrEpisodeId" if tv else "radarrId"] == file_target
     assert isinstance(item["missing_subtitles"], list)
     assert isinstance(item["subtitles"], list)
     assert {s["code2"] for s in item["missing_subtitles"]} == {"el", "en"}
+    return {"missing_subtitles": item["missing_subtitles"], "subtitles": item["subtitles"]}
 
 
 def fallback_contract(port, key, resource, identifier, strict, target):
+    __tracebackhide__ = True
     query = f"release?{'episodeId' if resource == 'series' else 'movieId'}={target}"
 
     def release():
+        __tracebackhide__ = True
         releases = call(port, key, query)
-        matches = [r for r in releases if ".DTS.x264" in r["title"]]
+        prefix = "Breaking.Bad.S01E01." if resource == "series" else "Inception.2010."
+        matches = [r for r in releases if r["title"].startswith(prefix)
+                   and ".DTS.x264" in r["title"]]
         assert matches, "synthetic DTS release missing from indexer results"
         return matches[0]
 
@@ -245,8 +293,9 @@ def fallback_contract(port, key, resource, identifier, strict, target):
     alternate = {**strict, "name": "Request fallback contract", "minFormatScore": score}
     alternate.pop("id", None)
     saved = call(port, key, "qualityprofile", method="POST", body=alternate, expected=201)
-    item = call(port, key, f"{resource}/{identifier}")
+    item = None
     try:
+        item = call(port, key, f"{resource}/{identifier}")
         call(port, key, f"{resource}/{identifier}", method="PUT",
              body={**item, "qualityProfileId": saved["id"]}, expected=202)
         allowed = release()
@@ -256,6 +305,7 @@ def fallback_contract(port, key, resource, identifier, strict, target):
         assert unchanged == strict, "shared strict quality profile changed"
     finally:
         try:
-            call(port, key, f"{resource}/{identifier}", method="PUT", body=item, expected=202)
+            if item is not None:
+                call(port, key, f"{resource}/{identifier}", method="PUT", body=item, expected=202)
         finally:
             call(port, key, f"qualityprofile/{saved['id']}", method="DELETE")

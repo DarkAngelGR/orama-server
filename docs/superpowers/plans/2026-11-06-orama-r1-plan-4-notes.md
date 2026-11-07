@@ -38,3 +38,30 @@
 - Remaining before Task 1 handoff: green real-container evidence, minimal offline
   response fixtures, exact observed version/endpoint notes, independent review and
   report. Do not begin Task 2 or mark Task 1 complete from these notes alone.
+
+
+### Test branch CI follow-up (Codex, 2026-11-07)
+
+The owner requested repair of test-branch CI. Startup import fixed in `33ef942`;
+run 42316906235 passed unit/images but exposed the Express package's effect on the
+CommonJS browser driver. The driver is now explicitly `.cjs`, and all four local
+Chromium scenarios passed.
+
+The branch also inherited unfinished Task 1 probes from main. Earlier source run
+42279371718 showed three required-contract failures. This follow-up:
+- expects Sonarr's observed 404 for a nonexistent series' episode-file list;
+- filters the fallback probe by the requested title, so Radarr evaluates the synthetic
+  movie rather than the TV release returned first by the shared fake indexer;
+- explicitly assigns the temporary title's subtitle profile and runs subtitle indexing
+  before asserting missing-language status, avoiding inspection of an initial sync row;
+- includes the pending probe review fixes: credential-bearing tracebacks hidden,
+  all notification cleanup attempted, profile cleanup protected immediately after
+  creation, and episode monitor-none plus preservation assertions. Regression tests
+  verify failure-output secrecy and movie/TV release selection.
+
+These are test harness corrections, not permission to skip required assertions.
+Real-container validation of the updated probes remains pending; Task 1 is unfinished.
+Other Gemini review findings remain unresolved.
+
+Local validation of this follow-up: 1,935 non-integration tests passed, Ruff and
+ShellCheck passed; the four real Chromium scenarios passed after the driver rename.

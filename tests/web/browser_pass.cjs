@@ -1,5 +1,5 @@
 // Real-browser pass over every Orama page (Chromium through Playwright).
-// Usage: node browser_pass.js <scenario> <base-url>
+// Usage: node browser_pass.cjs <scenario> <base-url>
 //   scenario: wizard | keyboard | apps-focus
 // The password, first-run code and every typed secret are made here or come in the
 // environment, never on the command line. Environment (all optional but the first two):
