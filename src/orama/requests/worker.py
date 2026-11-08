@@ -10,14 +10,14 @@ from typing import Any
 
 from orama import state
 from orama.agent_client import AgentError
-from orama.requests.client import MediaClient, RequestError
+from orama.requests.client import MediaClient, RequestError, _sanitize_title
 from orama.requests.fallback import apply_fallback, fallback_due
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
 from orama.requests.reconcile import reconcile
 from orama.requests.store import RequestStore, StoreError
 from orama.requests.submit import submit
-from orama.requests.subtitles import assess_subtitles
+from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
 from orama.setup_model import DesiredSetup, enabled_apps
 
 _LOG = logging.getLogger(__name__)
@@ -187,7 +187,12 @@ class RequestWorker:
                             self.store.release(record.id, self.worker_id, now + 15.0)
                             return 1
 
-            if record.stage == "requested" and hasattr(client, "ensure_movie"):
+            needs_submit = (
+                record.stage == "requested"
+                or (record.remote_id is None and record.stage in ("searching", "unavailable"))
+                or record.waiting_reason == "Waiting for episode metadata"
+            )
+            if needs_submit and hasattr(client, "ensure_movie"):
                 submit(record, client, self.store, now)
                 updated_after_submit = self.store.get(record.id)
                 next_after = (
@@ -202,18 +207,6 @@ class RequestWorker:
             if record.remote_id is not None:
                 remote_ids.add(record.remote_id)
             snapshot = client.snapshot(app_name, remote_ids=remote_ids)
-            update = reconcile(record, snapshot, now, remote_id=record.remote_id)
-
-            if (
-                update.stage != "ready"
-                and setup_obj is not None
-                and hasattr(client, "store")
-                and fallback_due(record, setup_obj, now)
-            ):
-                fb_update = apply_fallback(record, client, self.store, setup_obj, now)
-                next_fb = fb_update.next_check_at if fb_update.next_check_at is not None else now + 5.0
-                self.store.release(record.id, self.worker_id, next_fb)
-                return 1
 
             resolved_remote_id = record.remote_id
             if resolved_remote_id is None:
@@ -222,6 +215,59 @@ class RequestWorker:
                     if s_id == record.spec.source_id and isinstance(it.get("id"), int):
                         resolved_remote_id = it["id"]
                         break
+
+            if record.spec.kind != "movie" and snapshot.files:
+                for ep in snapshot.files:
+                    if not isinstance(ep, dict):
+                        continue
+                    if (
+                        resolved_remote_id is not None
+                        and ep.get("seriesId") not in (None, resolved_remote_id)
+                    ):
+                        continue
+                    s_num = int(ep.get("seasonNumber", 0))
+                    e_num = int(ep.get("episodeNumber", 1))
+                    if record.spec.kind == "episode" and (
+                        s_num != record.spec.season or e_num != record.spec.episode
+                    ):
+                        continue
+                    if record.spec.kind == "season" and s_num != record.spec.season:
+                        continue
+                    if (
+                        record.spec.kind == "series"
+                        and s_num <= 0
+                        and not ep.get("monitored")
+                    ):
+                        continue
+                    ep_has_file = bool(ep.get("hasFile"))
+                    ep_stage = (
+                        "ready"
+                        if ep_has_file
+                        else ("downloading" if ep.get("monitored") else "searching")
+                    )
+                    self.store.upsert_episode_target(
+                        record.spec.source_id,
+                        s_num,
+                        e_num,
+                        title=_sanitize_title(str(ep.get("title", ""))),
+                        stage=ep_stage,
+                        has_file=ep_has_file,
+                    )
+
+            update = reconcile(record, snapshot, now, remote_id=resolved_remote_id)
+
+            if (
+                update.stage != "ready"
+                and setup_obj is not None
+                and hasattr(client, "store")
+                and fallback_due(record, setup_obj, now)
+            ):
+                fb_update = apply_fallback(record, client, self.store, setup_obj, now)
+                next_fb = (
+                    fb_update.next_check_at if fb_update.next_check_at is not None else now + 5.0
+                )
+                self.store.release(record.id, self.worker_id, next_fb)
+                return 1
 
             if update.stage == "ready" and hasattr(client, "store") and resolved_remote_id is not None:
                 media_info = client.file_media_info(
@@ -236,16 +282,30 @@ class RequestWorker:
                     for code in pb.reason_codes:
                         self.store.record_followup(record.id, "conversion", code, now)
 
-                avail_subs = client.subtitle_languages(
-                    record.spec.kind,
-                    resolved_remote_id,
-                    season=record.spec.season,
-                    episode=record.spec.episode,
-                )
                 wanted_langs = (
                     getattr(setup_obj, "subtitle_languages", ("el", "en")) or ("el", "en")
                 )
-                sb = assess_subtitles(avail_subs, wanted_langs)
+                if record.spec.kind in ("season", "series") and hasattr(
+                    client, "episode_subtitle_rows"
+                ):
+                    ep_rows = client.episode_subtitle_rows(
+                        resolved_remote_id,
+                        season=record.spec.season if record.spec.kind == "season" else None,
+                    )
+                    sb = (
+                        assess_episode_subtitles(ep_rows, wanted_langs)
+                        if ep_rows
+                        else assess_subtitles(None, wanted_langs)
+                    )
+                else:
+                    avail_subs = client.subtitle_languages(
+                        record.spec.kind,
+                        resolved_remote_id,
+                        season=record.spec.season,
+                        episode=record.spec.episode,
+                    )
+                    sb = assess_subtitles(avail_subs, wanted_langs)
+
                 if sb.needs_translation:
                     for code in sb.reason_codes:
                         self.store.record_followup(record.id, "translation", code, now)
@@ -263,6 +323,17 @@ class RequestWorker:
                         has_file=True,
                     )
 
+                needs_recheck = (
+                    record.spec.kind == "series"
+                    or pb.status == "unknown"
+                    or sb.status in ("unknown", "partial", "missing")
+                )
+                next_ready_check = (
+                    now + 300.0
+                    if needs_recheck
+                    else (update.next_check_at if update.next_check_at is not None else now + 3600.0)
+                )
+
                 update = RequestUpdate(
                     stage="ready",
                     progress=100,
@@ -270,7 +341,7 @@ class RequestWorker:
                     waiting_reason=None,
                     playback_note=pb.note,
                     subtitle_note=sb.note,
-                    next_check_at=update.next_check_at,
+                    next_check_at=next_ready_check,
                 )
 
             self.store.update(record.id, record.revision, update)
@@ -280,3 +351,4 @@ class RequestWorker:
         except Exception:
             self.store.release(record.id, self.worker_id, now + 15.0)
             raise
+

@@ -135,3 +135,64 @@ def test_submit_whole_series(tmp_path):
     cmd_call = next(c for c in http.calls if c.path == "/api/v3/command")
     assert cmd_call.json.get("name") == "SeriesSearch"
     assert cmd_call.json.get("seriesId") == 99
+
+
+def test_submit_episode_with_missing_metadata_does_not_trigger_season_or_series_search(tmp_path):
+    store = RequestStore(tmp_path / "requests.db")
+    now = 1000.0
+    rec, _ = store.create(
+        RequestSpec(kind="episode", source_id=303, season=1, episode=99), now
+    )
+
+    http = FakeHttp()
+    http.route("GET", "/api/v3/series", lambda call: json_resp([{"id": 77, "tvdbId": 303, "title": "Show A"}]))
+    # Episode 99 is not in Sonarr's episode list yet
+    http.route(
+        "GET",
+        "/api/v3/episode",
+        lambda call: json_resp([
+            {"id": 1001, "seriesId": 77, "seasonNumber": 1, "episodeNumber": 1, "monitored": False},
+        ]),
+    )
+    http.route("POST", "/api/v3/command", lambda call: json_resp({"id": 888}))
+
+    client = make_client(http)
+    submit(rec, client, store, now)
+
+    updated = store.get(rec.id)
+    assert updated is not None
+    assert updated.remote_id == 77
+    assert updated.stage == "searching"
+    assert updated.waiting_reason is not None and "metadata" in updated.waiting_reason.lower()
+    # Must NEVER fall through to SeasonSearch or SeriesSearch!
+    assert not any(c.path == "/api/v3/command" and c.method == "POST" for c in http.calls)
+    assert client.search_targets("sonarr", 77, season=1, episode_ids=[]) == 0
+    assert not any(c.path == "/api/v3/command" and c.method == "POST" for c in http.calls)
+
+
+def test_submit_retry_skips_duplicate_search_when_command_or_queue_active(tmp_path):
+    store = RequestStore(tmp_path / "requests.db")
+    now = 1000.0
+    rec, _ = store.create(RequestSpec(kind="movie", source_id=101), now)
+
+    http = FakeHttp()
+    http.route("GET", "/api/v3/movie", lambda call: json_resp([{"id": 55, "tmdbId": 101, "hasFile": False}]))
+    http.route(
+        "GET",
+        "/api/v3/command",
+        lambda call: json_resp([
+            {"id": 900, "name": "MoviesSearch", "status": "started", "body": {"movieIds": [55]}}
+        ]),
+    )
+    http.route("POST", "/api/v3/command", lambda call: json_resp({"id": 901, "name": "MoviesSearch"}))
+
+    client = make_client(http)
+    submit(rec, client, store, now)
+
+    updated = store.get(rec.id)
+    assert updated is not None
+    assert updated.remote_id == 55
+    assert updated.stage == "downloading"
+    # No duplicate POST /api/v3/command was sent
+    assert not any(c.path == "/api/v3/command" and c.method == "POST" for c in http.calls)
+

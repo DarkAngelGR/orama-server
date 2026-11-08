@@ -318,13 +318,13 @@ class RequestStore:
             conn.close()
 
     def list_active(self, limit: int = 100) -> list[RequestRecord]:
-        """List active requests (not completed or terminal)."""
+        """List active requests (unresolved requests plus ongoing series subscriptions)."""
         conn = self._connect()
         try:
             rows = conn.execute(
                 """
                 SELECT * FROM requests
-                WHERE stage != 'ready'
+                WHERE stage != 'ready' OR kind = 'series'
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
@@ -465,8 +465,17 @@ class RequestStore:
                 SELECT * FROM requests
                 WHERE next_check_at <= ?
                   AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
-                  AND stage != 'ready'
-                ORDER BY next_check_at ASC
+                  AND (
+                      stage != 'ready'
+                      OR kind = 'series'
+                      OR playback_note IS NULL
+                      OR playback_note LIKE '%not checked%'
+                      OR subtitle_note IS NULL
+                      OR subtitle_note LIKE '%not checked%'
+                  )
+                ORDER BY
+                  CASE WHEN stage != 'ready' THEN 0 ELSE 1 END ASC,
+                  next_check_at ASC
                 LIMIT 1
                 """,
                 (now, now),

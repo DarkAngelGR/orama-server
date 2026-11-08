@@ -348,6 +348,64 @@ def test_polling_get_triggers_no_work_and_renders_season_and_series_wording(tmp_
     assert updated is not None
     assert updated.stage == "searching"
 
+    # Retrying an unsubmitted request (remote_id is None) must not strand it:
+    # RequestWorker.tick() must still submit it to the upstream app.
+    from orama.requests.client import MediaClient
+    from orama.requests.worker import RequestWorker
+
+    unsub_rec, _ = st.requests.create(
+        RequestSpec(kind="movie", source_id=777),
+        clock(),
+        title="Unsubmitted Movie",
+    )
+    st.requests.update(
+        unsub_rec.id,
+        unsub_rec.revision,
+        RequestUpdate(waiting_reason="Waiting for Radarr", next_check_at=clock() + 60.0),
+    )
+    retry_unsub = client.post(
+        f"/requests/{unsub_rec.id}/retry",
+        data={"csrf_token": csrf},
+    )
+    assert retry_unsub.status_code == 303
+    after_retry = st.requests.get(unsub_rec.id)
+    assert after_retry is not None
+    assert after_retry.stage == "requested"
+    assert after_retry.waiting_reason is None
+
+    http.route(
+        "GET",
+        "/api/v3/movie",
+        lambda call: Response(
+            200, {}, json.dumps([{"id": 44, "tmdbId": 777, "hasFile": False}]).encode()
+        ),
+    )
+    http.route(
+        "POST",
+        "/api/v3/command",
+        lambda call: Response(201, {}, json.dumps({"id": 1, "name": "MoviesSearch"}).encode()),
+    )
+    real_worker = RequestWorker(
+        store=st.requests,
+        client_factory=lambda: MediaClient(setup=st.setup.current(), store=st.store, http=http),
+        clock=clock,
+    )
+    # Lock season_rec and series_rec forward so unsub_rec is claimed first
+    for prior_id in (season_rec.id, series_rec.id):
+        prior = st.requests.get(prior_id)
+        assert prior is not None
+        st.requests.update(
+            prior.id,
+            prior.revision,
+            RequestUpdate(next_check_at=clock() + 100.0),
+        )
+    assert real_worker.tick(clock()) == 1
+    submitted_rec = st.requests.get(unsub_rec.id)
+    assert submitted_rec is not None
+    assert submitted_rec.remote_id == 44
+    assert submitted_rec.stage == "downloading"
+
+
 
 def test_home_disk_warning_below_equal_above_threshold_and_stat_error(tmp_path: Path):
     from orama.agent_client import AgentError

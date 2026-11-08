@@ -153,6 +153,7 @@ def _host_secret_store(clean_host: Host, tmp_path: Path) -> SecretStore:
 def _sync_bazarr_and_index(
     bazarr_port: int, bazarr_key: str, tv: bool, remote_id: int, target_id: int
 ) -> None:
+    __tracebackhide__ = True
     resource = "series" if tv else "movies"
     id_field = "seriesid" if tv else "radarrid"
     call(
@@ -196,15 +197,125 @@ def _sync_bazarr_and_index(
     )
 
 
+def _app_call(
+    setup: DesiredSetup,
+    secret_store: SecretStore,
+    app: str,
+    path: str,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+    expected: int = 200,
+):
+    __tracebackhide__ = True
+    return call(
+        setup.ports[app],
+        secret_store.get(f"apikey:{app}"),
+        path,
+        method=method,
+        body=body,
+        expected=expected,
+    )
+
+
+def _app_wait_command(
+    setup: DesiredSetup, secret_store: SecretStore, app: str, body: dict
+):
+    __tracebackhide__ = True
+    return wait_command(setup.ports[app], secret_store.get(f"apikey:{app}"), body)
+
+
+def _app_sync_bazarr(
+    setup: DesiredSetup,
+    secret_store: SecretStore,
+    tv: bool,
+    remote_id: int,
+    target_id: int,
+) -> None:
+    __tracebackhide__ = True
+    _sync_bazarr_and_index(
+        setup.ports["bazarr"],
+        secret_store.get("apikey:bazarr") or "",
+        tv,
+        remote_id,
+        target_id,
+    )
+
+
+def _verify_webhook_auth(test_client, secret_store: SecretStore) -> None:
+    __tracebackhide__ = True
+    sonarr_token = secrets.token_hex(32)
+    radarr_token = secrets.token_hex(32)
+    secret_store.set(webhook_token_name("sonarr"), sonarr_token)
+    secret_store.set(webhook_token_name("radarr"), radarr_token)
+
+    assert test_client.post("/hooks/radarr", json={"eventType": "Test"}).status_code == 403
+    assert (
+        test_client.post(
+            "/hooks/radarr",
+            headers={"Authorization": f"Bearer {sonarr_token}"},
+            json={"eventType": "Test"},
+        ).status_code
+        == 403
+    )
+    assert (
+        test_client.post(
+            "/hooks/radarr",
+            headers={"Authorization": f"Bearer {radarr_token}"},
+            json={"eventType": "Test"},
+        ).status_code
+        == 200
+    )
+
+
+def _verify_pages_no_secret_leaks(
+    clean_host: Host,
+    app,
+    test_client,
+    secret_store: SecretStore,
+    state_dir: Path,
+    rec_id: str,
+) -> None:
+    __tracebackhide__ = True
+    import re
+
+    password = "pw-" + secrets.token_urlsafe(12)
+    app.extensions["orama"].passwords.create(password)
+    login_page = test_client.get("/signin").data.decode("utf-8")
+    m = re.search(r'name="csrf_token"\s+value="([^"]+)"', login_page)
+    assert m is not None
+    test_client.post(
+        "/signin",
+        data={"password": password, "csrf_token": m.group(1)},
+        headers={"Origin": "http://localhost"},
+    )
+
+    pages = {
+        "home": test_client.get("/").data.decode("utf-8"),
+        "search": test_client.get("/search?q=Inception&type=movie").data.decode("utf-8"),
+        "media": test_client.get("/media/movie/27205").data.decode("utf-8"),
+        "detail": test_client.get(f"/requests/{rec_id}").data.decode("utf-8"),
+        "status": test_client.get(f"/requests/{rec_id}/status").data.decode("utf-8"),
+        "sqlite_raw": (state_dir / "requests.sqlite3").read_bytes().decode("latin-1"),
+    }
+    sonarr_tok = secret_store.get(webhook_token_name("sonarr")) or ""
+    radarr_tok = secret_store.get(webhook_token_name("radarr")) or ""
+    secret_values = [
+        v
+        for v in (*stored_secrets(clean_host).values(), sonarr_tok, radarr_tok, password)
+        if len(v) >= 8
+    ]
+    leaks = sorted(
+        where for where, text in pages.items() if any(sec in text for sec in secret_values)
+    )
+    assert leaks == [], f"secret values leaked in: {leaks}"
+
+
 def test_real_episode_and_movie_request_pipeline_and_hardlinks(
     clean_host: Host, requests_stack: dict, tmp_path: Path
 ):
     setup: DesiredSetup = requests_stack["setup"]
-    ports = setup.ports
     secret_store = _host_secret_store(clean_host, tmp_path)
-    sonarr_port, sonarr_key = ports["sonarr"], secret_store.get("apikey:sonarr")
-    radarr_port, radarr_key = ports["radarr"], secret_store.get("apikey:radarr")
-    bazarr_port, bazarr_key = ports["bazarr"], secret_store.get("apikey:bazarr")
 
     req_store = RequestStore(tmp_path / "requests.sqlite3")
     client = MediaClient(setup, secret_store, Http())
@@ -237,7 +348,9 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         series_remote_id = ep_after_submit.remote_id
 
         # Verify in real Sonarr that ONLY S01E01 is monitored
-        episodes = call(sonarr_port, sonarr_key, f"episode?seriesId={series_remote_id}")
+        episodes = _app_call(
+            setup, secret_store, "sonarr", f"episode?seriesId={series_remote_id}"
+        )
         s01e01 = next(
             e for e in episodes if e["seasonNumber"] == 1 and e["episodeNumber"] == 1
         )
@@ -253,7 +366,9 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         )
         assert s1_created is True and s1_rec.id != ep_rec.id
         assert worker.tick(now + 2) == 1
-        episodes_after_s1 = call(sonarr_port, sonarr_key, f"episode?seriesId={series_remote_id}")
+        episodes_after_s1 = _app_call(
+            setup, secret_store, "sonarr", f"episode?seriesId={series_remote_id}"
+        )
         assert all(
             e["monitored"] is True
             for e in episodes_after_s1
@@ -266,7 +381,9 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         )
 
         # Generate synthetic video in downloads and hardlink into Sonarr's series path
-        series_obj = call(sonarr_port, sonarr_key, f"series/{series_remote_id}")
+        series_obj = _app_call(
+            setup, secret_store, "sonarr", f"series/{series_remote_id}"
+        )
         series_path = series_obj["path"]
         tv_dest = f"{series_path}/Breaking.Bad.S01E01.1080p.WEB-DL.AAC.x264.mkv"
         assert (
@@ -316,16 +433,27 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         tv_lines = stat_tv.stdout.strip().splitlines()
         assert tv_lines[0] == tv_lines[1] and int(tv_lines[0].split()[1]) >= 2
 
-        wait_command(sonarr_port, sonarr_key, {"name": "RescanSeries", "seriesId": series_remote_id})
-        _sync_bazarr_and_index(bazarr_port, bazarr_key, True, series_remote_id, s01e01["id"])
+        _app_wait_command(
+            setup,
+            secret_store,
+            "sonarr",
+            {"name": "RescanSeries", "seriesId": series_remote_id},
+        )
+        _app_sync_bazarr(setup, secret_store, True, series_remote_id, s01e01["id"])
 
-        # Reconcile episode request to Ready with playback and subtitle annotations
+        # Reconcile both s1_rec (Season 1) and ep_rec (S01E01):
+        # Season 1 stays downloading because only 1 of 7 episodes has a file, while S01E01 is Ready!
         req_store.update(
             ep_rec.id,
             req_store.get(ep_rec.id).revision,
             RequestUpdate(next_check_at=now + 10),
         )
         assert worker.tick(now + 10) == 1
+        assert worker.tick(now + 10) == 1
+
+        s1_after = req_store.get(s1_rec.id)
+        assert s1_after is not None and s1_after.stage == "downloading"
+
         ep_ready = req_store.get(ep_rec.id)
         assert ep_ready is not None
         assert ep_ready.stage == "ready"
@@ -360,7 +488,9 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         assert isinstance(mov_after_submit.remote_id, int)
         movie_remote_id = mov_after_submit.remote_id
 
-        movie_obj = call(radarr_port, radarr_key, f"movie/{movie_remote_id}")
+        movie_obj = _app_call(
+            setup, secret_store, "radarr", f"movie/{movie_remote_id}"
+        )
         movie_path = movie_obj["path"]
         mov_dest = f"{movie_path}/Inception.2010.1080p.WEB-DL.AAC.x264.mkv"
         assert (
@@ -410,8 +540,13 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         mov_lines = stat_mov.stdout.strip().splitlines()
         assert mov_lines[0] == mov_lines[1] and int(mov_lines[0].split()[1]) >= 2
 
-        wait_command(radarr_port, radarr_key, {"name": "RescanMovie", "movieId": movie_remote_id})
-        _sync_bazarr_and_index(bazarr_port, bazarr_key, False, movie_remote_id, movie_remote_id)
+        _app_wait_command(
+            setup,
+            secret_store,
+            "radarr",
+            {"name": "RescanMovie", "movieId": movie_remote_id},
+        )
+        _app_sync_bazarr(setup, secret_store, False, movie_remote_id, movie_remote_id)
 
         req_store.update(
             mov_rec.id,
@@ -430,16 +565,18 @@ def test_real_episode_and_movie_request_pipeline_and_hardlinks(
         )
     finally:
         if series_remote_id is not None:
-            call(
-                sonarr_port,
-                sonarr_key,
+            _app_call(
+                setup,
+                secret_store,
+                "sonarr",
                 f"series/{series_remote_id}?deleteFiles=true",
                 method="DELETE",
             )
         if movie_remote_id is not None:
-            call(
-                radarr_port,
-                radarr_key,
+            _app_call(
+                setup,
+                secret_store,
+                "radarr",
                 f"movie/{movie_remote_id}?deleteFiles=true",
                 method="DELETE",
             )
@@ -450,12 +587,12 @@ def test_controlled_fallback_threshold_and_shared_profile_preservation(
     clean_host: Host, requests_stack: dict, tmp_path: Path
 ):
     setup: DesiredSetup = requests_stack["setup"]
-    ports = setup.ports
     secret_store = _host_secret_store(clean_host, tmp_path)
-    radarr_port, radarr_key = ports["radarr"], secret_store.get("apikey:radarr")
 
     strict_before = next(
-        p for p in call(radarr_port, radarr_key, "qualityprofile") if p["name"] == "Orama"
+        p
+        for p in _app_call(setup, secret_store, "radarr", "qualityprofile")
+        if p["name"] == "Orama"
     )
 
     req_store = RequestStore(tmp_path / "fallback.sqlite3")
@@ -493,7 +630,9 @@ def test_controlled_fallback_threshold_and_shared_profile_preservation(
         still_strict = req_store.get(rec.id)
         assert still_strict is not None and still_strict.fallback_applied is False
 
-        releases_before = call(radarr_port, radarr_key, f"release?movieId={movie_remote_id}")
+        releases_before = _app_call(
+            setup, secret_store, "radarr", f"release?movieId={movie_remote_id}"
+        )
         dts_before = next(
             r
             for r in releases_before
@@ -517,7 +656,9 @@ def test_controlled_fallback_threshold_and_shared_profile_preservation(
             and "searching broader releases" in after_fb.waiting_reason.lower()
         )
 
-        releases_after = call(radarr_port, radarr_key, f"release?movieId={movie_remote_id}")
+        releases_after = _app_call(
+            setup, secret_store, "radarr", f"release?movieId={movie_remote_id}"
+        )
         dts_after = next(
             r
             for r in releases_after
@@ -526,19 +667,28 @@ def test_controlled_fallback_threshold_and_shared_profile_preservation(
         assert dts_after["rejected"] is False
 
         # Shared strict Orama profile must be completely untouched
-        strict_after = call(radarr_port, radarr_key, f"qualityprofile/{strict_before['id']}")
+        strict_after = _app_call(
+            setup, secret_store, "radarr", f"qualityprofile/{strict_before['id']}"
+        )
         assert strict_after == strict_before, "shared strict Orama quality profile was modified"
     finally:
         if movie_remote_id is not None:
-            call(
-                radarr_port,
-                radarr_key,
+            _app_call(
+                setup,
+                secret_store,
+                "radarr",
                 f"movie/{movie_remote_id}?deleteFiles=true",
                 method="DELETE",
             )
-        for p in call(radarr_port, radarr_key, "qualityprofile"):
+        for p in _app_call(setup, secret_store, "radarr", "qualityprofile"):
             if p.get("name") == "Orama fallback":
-                call(radarr_port, radarr_key, f"qualityprofile/{p['id']}", method="DELETE")
+                _app_call(
+                    setup,
+                    secret_store,
+                    "radarr",
+                    f"qualityprofile/{p['id']}",
+                    method="DELETE",
+                )
 
 
 def test_webhooks_restart_waiting_and_no_secret_leaks(
@@ -552,10 +702,6 @@ def test_webhooks_restart_waiting_and_no_secret_leaks(
     secret_store = SecretStore(state_dir / "secrets.bin")
     for k, v in stored_secrets(clean_host).items():
         secret_store.set(k, v)
-    sonarr_token = secrets.token_hex(32)
-    radarr_token = secrets.token_hex(32)
-    secret_store.set(webhook_token_name("sonarr"), sonarr_token)
-    secret_store.set(webhook_token_name("radarr"), radarr_token)
 
     agent_states = {name: "running" for name in APPS}
 
@@ -577,28 +723,10 @@ def test_webhooks_restart_waiting_and_no_secret_leaks(
     )
 
     app = create_app(state_dir, agent=StubAgent(), http=Http(), request_worker=worker)
-    password = "pw-" + secrets.token_urlsafe(12)
-    app.extensions["orama"].passwords.create(password)
     test_client = app.test_client()
 
     # 1. Webhooks: missing/wrong/cross-app token rejected; valid token accepted
-    assert test_client.post("/hooks/radarr", json={"eventType": "Test"}).status_code == 401
-    assert (
-        test_client.post(
-            "/hooks/radarr",
-            headers={"Authorization": f"Bearer {sonarr_token}"},
-            json={"eventType": "Test"},
-        ).status_code
-        == 401
-    )
-    assert (
-        test_client.post(
-            "/hooks/radarr",
-            headers={"Authorization": f"Bearer {radarr_token}"},
-            json={"eventType": "Test"},
-        ).status_code
-        == 204
-    )
+    _verify_webhook_auth(test_client, secret_store)
 
     # 2. App-down waiting state and restart recovery
     rec, _ = req_store.create(
@@ -619,30 +747,5 @@ def test_webhooks_restart_waiting_and_no_secret_leaks(
     assert loaded is not None and loaded.id == rec.id
 
     # 3. Render browser pages and scan HTML + SQLite DB for any stored secret values
-    login_page = test_client.get("/signin").data.decode("utf-8")
-    import re
+    _verify_pages_no_secret_leaks(clean_host, app, test_client, secret_store, state_dir, rec.id)
 
-    m = re.search(r'name="csrf_token"\s+value="([^"]+)"', login_page)
-    assert m is not None
-    test_client.post(
-        "/signin",
-        data={"password": password, "csrf_token": m.group(1)},
-         headers={"Origin": "http://localhost"},
-    )
-
-    pages = {
-        "home": test_client.get("/").data.decode("utf-8"),
-        "search": test_client.get("/search?q=Inception&type=movie").data.decode("utf-8"),
-        "media": test_client.get("/media/movie/27205").data.decode("utf-8"),
-        "detail": test_client.get(f"/requests/{rec.id}").data.decode("utf-8"),
-        "status": test_client.get(f"/requests/{rec.id}/status").data.decode("utf-8"),
-        "sqlite_raw": (state_dir / "requests.sqlite3").read_bytes().decode("latin-1"),
-    }
-    secret_values = [
-        v for v in (*stored_secrets(clean_host).values(), sonarr_token, radarr_token, password)
-        if len(v) >= 8
-    ]
-    leaks = sorted(
-        where for where, text in pages.items() if any(sec in text for sec in secret_values)
-    )
-    assert leaks == [], f"secret values leaked in: {leaks}"

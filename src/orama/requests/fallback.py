@@ -207,6 +207,15 @@ def apply_fallback(
                     requests.update(record.id, record.revision, update)
                     return update
 
+    if app_name == "sonarr" and record.spec.kind in ("episode", "season") and not target_episode_ids:
+        update = RequestUpdate(
+            remote_id=remote_id,
+            waiting_reason="Waiting for episode metadata before fallback",
+            next_check_at=now + 30.0,
+        )
+        requests.update(record.id, record.revision, update)
+        return update
+
     fallback_id = ensure_fallback_profile(app_name, client, setup)
     if current_profile_id != fallback_id:
         updated_item = {**target_item, "qualityProfileId": fallback_id}
@@ -245,10 +254,16 @@ def retry_request(
     if record is None:
         return None
     wait_mode, deadline = compute_fallback_deadline(record.created_at, setup)
+    next_stage = (
+        "requested" if record.stage == "requested" else "searching"
+    )
     update = RequestUpdate(
+        stage=next_stage,
+        waiting_reason=None,
         wait_mode=wait_mode,
         fallback_deadline=deadline,
         next_check_at=now,
     )
     requests.update(record.id, record.revision, update)
     return requests.get(request_id)
+

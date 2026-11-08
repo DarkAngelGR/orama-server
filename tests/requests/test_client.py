@@ -222,3 +222,59 @@ def test_snapshot_radarr_bounded():
     assert snapshot.complete is True
     assert 1 in snapshot.items
     assert len(snapshot.queue) == 1
+
+
+def test_file_media_info_and_subtitles_never_fall_back_to_wrong_episode():
+    http = FakeHttp()
+    # Episode 1 has file 10 (AAC), Episode 2 has file 20 (DTS), Episode 3 has no file
+    http.route(
+        "GET",
+        "/api/v3/episode",
+        lambda call: json_resp([
+            {"id": 101, "seriesId": 7, "seasonNumber": 1, "episodeNumber": 1, "hasFile": True, "episodeFileId": 10},
+            {"id": 102, "seriesId": 7, "seasonNumber": 1, "episodeNumber": 2, "hasFile": True, "episodeFileId": 20},
+            {"id": 103, "seriesId": 7, "seasonNumber": 1, "episodeNumber": 3, "hasFile": False, "episodeFileId": 0},
+        ]),
+    )
+    http.route(
+        "GET",
+        "/api/v3/episodefile",
+        lambda call: json_resp([
+            {"id": 10, "seriesId": 7, "seasonNumber": 1, "mediaInfo": {"videoCodec": "h264", "audioCodec": "AAC"}},
+            {"id": 20, "seriesId": 7, "seasonNumber": 1, "mediaInfo": {"videoCodec": "hevc", "audioCodec": "DTS"}},
+        ]),
+    )
+    http.route(
+        "GET",
+        "/api/episodes",
+        lambda call: json_resp({
+            "data": [
+                {"season": 1, "episode": 1, "episode_number": "1x1", "subtitles": [{"code2": "el"}]},
+                {"season": 1, "episode": 2, "episode_number": "1x2", "subtitles": [{"code2": "en"}]},
+            ]
+        }),
+    )
+
+    client = make_client(
+        http,
+        secrets={
+            "radarr": "radarr-key-secret",
+            "sonarr": "sonarr-key-secret",
+            "bazarr": "bazarr-key-secret",
+        },
+    )
+
+    # S01E02 gets file 20 (DTS) and EN subs, NOT S01E01's file 10 (AAC) or EL subs
+    info_ep2 = client.file_media_info("sonarr", 7, season=1, episode=2)
+    assert info_ep2 == {"videoCodec": "hevc", "audioCodec": "DTS"}
+    subs_ep2 = client.subtitle_languages("episode", 7, season=1, episode=2)
+    assert subs_ep2 == [{"code2": "en"}]
+
+    # S01E03 (no file/row yet) gets None, NEVER S01E01's file or subtitles
+    assert client.file_media_info("sonarr", 7, season=1, episode=3) is None
+    assert client.subtitle_languages("episode", 7, season=1, episode=3) is None
+
+    # Season 2 (no file/row yet) gets None, NEVER Season 1's file or subtitles
+    assert client.file_media_info("sonarr", 7, season=2) is None
+    assert client.subtitle_languages("season", 7, season=2) is None
+

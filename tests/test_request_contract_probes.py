@@ -8,19 +8,22 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("probe", ["read", "webhook"])
+@pytest.mark.parametrize("probe", ["read", "webhook", "bazarr_sync"])
 def test_probe_failures_hide_credential_arguments(tmp_path, probe):
     token = secrets.token_hex(32)
     source = '''
 import os
 from types import SimpleNamespace
 from integration import request_contracts as probes
+from integration import test_requests as req_tests
 
 def test_probe_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(probes.Http, "request", lambda *a, **kw: SimpleNamespace(status=500))
     monkeypatch.setattr(probes, "run", lambda *a, **kw: SimpleNamespace(returncode=1))
     if os.environ["PROBE_KIND"] == "read":
         probes.read_contracts("sonarr", 1, os.environ["PROBE_TEST_KEY"])
+    elif os.environ["PROBE_KIND"] == "bazarr_sync":
+        req_tests._sync_bazarr_and_index(1, os.environ["PROBE_TEST_KEY"], True, 1, 1)
     else:
         probes.authenticated_webhooks({}, {"apikey:sonarr": os.environ["PROBE_TEST_KEY"]}, tmp_path)
 '''
@@ -36,6 +39,7 @@ def test_probe_failure(monkeypatch, tmp_path):
     assert "1 failed" in output
     if token in output:
         pytest.fail("probe failure disclosed credentials (output withheld)")
+
 
 
 def test_movie_score_probe_ignores_tv_releases(monkeypatch):

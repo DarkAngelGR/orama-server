@@ -259,7 +259,11 @@ def register_requests(app: Flask) -> None:
     @auth.requires("requests:read")
     def detail(request_id: str):
         view = _load_detail_view(request_id)
-        return render_template("requests/detail.html", req=view, live=(view.stage != "ready"))
+        return render_template(
+            "requests/detail.html",
+            req=view,
+            live=(view.stage != "ready" or view.kind == "series"),
+        )
 
     @bp.get("/requests/<request_id>/status")
     @auth.requires("requests:read")
@@ -281,11 +285,12 @@ def register_requests(app: Flask) -> None:
         now = st.clock()
         setup = st.setup.current()
         wait_mode, fallback_deadline = _snapshot_policy(rec.created_at, setup)
+        next_stage = "requested" if rec.stage == "requested" else "searching"
         st.requests.update(
             rec.id,
             rec.revision,
             RequestUpdate(
-                stage="searching",
+                stage=next_stage,
                 waiting_reason=None,
                 next_check_at=now,
                 wait_mode=wait_mode,
@@ -296,3 +301,4 @@ def register_requests(app: Flask) -> None:
         return redirect(url_for("requests.detail", request_id=rec.id), 303)
 
     app.register_blueprint(bp)
+
