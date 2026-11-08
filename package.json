@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-demo-assets.mjs",
+    "test": "npm run build && node --test tests/node/*.test.mjs",
     "lint": "tsc --noEmit",
     "start": "node dist/server.js"
   },

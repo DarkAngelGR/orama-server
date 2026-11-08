@@ -13,7 +13,12 @@ Orama Server is a control application and web console for deploying and managing
 
 ```bash
 npm install
-npm run dev
+ORAMA_DEMO_PASSWORD='<choose-a-unique-password>' npm run dev
 ```
 
-Server runs on `http://0.0.0.0:3000`.
+This Node entry point is an in-memory UI demo, not the Python production service.
+It binds only to `http://127.0.0.1:3000`. Supply a unique password of at least
+12 characters through `ORAMA_DEMO_PASSWORD` for both development and `npm start`.
+Demo changes reset on restart. Do not expose this demo through a public proxy.
+
+Run `npm test` for authentication and packaged-build regression checks.

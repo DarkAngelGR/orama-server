@@ -137,3 +137,15 @@ At every task boundary record the latest tested commit, CI result, open decision
 - Regression tests cover redirect refusal, oversized responses, connection saturation/recovery, POST-only SABnzbd credentials and disabled SABnzbd API parameter logging.
 - This was an independent hardening pass. The Claude Security scan has since run (see the scan row above).
 - Plan 2b Task 11 verified the carried real-app checks; results and owner checks are recorded in the Plan 2b notes.
+
+## Test branch review fixes (Codex, 2026-11-08)
+
+The owner requested fixes directly on `test` for the four Node demo review findings.
+Removed default credentials, quick login, preseeded sessions and public password setup.
+The demo now requires `ORAMA_DEMO_PASSWORD` and listens only on loopback; the Python
+production service is unchanged. Sessions use random HttpOnly SameSite=Strict cookies,
+never query strings; local redirects reject network-path URLs. Added request origin/CSRF
+checks and packaged EJS/static assets for `npm start`. Added HTTP regression coverage
+and a dedicated Node demo CI job. Demo state remains intentionally in memory.
+
+Validation: `npm test`, 2,014 non-integration Python tests, Ruff and ShellCheck passed.
