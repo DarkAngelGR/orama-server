@@ -60,6 +60,10 @@ class AgentClient:
             args["force"] = True
         return self._call("recyclarr-sync", args)["changed"]
 
+    def data_space(self) -> dict[str, int]:
+        """Return ``{"total_bytes": int, "free_bytes": int}`` for the configured data root."""
+        return self._call("data-space", {})
+
     def _call(self, cmd: str, args: dict[str, Any]) -> Any:
         rid = uuid.uuid4().hex
         request = json.dumps({"id": rid, "cmd": cmd, "args": args}).encode() + b"\n"

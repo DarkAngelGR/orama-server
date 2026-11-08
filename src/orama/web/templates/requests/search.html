@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Search · Orama{% endblock %}
+{% block content %}
+<section class="apps">
+  <h1>Find something to watch</h1>
+  <p class="lead">Search for a movie or a TV show to add to your library.</p>
+
+  <form method="get" action="{{ url_for('requests.search') }}" class="stack">
+    <div class="field">
+      <label for="search-q">Title</label>
+      <input id="search-q" name="q" type="search" value="{{ query }}" maxlength="200" required autocomplete="off">
+    </div>
+    <fieldset class="choices">
+      <legend>Type</legend>
+      <label class="choice">
+        <input type="radio" name="type" value="movie" {% if kind == 'movie' %}checked{% endif %}>
+        <span>Movie</span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="type" value="series" {% if kind == 'series' %}checked{% endif %}>
+        <span>TV show</span>
+      </label>
+    </fieldset>
+    <div class="actions">
+      <button class="button" type="submit">Search</button>
+      <a class="button button-secondary" href="{{ url_for('auth.home') }}">Back to Home</a>
+    </div>
+  </form>
+
+  {% if error %}
+  <p class="notice notice-error" role="alert">{{ error }}</p>
+  {% elif query and not results %}
+  <p class="note">No matches found for "{{ query }}".</p>
+  {% elif results %}
+  <h2>Results</h2>
+  <ul class="app-list">
+    {% for item in results %}
+    <li class="app-row media-row">
+      <img class="poster-thumb" src="{{ url_for('posters.poster', kind=item.kind, source_id=item.source_id) }}" alt="" width="56" height="84" loading="lazy">
+      <div class="media-meta">
+        <span class="app-name">{{ item.title }}{% if item.year %} ({{ item.year }}){% endif %}</span>
+        {% if item.in_library %}
+        <span class="app-state" data-state="Running">In library</span>
+        {% endif %}
+      </div>
+      <a class="button button-secondary" href="{{ url_for('requests.media', kind=item.kind, source_id=item.source_id) }}">Details</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endblock %}

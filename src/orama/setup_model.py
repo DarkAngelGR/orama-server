@@ -188,6 +188,9 @@ class DesiredSetup(BaseModel):
     lan_address: IPv4Address | None = None
     host_name: HostName | None = None
     extra_host_names: tuple[HostName, ...] = Field(default=(), max_length=MAX_EXTRA_HOST_NAMES)
+    request_wait_mode: Literal["timed", "always", "never"] = "timed"
+    request_wait_hours: StrictInt = Field(default=24, ge=1, le=720)
+    disk_warning_percent: StrictInt = Field(default=5, ge=1, le=50)
 
     @field_validator("extra_host_names")
     @classmethod

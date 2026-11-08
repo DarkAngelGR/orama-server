@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from orama.catalog import QBITTORRENT_WEBUI_USER
-from orama.secrets import JELLYFIN_KEY_NAME, PLEX_TOKEN_NAME
+from orama.secrets import JELLYFIN_KEY_NAME, PLEX_TOKEN_NAME, webhook_token_name
 from orama.setup_model import DesiredSetup, enabled_apps
 from orama.wiring.engine import Step, StepError, display_name, wait_until
 from orama.wiring.http import Http, Response, Unreachable
@@ -23,6 +23,8 @@ SAB_PORT = 8080
 QBITTORRENT_PORT = 8090
 PLEX_PORT = 32400
 JELLYFIN_PORT = 8096
+ORAMA_WEBHOOK_PORT = 8765
+WEBHOOK_POST_METHOD = 1
 
 
 @dataclass(frozen=True)
@@ -122,14 +124,16 @@ def arr_steps(
         slug: str, label: str, implementation: str, enabled: bool,
         needs: tuple[str, ...], values: Any,
         *, kind: Literal["downloadclient", "notification"] = "downloadclient",
+        flags: tuple[str, ...] | None = None,
     ) -> Step:
         client_name = f"{label} (Orama)"
         noun = "download client" if kind == "downloadclient" else "library update"
         # Flags Orama keeps switched on: a download client's `enable`, and the events a
         # notification fires on (an import, an upgrade, a rename tell the media server).
-        flags = (
-            ("enable",) if kind == "downloadclient" else ("onDownload", "onUpgrade", "onRename")
-        )
+        if flags is None:
+            flags = (
+                ("enable",) if kind == "downloadclient" else ("onDownload", "onUpgrade", "onRename")
+            )
 
         def find(clients: list[dict[str, Any]]) -> dict[str, Any] | None:
             return next((c for c in clients if c.get("name") == client_name), None)
@@ -242,6 +246,19 @@ def arr_steps(
             apikey,
         )
 
+    def webhook_values() -> tuple[dict[str, Any], str]:
+        token = store.get(webhook_token_name(app))
+        if not token:
+            raise StepError("Orama's webhook token is missing — run apply again.")
+        return (
+            {
+                "url": f"http://orama-server:{ORAMA_WEBHOOK_PORT}/hooks/{app}",
+                "method": WEBHOOK_POST_METHOD,
+                "headers": [{"key": "Authorization", "value": f"Bearer {token}"}],
+            },
+            token,
+        )
+
     wait_name = f"wait:{app}"
     apps = enabled_apps(setup)
     usenet = "sabnzbd" in apps
@@ -260,6 +277,12 @@ def arr_steps(
             "qbittorrent", "qBittorrent", "QBittorrent", torrent,
             (wait_name, "qbittorrent:categories") if torrent else (wait_name,),
             qbittorrent_values,
+        ),
+        client_step(
+            "orama", "Orama events", "Webhook", True,
+            (wait_name,), webhook_values,
+            kind="notification",
+            flags=("onGrab", "onDownload", "onUpgrade", "onRename"),
         ),
         # A deselected media server loses its "(Orama)" notification and nothing else.
         client_step(

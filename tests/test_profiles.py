@@ -27,7 +27,13 @@ def test_devices_listed():
 @pytest.mark.parametrize("app", ["radarr", "sonarr"])
 def test_every_symbol_exists_for_both_apps(name, app):
     dev = _device(name)
-    assert set(dev) == {"name", "verified", "unplayable", "preferred"}
+    assert {"name", "verified", "unplayable", "preferred"} <= set(dev) <= {
+        "name",
+        "verified",
+        "unplayable",
+        "preferred",
+        "capabilities",
+    }
     for symbol in dev["unplayable"] + dev["preferred"]:
         assert TRASH[app].get(symbol), (name, app, symbol)
     assert not set(dev["unplayable"]) & set(dev["preferred"])

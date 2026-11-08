@@ -21,9 +21,9 @@ def build_steps(setup: DesiredSetup, store: Any, http: Http, agent: Any) -> list
     """Steps for the enabled apps only, in dependency order.
 
     SABnzbd, qBittorrent, Sonarr, Radarr, Prowlarr, Bazarr, Recyclarr, Plex, Jellyfin, then
-    the Sonarr/Radarr notifications that tell a media server to refresh (they need the media
-    servers' steps). A Plex still waiting for the owner's sign-in skips only the steps that
-    need Plex.
+    the Sonarr/Radarr notifications (Orama's webhook and the media-server refreshes that need
+    the media servers' steps). A Plex still waiting for the owner's sign-in skips only the
+    steps that need Plex.
     """
     apps = enabled_apps(setup)
     steps: list[Step] = []

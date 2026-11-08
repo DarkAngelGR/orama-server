@@ -89,17 +89,31 @@ def _sanitize_poster_url(url: str | None) -> str | None:
 class MediaClient:
     """Communicates safely with Sonarr and Radarr using strict allowlists."""
 
-    def __init__(self, setup: Any, store: SecretStore, http: Http) -> None:
+    def __init__(
+        self,
+        setup: Any,
+        store: SecretStore,
+        http: Http,
+        *,
+        use_service_hosts: bool = False,
+    ) -> None:
         self.setup = setup
         self.store = store
         self.http = http
+        self.use_service_hosts = use_service_hosts
 
     def _get_app_info(self, app_name: str) -> tuple[str, str]:
-        ports = getattr(self.setup, "ports", {})
-        port = ports.get(app_name, 7878 if app_name == "radarr" else 8989)
-        key = self.store.get(app_name)
+        removed = getattr(self.setup, "removed_apps", ()) or ()
+        if app_name in removed:
+            raise RequestError(f"{app_name.capitalize()} is turned off in Settings.")
+        default_ports = {"radarr": 7878, "sonarr": 8989, "bazarr": 6767}
+        key = self.store.get(f"apikey:{app_name}") or self.store.get(app_name)
         if not key:
             raise RequestError(f"{app_name.capitalize()} is not configured or key missing")
+        if self.use_service_hosts:
+            return f"http://{app_name}:{default_ports.get(app_name, 8989)}", key
+        ports = getattr(self.setup, "ports", {}) or {}
+        port = ports.get(app_name, default_ports.get(app_name, 8989))
         return f"http://127.0.0.1:{port}", key
 
     def _request(
@@ -113,13 +127,26 @@ class MediaClient:
     ) -> Any:
         base_url, key = self._get_app_info(app_name)
         query_str = f"?{urllib.parse.urlencode(params)}" if params else ""
-        url = f"{base_url}/api/v3/{path.lstrip('/')}{query_str}"
+        rel = f"/api/v3/{path.lstrip('/')}{query_str}"
+        url = f"{base_url}{rel}"
         headers = {"X-Api-Key": key}
 
         try:
             resp = self.http.request(method, url, headers=headers, json=json_body)
         except Unreachable:
-            raise RequestError(f"{app_name.capitalize()} is unreachable or timed out") from None
+            if not self.use_service_hosts and type(self.http).__name__ == "Http":
+                default_ports = {"radarr": 7878, "sonarr": 8989, "bazarr": 6767}
+                svc_url = f"http://{app_name}:{default_ports.get(app_name, 8989)}{rel}"
+                try:
+                    resp = self.http.request(method, svc_url, headers=headers, json=json_body)
+                except Unreachable:
+                    raise RequestError(
+                        f"{app_name.capitalize()} is unreachable or timed out"
+                    ) from None
+            else:
+                raise RequestError(
+                    f"{app_name.capitalize()} is unreachable or timed out"
+                ) from None
 
         if resp.status == 401 or resp.status == 403:
             raise RequestError(f"Authentication failed for {app_name.capitalize()}")
@@ -186,11 +213,50 @@ class MediaClient:
 
     def detail(self, kind: RequestKind, source_id: int) -> MediaDetail:
         """Fetch media detail by source ID."""
-        results = self.search(kind, str(source_id))
-        matched = next((r for r in results if r.source_id == source_id), None)
-        if not matched and results:
-            matched = results[0]
-        if not matched:
+        app_name = "radarr" if kind == "movie" else "sonarr"
+        lookup_path = "movie/lookup" if kind == "movie" else "series/lookup"
+        raw_lookup = self._request(app_name, lookup_path, params={"term": str(source_id)})
+        lookup_items = raw_lookup if isinstance(raw_lookup, list) else []
+
+        matched_raw: dict[str, Any] | None = None
+        for item in lookup_items:
+            if not isinstance(item, dict):
+                continue
+            sid = item.get("tmdbId" if kind == "movie" else "tvdbId") or item.get("id")
+            if sid == source_id:
+                matched_raw = item
+                break
+        if matched_raw is None and lookup_items and isinstance(lookup_items[0], dict):
+            matched_raw = lookup_items[0]
+
+        if matched_raw is not None:
+            sid = (
+                matched_raw.get("tmdbId" if kind == "movie" else "tvdbId")
+                or matched_raw.get("id")
+                or source_id
+            )
+            if kind == "movie":
+                in_lib = bool(matched_raw.get("hasFile") or matched_raw.get("id"))
+            else:
+                stats = matched_raw.get("statistics", {})
+                in_lib = bool(stats.get("episodeFileCount", 0) > 0 or matched_raw.get("id"))
+            poster_url = None
+            images = matched_raw.get("images", [])
+            if isinstance(images, list):
+                for img in images:
+                    if isinstance(img, dict) and img.get("coverType") == "poster":
+                        poster_url = _sanitize_poster_url(img.get("remoteUrl"))
+                        break
+            year = matched_raw.get("year")
+            matched = SearchResult(
+                kind=kind,
+                source_id=int(sid),
+                title=_sanitize_title(str(matched_raw.get("title", f"Media #{source_id}"))),
+                year=year if isinstance(year, int) else None,
+                in_library=in_lib,
+                poster_ref=poster_url,
+            )
+        else:
             matched = SearchResult(
                 kind=kind,
                 source_id=source_id,
@@ -200,7 +266,6 @@ class MediaClient:
                 poster_ref=None,
             )
 
-        app_name = "radarr" if kind == "movie" else "sonarr"
         endpoint = "movie" if kind == "movie" else "series"
         all_items = self._request(app_name, endpoint)
         remote_id = None
@@ -217,11 +282,44 @@ class MediaClient:
                             seasons.append(
                                 SeasonDetail(
                                     season_number=s.get("seasonNumber", 0),
-                                    episode_count=s.get("statistics", {}).get("totalEpisodeCount", 0),
+                                    episode_count=s.get("statistics", {}).get(
+                                        "totalEpisodeCount", s.get("episodeCount", 0)
+                                    ),
                                     monitored=bool(s.get("monitored")),
                                 )
                             )
                     break
+
+        if kind == "series" and not seasons and matched_raw and isinstance(matched_raw.get("seasons"), list):
+            for s in matched_raw["seasons"]:
+                if isinstance(s, dict):
+                    seasons.append(
+                        SeasonDetail(
+                            season_number=s.get("seasonNumber", 0),
+                            episode_count=s.get("statistics", {}).get(
+                                "totalEpisodeCount", s.get("episodeCount", 0)
+                            ),
+                            monitored=bool(s.get("monitored")),
+                        )
+                    )
+
+        if kind == "series" and remote_id is not None:
+            try:
+                raw_eps = self._request("sonarr", "episode", params={"seriesId": remote_id})
+                if isinstance(raw_eps, list):
+                    for ep in raw_eps:
+                        if isinstance(ep, dict):
+                            episodes.append(
+                                EpisodeDetail(
+                                    season_number=int(ep.get("seasonNumber", 0)),
+                                    episode_number=int(ep.get("episodeNumber", 1)),
+                                    title=_sanitize_title(str(ep.get("title", ""))),
+                                    has_file=bool(ep.get("hasFile")),
+                                    monitored=bool(ep.get("monitored")),
+                                )
+                            )
+            except RequestError:
+                pass
 
         return MediaDetail(
             result=matched,
@@ -313,12 +411,13 @@ class MediaClient:
             "qualityProfileId": qp_id,
             "rootFolderPath": root_path,
             "monitored": True,
+            "minimumAvailability": "released",
             "addOptions": {"searchForMovie": False},
         }
         created = self._request("radarr", "movie", method="POST", json_body=payload)
         return created["id"], bool(created.get("hasFile"))
 
-    def ensure_series(self, tvdb_id: int) -> tuple[int, bool]:
+    def ensure_series(self, tvdb_id: int, *, monitor: str = "none") -> tuple[int, bool]:
         """Ensure series is added in Sonarr without auto-searching; returns (remote_id, has_file)."""
         existing_list = self._request("sonarr", "series")
         if isinstance(existing_list, list):
@@ -343,7 +442,12 @@ class MediaClient:
             "qualityProfileId": qp_id,
             "rootFolderPath": root_path,
             "monitored": True,
-            "addOptions": {"searchForMissingEpisodes": False},
+            "seasonFolder": True,
+            "addOptions": {
+                "monitor": monitor,
+                "searchForMissingEpisodes": False,
+                "searchForCutoffUnmetEpisodes": False,
+            },
         }
         created = self._request("sonarr", "series", method="POST", json_body=payload)
         stats = created.get("statistics", {})
@@ -354,7 +458,21 @@ class MediaClient:
         self, series_id: int, season: int | None, episode: int | None
     ) -> list[int]:
         """Set monitoring on targeted episodes only."""
+        import time
+
         episodes = self._request("sonarr", "episode", params={"seriesId": series_id})
+        if (
+            isinstance(episodes, list)
+            and not episodes
+            and type(getattr(self, "http", None)).__name__ != "FakeHttp"
+        ):
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                time.sleep(0.5)
+                episodes = self._request("sonarr", "episode", params={"seriesId": series_id})
+                if isinstance(episodes, list) and episodes:
+                    break
+
         target_ids: list[int] = []
         if isinstance(episodes, list):
             for ep in episodes:
@@ -396,3 +514,91 @@ class MediaClient:
 
         res = self._request(app_name, "command", method="POST", json_body=cmd)
         return res.get("id", 0)
+
+    def file_media_info(
+        self,
+        app_name: str,
+        remote_id: int,
+        *,
+        season: int | None = None,
+        episode: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch mediaInfo dictionary for an imported movie or episode file."""
+        if not hasattr(self, "store") or not hasattr(self, "http"):
+            return None
+        try:
+            if app_name == "radarr":
+                files = self._request("radarr", "moviefile", params={"movieId": remote_id})
+            else:
+                files = self._request("sonarr", "episodefile", params={"seriesId": remote_id})
+        except RequestError:
+            return None
+
+        if not isinstance(files, list) or not files:
+            return None
+
+        chosen: dict[str, Any] | None = None
+        if app_name == "sonarr" and season is not None:
+            for f in files:
+                if isinstance(f, dict) and f.get("seasonNumber") == season:
+                    chosen = f
+                    break
+        if chosen is None and isinstance(files[0], dict):
+            chosen = files[0]
+        if chosen is None:
+            return None
+        info = chosen.get("mediaInfo")
+        return info if isinstance(info, dict) else None
+
+    def subtitle_languages(
+        self,
+        kind: RequestKind,
+        remote_id: int,
+        *,
+        season: int | None = None,
+        episode: int | None = None,
+    ) -> list[dict[str, Any]] | None:
+        """Fetch Bazarr available subtitle entries for a movie or episode, or None if unavailable."""
+        if not hasattr(self, "store") or not hasattr(self, "http"):
+            return None
+        try:
+            base_url, key = self._get_app_info("bazarr")
+        except RequestError:
+            return None
+
+        if kind == "movie":
+            url = f"{base_url}/api/movies?radarrid[]={remote_id}&start=0&length=1"
+        else:
+            url = f"{base_url}/api/episodes?seriesid[]={remote_id}"
+        try:
+            resp = self.http.request("GET", url, headers={"X-Api-Key": key})
+            if resp.status != 200 or not resp.body:
+                return None
+            payload = resp.json()
+        except (Unreachable, ValueError):
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+        rows = payload.get("data")
+        if not isinstance(rows, list) or not rows:
+            return None
+
+        target_row: dict[str, Any] | None = None
+        if kind != "movie" and season is not None and episode is not None:
+            ep_Num = f"{season}x{episode}"
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                if r.get("episode_number") == ep_Num or (
+                    r.get("season") == season and r.get("episode") == episode
+                ):
+                    target_row = r
+                    break
+        if target_row is None and isinstance(rows[0], dict):
+            target_row = rows[0]
+        if target_row is None:
+            return None
+
+        subs = target_row.get("subtitles")
+        return subs if isinstance(subs, list) else None

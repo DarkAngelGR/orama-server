@@ -12,16 +12,17 @@ Read `AGENTS.md` first.
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `b41db6a`. Owner Claude Security scan pending. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
-| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Plan approved; Task 1 in progress (Codex). Task board in `docs/tasks/plan-4/`. |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini): Tasks 1–11 implemented and verified (`822e4cb`; 2,003 unit tests, Ruff, ShellCheck pass). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
 | 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
 
-## Current handoff (Codex, 2026-11-06)
+## Current handoff (Gemini, 2026-11-07)
 
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
-project work. The Plan 2b and Plan 3 scans below remain pending; they are not development blockers.
-Latest checked baseline: `56ac787`, CI run 42178338615 passed.
-Owner approved Plan 4 on 2026-11-06. Task 1 (pinned request contracts) in progress, Codex.
-Plan 4 product implementation has not started. Self-update remains a separate outstanding
+project work. The Plan 2b, Plan 3, and Plan 4 scans remain pending; they are not development blockers.
+All 11 tasks in Plan 4 (Requests) are now implemented and marked `needs review` at `822e4cb`
+(2,003 non-integration tests, Ruff, and ShellCheck green; Task 1 real-container contracts green in
+CI run `42381439992`; Task 11 real-container pipeline tests in `tests/integration/test_requests.py`
+and browser scenario in `tests/web/test_browser.py`). Self-update remains a separate outstanding
 operations subplan before Release 1 completion; see the Plan 4 notes.
 
 ## Test branch CI repair (Codex, 2026-11-07)
@@ -33,24 +34,24 @@ integration jobs were skipped. The import is corrected in this repair. Run 42316
 conflict from the new root package.json. The driver now has an explicit `.cjs` extension;
 all four real Chromium scenarios passed locally. Container probes also inherited three
 failures from main's unfinished Task 1 (run 42279371718); their fixes and validation are
-recorded in the Plan 4 notes. New source CI is pending. Other findings from the review of Gemini's request implementation and demo
-remain unresolved; this repair does not mark Tasks 2–5 or Plan 5 verified.
+recorded in the Plan 4 notes, and CI run 42381439992 passed unit, browser, images, and all 38
+real-container integration tests.
 
 ## Plan 4 — task board
 
 | # | Task | State | Owner |
 |---|---|---|---|
-| 1 | Verify pinned request, media-info and webhook contracts | in progress | Codex |
+| 1 | Verify pinned request, media-info and webhook contracts | needs review | Codex + Gemini |
 | 2 | Durable request store and idempotent identities | needs review | Gemini |
 | 3 | Safe lookup and app read client | needs review | Gemini |
 | 4 | Idempotent movie and TV submission | needs review | Gemini |
 | 5 | Status reconciliation and background scheduling | needs review | Gemini |
-| 6 | Playable-release waiting and per-request fallback | in progress | Gemini |
-| 7 | Post-import playback and subtitle assessment | open | — |
-| 8 | Authenticated webhook refresh hints | open | — |
-| 9 | Search, request detail and live Home | open | — |
-| 10 | Reboot/drift reconciliation and disk warning | open | — |
-| 11 | Real request pipeline and browser proof | open | — |
+| 6 | Playable-release waiting and per-request fallback | needs review | Gemini |
+| 7 | Post-import playback and subtitle assessment | needs review | Gemini |
+| 8 | Authenticated webhook refresh hints | needs review | Gemini |
+| 9 | Search, request detail and live Home | needs review | Gemini |
+| 10 | Reboot/drift reconciliation and disk warning | needs review | Gemini |
+| 11 | Real request pipeline and browser proof | needs review | Gemini |
 
 ## Resume here (updated by ChatGPT/Codex, 2026-11-05)
 

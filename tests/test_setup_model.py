@@ -434,3 +434,64 @@ def test_bad_extra_host_names_refused(names):
 def test_ten_extra_host_names_allowed():
     names = tuple(f"n{i}.lan" for i in range(10))
     assert make_setup(extra_host_names=names).extra_host_names == names
+
+
+# ---------------------------------------------------------------- request wait & disk warning (Plan 4)
+
+
+def test_request_wait_and_disk_warning_defaults_and_legacy_load(tmp_path):
+    s = make_setup()
+    assert s.request_wait_mode == "timed"
+    assert s.request_wait_hours == 24
+    assert s.disk_warning_percent == 5
+
+    data = s.to_json_dict()
+    for key in ("request_wait_mode", "request_wait_hours", "disk_warning_percent"):
+        data.pop(key, None)
+    path = tmp_path / "setup.json"
+    path.write_text(json.dumps(data))
+    loaded = DesiredSetup.load(path)
+    assert loaded.request_wait_mode == "timed"
+    assert loaded.request_wait_hours == 24
+    assert loaded.disk_warning_percent == 5
+
+
+@pytest.mark.parametrize(
+    "mode,hours,percent",
+    [
+        ("timed", 1, 1),
+        ("timed", 720, 50),
+        ("always", 24, 10),
+        ("never", 24, 5),
+    ],
+)
+def test_request_wait_and_disk_warning_valid_roundtrip(tmp_path, mode, hours, percent):
+    s = make_setup(
+        request_wait_mode=mode,
+        request_wait_hours=hours,
+        disk_warning_percent=percent,
+    )
+    path = tmp_path / "setup.json"
+    s.save(path)
+    loaded = DesiredSetup.load(path)
+    assert loaded.request_wait_mode == mode
+    assert loaded.request_wait_hours == hours
+    assert loaded.disk_warning_percent == percent
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"request_wait_mode": "sometimes"},
+        {"request_wait_hours": 0},
+        {"request_wait_hours": 721},
+        {"request_wait_hours": True},
+        {"disk_warning_percent": 0},
+        {"disk_warning_percent": 51},
+        {"disk_warning_percent": False},
+    ],
+)
+def test_bad_request_wait_or_disk_warning_refused(kw):
+    with pytest.raises(ValidationError):
+        make_setup(**kw)
+

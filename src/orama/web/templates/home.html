@@ -1,13 +1,61 @@
 {% extends "base.html" %}
-{% block title %}Home · Orama{% endblock %}
+{% block title %}Orama{% endblock %}
 {% block content %}
-<section class="message-page">
+<section class="apps">
   <h1>Welcome to Orama</h1>
-  <p>Requests arrive in the next update.</p>
-  {% if summary %}<p class="field-help">{{ summary }}</p>{% endif %}
-  <p class="wizard-actions">
-    <a class="button button-primary" href="/apps">Apps</a>
+  {% if summary %}
+  <p class="lead">{{ summary }}.</p>
+  {% else %}
+  <p class="lead">Your media server is set up.</p>
+  {% endif %}
+
+  {% if disk_warning %}
+  <p class="notice notice-error" role="alert">{{ disk_warning }}</p>
+  {% endif %}
+
+  <section class="settings-section">
+    <h2>Request a movie or show</h2>
+    <form method="get" action="{{ url_for('requests.search') }}" class="stack">
+      <div class="field">
+        <label for="home-search-q">Title</label>
+        <input id="home-search-q" name="q" type="search" maxlength="200" required autocomplete="off">
+      </div>
+      <fieldset class="choices">
+        <legend>Type</legend>
+        <label class="choice">
+          <input type="radio" name="type" value="movie" checked>
+          <span>Movie</span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="type" value="series">
+          <span>TV show</span>
+        </label>
+      </fieldset>
+      <div class="actions">
+        <button class="button" type="submit">Search</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="settings-section">
+    <h2>Recent requests</h2>
+    {% if recent_requests %}
+    <ul class="app-list">
+      {% for r in recent_requests %}
+      <li class="app-row">
+        <a class="app-name" href="{{ url_for('requests.detail', request_id=r.id) }}">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
+        <span class="app-state" data-state="{{ 'Running' if r.stage == 'ready' else ('Starting' if r.stage in ('searching', 'downloading', 'importing') else 'Stopped') }}">{{ r.stage_label }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="note">No requests yet. Search above to add your first movie or TV show.</p>
+    {% endif %}
+  </section>
+
+  <div class="actions">
+    <a class="button" href="/apps">Apps</a>
     <a class="button button-secondary" href="/settings">Settings</a>
-  </p>
+  </div>
 </section>
 {% endblock %}

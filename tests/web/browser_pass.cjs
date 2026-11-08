@@ -497,10 +497,60 @@ async function appsFocus() {
   }
 }
 
+async function requests() {
+  const { browser, page } = await launch();
+  try {
+    await page.goto(`${base}/signin`);
+    await page.getByLabel("Orama password").fill(password);
+    await Promise.all([page.waitForNavigation(), page.getByRole("button", { name: "Sign in" }).click()]);
+    await expectPath(page, "/");
+    await audit(page, "home before request");
+
+    await page.getByLabel("Title").fill("UnknownTitle");
+    await click(page, page.getByRole("button", { name: "Search" }), "empty search results");
+    await expectPath(page, "/search");
+    if (!(await page.locator("main#content").innerText()).includes("No matching results found")) {
+      fail("empty search did not explain that no matching results were found");
+    }
+
+    await page.getByLabel("Title").fill("Dune");
+    await click(page, page.getByRole("button", { name: "Search" }), "search results");
+    await expectPath(page, "/search");
+    if (!(await page.locator(".app-list").innerText()).includes("Dune: Part Two")) {
+      fail("search results did not show Dune: Part Two");
+    }
+
+    await click(page, page.getByRole("link", { name: "Details" }).first(), "media detail");
+    await expectPath(page, "/media/movie/12345");
+
+    await click(page, page.getByRole("button", { name: "Request movie" }), "request detail");
+    if (!pathOf(page).startsWith("/requests/")) {
+      fail(`expected /requests/<uuid>, landed on ${pathOf(page)}`);
+    }
+
+    // Focus retention across htmx status polling
+    await page.locator("#request-retry").focus();
+    await page.waitForResponse((r) => new URL(r.url()).pathname.endsWith("/status"), { timeout: 15000 });
+    await page.waitForTimeout(250);
+    const activeId = await page.evaluate(() => document.activeElement && document.activeElement.id);
+    if (activeId !== "request-retry") {
+      fail(`status refresh stole focus from #request-retry (focus is on "${activeId}")`);
+    }
+
+    await click(page, page.getByRole("link", { name: "Back to Home" }), "home with recent request");
+    await expectPath(page, "/");
+    if (!(await page.locator(".app-list").innerText()).includes("Dune: Part Two")) {
+      fail("home page did not list recent request Dune: Part Two");
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
 // ------------------------------------------------------------------ main
 
 async function main() {
-  const scenarios = { wizard, keyboard, "apps-focus": appsFocus };
+  const scenarios = { wizard, keyboard, "apps-focus": appsFocus, requests };
   if (!scenarios[scenario]) {
     console.error("unknown scenario " + scenario);
     process.exit(1);
@@ -519,3 +569,4 @@ async function main() {
 }
 
 main();
+

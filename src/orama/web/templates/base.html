@@ -18,7 +18,7 @@
       {% block nav %}
       {% if g.principal %}
       <nav aria-label="Main navigation">
-        <a href="/">Home</a><a href="/apps">Apps</a><a href="/settings">Settings</a>
+        <a href="/">Home</a><a href="/search">Search</a><a href="/apps">Apps</a><a href="/settings">Settings</a>
         <form action="/signout" method="post">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="button button-quiet" type="submit">Sign out</button>

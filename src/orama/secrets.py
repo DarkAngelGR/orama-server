@@ -28,6 +28,7 @@ from orama.catalog import CATALOG
 from orama.setup_model import DesiredSetup, enabled_apps
 
 _KEYED_APPS = ("sonarr", "radarr", "prowlarr", "sabnzbd")
+WEBHOOK_APPS = ("sonarr", "radarr")
 VPN_KEY_NAME = "vpn:wireguard_private_key"
 GLUETUN_PROXY_PASSWORD_NAME = "password:gluetun-proxy"
 QBITTORRENT_PASSWORD_NAME = "password:qbittorrent"
@@ -155,17 +156,28 @@ def generate_api_key() -> str:
     return secrets.token_hex(16)
 
 
+def generate_webhook_token() -> str:
+    """64 lowercase hex chars (32 random bytes) for authenticating app webhooks."""
+    return secrets.token_hex(32)
+
+
+def webhook_token_name(app: str) -> str:
+    return f"webhook:{app}"
+
+
 def ensure_app_keys(store: SecretStore, apps: list[str], *, gluetun_proxy: bool = False) -> None:
     """Create missing app secrets; never overwrite.
 
-    ``apikey:<app>`` for sonarr/radarr/prowlarr/sabnzbd, SABnzbd's ``nzbkey:sabnzbd``,
-    qBittorrent's WebUI password, and with ``gluetun_proxy`` (Prowlarr via the VPN) the
-    password for Gluetun's HTTP proxy when Gluetun runs.
+    ``apikey:<app>`` for sonarr/radarr/prowlarr/sabnzbd, ``webhook:<app>`` for sonarr/radarr,
+    SABnzbd's ``nzbkey:sabnzbd``, qBittorrent's WebUI password, and with ``gluetun_proxy``
+    (Prowlarr via the VPN) the password for Gluetun's HTTP proxy when Gluetun runs.
     """
     wanted: dict[str, Callable[[], str]] = {}
     for app in apps:
         if app in _KEYED_APPS:
             wanted[f"apikey:{app}"] = generate_api_key
+        if app in WEBHOOK_APPS:
+            wanted[webhook_token_name(app)] = generate_webhook_token
     if "bazarr" in apps:
         wanted[BAZARR_KEY_NAME] = generate_api_key
     if "jellyfin" in apps:

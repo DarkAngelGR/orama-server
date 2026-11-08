@@ -2,3 +2,10 @@ name: LG OLED (webOS)
 verified: false
 unplayable: [dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, pcm_multichannel, flac]
 preferred: [dv, hdr10, truehd_atmos]
+capabilities:
+  source: LG webOS best-effort capability profile (Spec §6.1)
+  video_codecs: [h264, hevc, av1, mpeg4, vp9]
+  audio_codecs: [aac, ac3, eac3, truehd, truehd_atmos, mp3, opus, pcm_stereo]
+  hdr_formats: [dv, hdr10, hlg]
+  text_subtitles: [srt, subrip, vtt, webvtt, ass, ssa]
+  image_subtitles_burn_in: [pgs, hdmv_pgs_subtitle, vobsub, dvd_subtitle]

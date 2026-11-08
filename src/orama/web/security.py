@@ -85,6 +85,9 @@ def normalize_host(raw: str) -> str | None:
     return name
 
 
+WEBHOOK_HOST = "orama-server"
+
+
 def host_allowed(environ: dict, setup: DesiredSetup | None) -> bool:
     """True when the request's single Host header names this server."""
     raw = environ.get("HTTP_HOST")
@@ -92,6 +95,15 @@ def host_allowed(environ: dict, setup: DesiredSetup | None) -> bool:
         return False
     name = normalize_host(raw)
     return name is not None and name in allowed_hosts(setup)
+
+
+def webhook_host_allowed(environ: dict, setup: DesiredSetup | None) -> bool:
+    """True when the Host header names this server or its internal Docker hostname."""
+    raw = environ.get("HTTP_HOST")
+    if not isinstance(raw, str):
+        return False
+    name = normalize_host(raw)
+    return name is not None and (name == WEBHOOK_HOST or name in allowed_hosts(setup))
 
 
 def csrf_token() -> str:

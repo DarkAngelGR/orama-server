@@ -47,7 +47,7 @@ def test_full_order_ends_with_media_servers_then_notifications(tmp_path):
              "plex", "jellyfin"]
     assert [first[a] for a in order] == sorted(first[a] for a in order)
     notify = [i for i, n in enumerate(steps) if ":notify:" in n]
-    assert len(notify) == 4 and notify == list(range(len(steps) - 4, len(steps)))
+    assert len(notify) == 6 and notify == list(range(len(steps) - 6, len(steps)))
     assert steps.index("jellyfin:api-key") < notify[0]
     assert steps.index("plex:libraries") < notify[0]
 

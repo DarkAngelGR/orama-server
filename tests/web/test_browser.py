@@ -93,8 +93,19 @@ def serve(tmp_path, monkeypatch):
         http.route("POST", "/api/v2/pins", lambda _: Response(
             201, {}, json.dumps({"id": 51, "code": "ABCD", "expiresIn": 900}).encode()))
         http.route("GET", "/api/v2/pins/51", pin_status)
+        http.route("GET", "/api/v3/movie/lookup", lambda call: Response(
+            200, {}, json.dumps([] if "UnknownTitle" in call.url else [{
+                "tmdbId": 12345,
+                "title": "Dune: Part Two",
+                "year": 2024,
+                "hasFile": False,
+                "images": [],
+            }]).encode()))
+        http.route("GET", "/api/v3/movie", lambda _: Response(200, {}, b"[]"))
         app = create_app(state_dir, agent=FakeAgent(), http=http)
         st = app.extensions["orama"]
+        st.store.set("apikey:radarr", secrets.token_hex(16))
+        st.store.set("apikey:sonarr", secrets.token_hex(16))
         st.jobs = JobRunner(state_dir, lambda _path: [sys.executable, "-c", FAKE_APPLY],
                             redact=store_redactor(st.store))
         if first_run:
@@ -128,13 +139,15 @@ def serve(tmp_path, monkeypatch):
 
 
 def run_browser(scenario: str, served: Served, *, width: int | None = None,
-                timeout: int = 240) -> None:
+                scheme: str | None = None, timeout: int = 240) -> None:
     """Run one scenario. ``ORAMA_TEST_SCHEME``, ``_WIDTH``, ``_SHOTS_DIR`` and ``_AXE`` in the
     environment pick the colour scheme and width, save screenshots and add axe-core's rules."""
     if not _node_has_playwright():
         pytest.skip("Node with Playwright is not available")
     env = {**os.environ, "ORAMA_TEST_CODE": served.code, "ORAMA_TEST_PASSWORD": served.password,
            "ORAMA_TEST_WIDTH": str(width or os.environ.get("ORAMA_TEST_WIDTH", "1280"))}
+    if scheme is not None:
+        env["ORAMA_TEST_SCHEME"] = scheme
     result = subprocess.run(
         ["node", str(SCRIPT), scenario, served.base], check=False, capture_output=True,
         text=True, timeout=timeout, cwd=SCRIPT.parent, env=env,
@@ -173,3 +186,9 @@ def test_no_horizontal_scroll_at_360px(serve):
 
 def test_apps_focus_survives_refresh(serve):
     run_browser("apps-focus", serve(first_run=False, installed=True))
+
+
+def test_requests_browser_flow(serve):
+    run_browser("requests", serve(first_run=False, installed=True))
+    run_browser("requests", serve(first_run=False, installed=True), width=360, scheme="dark")
+

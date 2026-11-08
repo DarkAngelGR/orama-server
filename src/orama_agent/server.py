@@ -58,7 +58,7 @@ ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
 COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
-                      "recyclarr-sync"})
+                      "recyclarr-sync", "data-space"})
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -246,6 +246,7 @@ class Agent:
             "restart": self.restart,
             "seed-config": self.seed_config,
             "recyclarr-sync": self.recyclarr_sync,
+            "data-space": self.data_space,
         }[cmd]
         with self._lock:
             return handler(args)
@@ -417,6 +418,24 @@ class Agent:
         if not self._ensure_agent_env_file():
             return {}  # nothing applied yet
         return self.runner.ps()
+
+    def data_space(self, args: dict[str, Any]) -> dict[str, int]:
+        """Return total and available bytes on the configured data root without following links."""
+        _expect_keys(args, set())
+        try:
+            fd = os.open(self.roots.data, _DIR_FLAGS)
+        except OSError:
+            raise Refused("Orama cannot check the available storage space right now.") from None
+        try:
+            vfs = os.fstatvfs(fd)
+        except OSError:
+            raise Refused("Orama cannot check the available storage space right now.") from None
+        finally:
+            os.close(fd)
+        return {
+            "total_bytes": int(vfs.f_frsize * vfs.f_blocks),
+            "free_bytes": int(vfs.f_frsize * vfs.f_bavail),
+        }
 
     def restart(self, args: dict[str, Any]) -> None:
         _expect_keys(args, {"app"})

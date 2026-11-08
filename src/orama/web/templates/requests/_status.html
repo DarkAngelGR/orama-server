@@ -1,0 +1,40 @@
+<div class="stack">
+  <div class="app-row">
+    <span class="app-name">{{ req.target_label }}</span>
+    <span class="app-state" data-state="{{ 'Running' if req.stage == 'ready' else ('Starting' if req.stage in ('searching', 'downloading', 'importing') else 'Stopped') }}">{{ req.stage_label }}</span>
+  </div>
+
+  {% if req.season_summary %}
+  <p class="note">{{ req.season_summary }}</p>
+  {% endif %}
+
+  {% if req.subscription_note %}
+  <p class="note">{{ req.subscription_note }}</p>
+  {% endif %}
+
+  {% if req.waiting_reason %}
+  <p class="banner">{{ req.waiting_reason }}</p>
+  {% endif %}
+
+  {% if req.playback_note %}
+  <p class="note">{{ req.playback_note }}</p>
+  {% endif %}
+
+  {% if req.subtitle_note %}
+  <p class="note">{{ req.subtitle_note }}</p>
+  {% endif %}
+
+  {% if req.episodes %}
+  <h2>Episodes</h2>
+  <ul class="app-list">
+    {% for ep in req.episodes %}
+    <li class="app-row">
+      <span class="app-name">S{{ "%02d"|format(ep.season) }}E{{ "%02d"|format(ep.episode) }}{% if ep.title %} · {{ ep.title }}{% endif %}</span>
+      <span class="app-state" data-state="{{ 'Running' if ep.has_file or ep.stage == 'ready' else 'Starting' }}">
+        {% if ep.has_file or ep.stage == 'ready' %}Ready{% else %}{{ ep.stage|capitalize }}{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

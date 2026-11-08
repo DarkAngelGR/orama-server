@@ -475,9 +475,55 @@ def apply_downloads(
 # ---------------------------------------------------------------- playback
 
 
+WAIT_MODES = (
+    ("timed", "Wait a set number of hours, then allow other formats"),
+    ("always", "Always wait for a directly playable release"),
+    ("never", "Do not wait — allow any format immediately"),
+)
+
+
+def _parse_wait_and_disk(
+    setup: DesiredSetup, form: Mapping[str, str], errors: dict[str, str]
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "request_wait_mode" in form:
+        mode = _text(form, "request_wait_mode")
+        if mode not in dict(WAIT_MODES):
+            errors["request_wait_mode"] = "Choose how long Orama waits for a directly playable release."
+        else:
+            updates["request_wait_mode"] = mode
+    if "request_wait_hours" in form:
+        raw_hours = _text(form, "request_wait_hours")
+        try:
+            hours = int(raw_hours)
+            if not 1 <= hours <= 720:
+                raise ValueError
+            updates["request_wait_hours"] = hours
+        except ValueError:
+            errors["request_wait_hours"] = "Enter a number of hours between 1 and 720."
+    if "disk_warning_percent" in form:
+        raw_pct = _text(form, "disk_warning_percent")
+        try:
+            pct = int(raw_pct)
+            if not 1 <= pct <= 50:
+                raise ValueError
+            updates["disk_warning_percent"] = pct
+        except ValueError:
+            errors["disk_warning_percent"] = "Enter a whole percentage between 1 and 50."
+    return updates
+
+
 def read_playback(setup: DesiredSetup, store: SecretStore) -> dict[str, Any]:
-    return {"device": setup.device, "quality": setup.quality,
-            "devices": DEVICES, "qualities": QUALITIES}
+    return {
+        "device": setup.device,
+        "quality": setup.quality,
+        "devices": DEVICES,
+        "qualities": QUALITIES,
+        "request_wait_mode": setup.request_wait_mode,
+        "request_wait_hours": setup.request_wait_hours,
+        "disk_warning_percent": setup.disk_warning_percent,
+        "wait_modes": WAIT_MODES,
+    }
 
 
 def echo_playback(
@@ -485,6 +531,12 @@ def echo_playback(
 ) -> dict[str, Any]:
     values = read_playback(setup, store)
     values.update(device=_text(form, "device"), quality=_text(form, "quality"))
+    if "request_wait_mode" in form:
+        values["request_wait_mode"] = _text(form, "request_wait_mode")
+    if "request_wait_hours" in form:
+        values["request_wait_hours"] = _text(form, "request_wait_hours")[:8]
+    if "disk_warning_percent" in form:
+        values["disk_warning_percent"] = _text(form, "disk_warning_percent")[:8]
     return values
 
 
@@ -497,12 +549,52 @@ def apply_playback(
         errors["device"] = "Choose the device you watch on most."
     if quality not in dict(QUALITIES):
         errors["quality"] = "Choose the quality you prefer."
+    extra = _parse_wait_and_disk(setup, form, errors)
     if errors:
         raise Invalid(errors)
     try:
-        return _rebuild(setup, device=device, quality=quality)
+        return _rebuild(setup, device=device, quality=quality, **extra)
     except ValidationError as e:
         raise Invalid(_model_messages(e, "device")) from None
+
+
+def read_requests(setup: DesiredSetup, store: SecretStore) -> dict[str, Any]:
+    return {
+        "request_wait_mode": setup.request_wait_mode,
+        "request_wait_hours": setup.request_wait_hours,
+        "disk_warning_percent": setup.disk_warning_percent,
+        "wait_modes": WAIT_MODES,
+    }
+
+
+def echo_requests(
+    setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
+) -> dict[str, Any]:
+    values = read_requests(setup, store)
+    if "request_wait_mode" in form:
+        values["request_wait_mode"] = _text(form, "request_wait_mode")
+    if "request_wait_hours" in form:
+        values["request_wait_hours"] = _text(form, "request_wait_hours")[:8]
+    if "disk_warning_percent" in form:
+        values["disk_warning_percent"] = _text(form, "disk_warning_percent")[:8]
+    return values
+
+
+def apply_requests(
+    setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
+) -> DesiredSetup:
+    errors: dict[str, str] = {}
+    mode_form = dict(form)
+    mode_form.setdefault("request_wait_mode", setup.request_wait_mode)
+    mode_form.setdefault("request_wait_hours", str(setup.request_wait_hours))
+    mode_form.setdefault("disk_warning_percent", str(setup.disk_warning_percent))
+    extra = _parse_wait_and_disk(setup, mode_form, errors)
+    if errors:
+        raise Invalid(errors)
+    try:
+        return _rebuild(setup, **extra)
+    except ValidationError as e:
+        raise Invalid(_model_messages(e, "request_wait_mode")) from None
 
 
 # ---------------------------------------------------------------- subtitles

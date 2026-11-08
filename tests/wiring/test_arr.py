@@ -51,11 +51,15 @@ def notify_schema():
          "name": "Emby / Jellyfin", "tags": [], **flags,
          "fields": [f("host"), f("port", 8096), f("useSsl", False), f("apiKey"),
                     f("notify", False), f("updateLibrary", False)]},
+        {"implementation": "Webhook", "configContract": "WebhookSettings",
+         "name": "Webhook", "tags": [], **flags,
+         "fields": [f("url"), f("method", 1), f("username"), f("password"), f("headers", [])]},
     ]
 
 
 PLEX_TOKEN = "plextok" * 3
 JELLYFIN_KEY = "jfkey" * 5
+WEBHOOK_TOKEN = "hooktok" * 8
 
 
 class FakeArr:
@@ -183,6 +187,7 @@ class FakeArr:
 def make(tmp_path, app, methods=("usenet", "torrent"), vpn=None, media=("plex",)):
     store = SecretStore(tmp_path / "secrets.bin")
     store.set(f"apikey:{app}", APP_KEY)
+    store.set(f"webhook:{app}", WEBHOOK_TOKEN)
     store.set("token:plex", PLEX_TOKEN)
     store.set("apikey:jellyfin", JELLYFIN_KEY)
     store.set("apikey:sabnzbd", SAB_KEY)
@@ -206,8 +211,9 @@ def test_step_names_and_dependencies(tmp_path, app):
     assert list(steps) == [
         f"wait:{app}", f"{app}:root-folder", f"{app}:media-management",
         f"{app}:client:sabnzbd", f"{app}:client:qbittorrent",
-        f"{app}:notify:plex", f"{app}:notify:jellyfin",
+        f"{app}:notify:orama", f"{app}:notify:plex", f"{app}:notify:jellyfin",
     ]
+    assert steps[f"{app}:notify:orama"].needs == (f"wait:{app}",)
     assert steps[f"{app}:notify:plex"].needs == (f"wait:{app}", "plex:libraries")
     assert steps[f"{app}:notify:jellyfin"].needs == (f"wait:{app}",)  # not selected
     assert steps[f"{app}:client:sabnzbd"].needs == (f"wait:{app}", "sabnzbd:categories")
@@ -239,7 +245,9 @@ def test_first_run_creates_then_second_run_is_unchanged(tmp_path, app):
     assert all(s == "unchanged" for s in statuses(second).values())
     assert len(arr.writes) == before
     assert len(arr.clients) == 2
-    assert [n["name"] for n in arr.notifications.values()] == ["Plex (Orama)"]
+    assert [n["name"] for n in arr.notifications.values()] == [
+        "Orama events (Orama)", "Plex (Orama)"
+    ]
 
 
 def test_qbittorrent_host_is_gluetun_with_vpn(tmp_path, app):
@@ -534,11 +542,39 @@ def test_both_servers_get_a_notification_and_second_run_is_unchanged(tmp_path, a
     arr = FakeArr(app)
     setup, store = make(tmp_path, app, media=("plex", "jellyfin"))
     run_steps(arr_steps(app, setup, store, arr.http))
-    assert len(arr.notifications) == 2
+    assert len(arr.notifications) == 3
     arr.writes.clear()
     again = run_steps(arr_steps(app, setup, store, arr.http))
     assert all(r.status == "unchanged" for r in again)
     assert arr.writes == []
+
+
+def test_orama_webhook_notification_and_token_rotation(tmp_path, app):
+    arr = FakeArr(app)
+    setup, store = make(tmp_path, app)
+    results = run_steps(arr_steps(app, setup, store, arr.http))
+    assert statuses(results)[f"{app}:notify:orama"] == "changed"
+    hook = notified(arr, "Orama events (Orama)")
+    assert hook["implementation"] == "Webhook"
+    assert arr.field(hook, "url") == f"http://orama-server:8765/hooks/{app}"
+    assert arr.field(hook, "method") == 1
+    assert arr.field(hook, "headers") == [
+        {"key": "Authorization", "value": f"Bearer {WEBHOOK_TOKEN}"}
+    ]
+    assert hook["onGrab"] and hook["onDownload"] and hook["onUpgrade"] and hook["onRename"]
+    assert store.get(f"arr:{app}:orama:sent") == sha256(WEBHOOK_TOKEN.encode()).hexdigest()
+
+    # Rotate token: rewires notification without printing the token
+    rotated = "rotatedtok" * 6 + "abcd"
+    store.set(f"webhook:{app}", rotated)
+    results2 = run_steps(arr_steps(app, setup, store, arr.http))
+    assert statuses(results2)[f"{app}:notify:orama"] == "changed"
+    hook2 = notified(arr, "Orama events (Orama)")
+    assert arr.field(hook2, "headers") == [
+        {"key": "Authorization", "value": f"Bearer {rotated}"}
+    ]
+    text = " ".join(r.message for r in results2)
+    assert rotated not in text and WEBHOOK_TOKEN not in text
 
 
 def test_deselecting_jellyfin_removes_only_its_notification(tmp_path, app):
@@ -554,6 +590,7 @@ def test_deselecting_jellyfin_removes_only_its_notification(tmp_path, app):
     assert statuses(results)[f"{app}:notify:jellyfin"] == "changed"
     assert arr.notification("Jellyfin (Orama)") is None
     assert arr.notification("Plex (Orama)") is not None
+    assert arr.notification("Orama events (Orama)") is not None
     assert arr.notifications[99] == user_note and mine["id"] in arr.clients
     assert store.get(f"arr:{app}:jellyfin:sent") == ""
     arr.writes.clear()
@@ -591,4 +628,4 @@ def test_secrets_never_in_messages(tmp_path, app):
     setup, store = make(tmp_path, app, media=("plex", "jellyfin"))
     results = run_steps(arr_steps(app, setup, store, arr.http))
     text = " ".join(r.message for r in results)
-    assert PLEX_TOKEN not in text and JELLYFIN_KEY not in text
+    assert PLEX_TOKEN not in text and JELLYFIN_KEY not in text and WEBHOOK_TOKEN not in text

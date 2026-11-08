@@ -436,7 +436,10 @@ def test_principal_without_permission_gets_403(state_dir, clock):
     response = client.get("/test/secret")
     assert response.status_code == 403
     assert b"secret" not in response.data
-    assert auth.ADMIN == auth.Principal("admin", frozenset({"setup", "settings", "apps"}))
+    assert auth.ADMIN == auth.Principal(
+        "admin",
+        frozenset({"setup", "settings", "apps", "requests:read", "requests:write"}),
+    )
 
 
 def test_sessions_are_bounded(clock):

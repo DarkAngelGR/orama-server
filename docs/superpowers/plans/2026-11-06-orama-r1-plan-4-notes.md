@@ -93,3 +93,67 @@ for `WEBDL-2160p`) while compiling Sonarr to `web-1080p`. Radarr's
 `fake_newznab.py` to `2160p` (`8589934592` bytes, ~55.3 MiB/min for a 148-minute movie)
 matches the default `uhd-bluray-web` quality profile while keeping `DTS` as the sole
 score-based rejection under the strict profile.
+
+Run 42381439992 (`9d5e2e7`) passed `unit`, `browser`, `images`, and all 38 real-container
+`integration` tests (including `test_pinned_request_contracts`,
+`test_pinned_authenticated_webhook_contracts`, `test_pinned_title_request_contracts[sonarr]`,
+and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified in CI:
+- Read contracts: `system/status`, paginated `queue` and `history` (`page`, `pageSize`,
+  `totalRecords`, `records`), `command`, `series`/`movie`, `episodefile` (404 when series
+  absent) / `moviefile` (`[]` when movie absent), `qualityprofile` (`Orama` profile with
+  integer `id`, `minFormatScore`, `cutoffFormatScore`, `formatItems`, `items`).
+- Webhook contracts: `Webhook` notification schema supports `url`, `method` (POST), and
+  `headers` (`[{"key": "Authorization", "value": "Bearer <token>"}]`), `onGrab`,
+  `onDownload`, `onUpgrade`; `notification/test` delivers `eventType == "Test"` with the
+  Bearer header and no token leaked in container logs.
+- Title, media-info, subtitle, and fallback contracts: lookup by `tvdb:<id>` / `tmdb:<id>`,
+  add with `monitor: "none"` (Sonarr) and `searchForMissingEpisodes: False` /
+  `searchForMovie: False`, `episode/monitor` preserving unrelated monitored episodes,
+  `EpisodeSearch` / `MoviesSearch`, `RescanSeries` / `RescanMovie` populating `mediaInfo`
+  (`videoCodec`, `audioCodec`, `resolution`, `videoBitDepth`, `audioLanguages`,
+  `videoDynamicRange`, `videoDynamicRangeType`, `subtitles`), Bazarr `/api/series` and
+  `/api/movies` sync/profile assignment/disk scan reporting `missing_subtitles` (`el`, `en`),
+  and alternate quality profile with `minFormatScore` lowered to the unplayable format score
+  (`-10000`) allowing the synthetic DTS release without modifying the shared `Orama` profile.
+
+### Tasks 2–11 implementation and owner-only checks (Gemini, 2026-11-07)
+
+- **Durable request store & domain (`src/orama/requests/models.py`, `store.py`)**:
+  SQLite store (`<state_dir>/requests.sqlite3`, mode `0600`, `PRAGMA user_version = 1`,
+  `PRAGMA foreign_keys = ON`, 5 s busy timeout) persists `requests`, `refreshes`,
+  `episode_targets`, and `followups`. Unique `target_key` makes concurrent or repeated
+  submissions idempotent; `claim_due` and `release` coordinate worker leases across restarts.
+- **Lookup, submission, and reconciliation (`client.py`, `submit.py`, `reconcile.py`, `worker.py`)**:
+  `MediaClient` enforces 1–200 char queries, strips HTML/tags from titles, validates poster URLs,
+  adds series with `monitor="none"` for episode/season requests (preserving unrelated monitoring),
+  and queries bounded queue/history snapshots plus imported file `mediaInfo` and Bazarr subtitles.
+- **Playable-release waiting & fallback (`fallback.py`, `setup_model.py`, `web/forms.py`, `web/settings.py`)**:
+  Snapshots `request_wait_mode` (`timed` | `always` | `never`, default `timed`) and
+  `request_wait_hours` (default `24`) at request creation. When `fallback_due` is reached,
+  `apply_fallback` creates/updates the `Orama fallback` quality profile (`minFormatScore`
+  lowered to `-10000`) and attaches it to the requested item without altering the shared `Orama`
+  profile or user-assigned profiles. For Sonarr series-level profiles, fallback is blocked with
+  an explicit waiting reason whenever unrelated monitored episodes without files exist on the
+  same series.
+- **Playback & subtitle assessments (`playback.py`, `subtitles.py`, `profiles/devices/*.yaml`)**:
+  Evaluates Sonarr/Radarr `mediaInfo` against device capabilities (`samsung_s95f` verified;
+  other device profiles labelled best-effort) and Bazarr subtitle availability against ordered
+  user languages, recording typed `conversion` and `translation` follow-up reason codes for
+  Release 2 without executing media jobs.
+- **Authenticated webhooks, browser UI, poster proxy, and recovery (`web/hooks.py`, `web/requests.py`, `web/posters.py`)**:
+  `POST /hooks/sonarr` and `POST /hooks/radarr` validate per-app 32-byte hex Bearer tokens in
+  constant time after Host checks and coalesce refresh hints. `/posters/<kind>/<source_id>`
+  proxies only validated TMDB/TVDB HTTPS images (max 2 MiB, `image/jpeg|png|webp`, no redirects)
+  with an inline SVG placeholder fallback. `AgentClient.data_space()` checks free space on the
+  configured data root with `O_NOFOLLOW | O_DIRECTORY` + `fstatvfs` and displays a warning on
+  Home when below `disk_warning_percent` (default 5%).
+- **Owner-only checks (cannot be automated in disposable CI)**:
+  1. Real external Usenet/torrent indexers and download providers (CI uses `fake_newznab.py` and
+     synthetic `ffmpeg` video generation with no copyrighted media or external provider accounts).
+  2. Real Plex account claim/sign-in and library scan notification verification.
+  3. Physical Samsung S95F TV Direct Play verification on imported files (CI verifies container
+     `mediaInfo` and `assess_playback` against the pinned `samsung_s95f.yaml` rule set).
+  4. Deferred Claude Security scan for Plans 2b, 3, and 4 when Claude becomes available on
+     Wednesday 2026-11-11, plus the separate root-side `self-update` operations plan before
+     Release 1 completion.
+

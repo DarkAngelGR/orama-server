@@ -74,6 +74,35 @@ def running_summary(setup: DesiredSetup) -> str | None:
     return f"{up} of {len(apps)} apps running"
 
 
+def disk_warning(setup: DesiredSetup | None) -> str | None:
+    """Return a plain low-storage warning if free space is below the configured threshold."""
+    if setup is None:
+        return None
+    agent = auth.web_state().agent
+    if not hasattr(agent, "data_space"):
+        return None
+    try:
+        space = agent.data_space()
+    except (AgentError, OSError):
+        return None
+    if not isinstance(space, dict):
+        return None
+    total = space.get("total_bytes")
+    free = space.get("free_bytes")
+    if (
+        type(total) is not int
+        or type(free) is not int
+        or total <= 0
+        or free < 0
+    ):
+        return None
+    threshold = getattr(setup, "disk_warning_percent", 5)
+    if free * 100 < total * threshold:
+        pct = int((free * 100) // total)
+        return f"Storage space is running low ({pct}% free, warning below {threshold}%)."
+    return None
+
+
 def register_apps(app: Flask) -> None:
     app.register_blueprint(_pages())
 

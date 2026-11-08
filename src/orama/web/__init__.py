@@ -21,13 +21,17 @@ from flask.globals import request_ctx
 from werkzeug.exceptions import HTTPException
 
 from orama.agent_client import AgentClient
+from orama.requests.store import RequestStore
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
-from orama.web import auth, security
-from orama.web.apps import register_apps, running_summary
+from orama.web import auth, hooks, security
+from orama.web.apps import disk_warning, register_apps, running_summary
 from orama.web.assets import configure_assets
+from orama.web.hooks import register_hooks
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
 from orama.web.plex import register_plex
+from orama.web.posters import register_posters
+from orama.web.requests import register_requests, to_request_view
 from orama.web.settings import register_settings
 from orama.web.wizard import register_wizard
 from orama.wiring.http import Http
@@ -37,6 +41,7 @@ DRAFT_FILE = "setup.draft.json"
 AUTH_FILE = "auth.json"
 FIRST_RUN_CODE_FILE = "first-run.code"
 SECRETS_FILE = "secrets.bin"
+REQUESTS_FILE = "requests.sqlite3"
 MAX_REQUEST_BYTES = 1024 * 1024
 
 # Plain words for each refusal; never an HTTP code, a path or anything from the request.
@@ -94,6 +99,14 @@ class WebState:
     setup: SetupReader
     jobs: JobRunner
     apply_gate: threading.Lock = field(default_factory=threading.Lock)
+    _requests: RequestStore | None = field(default=None, init=False, repr=False)
+
+    @property
+    def requests(self) -> RequestStore:
+        if self._requests is None:
+            self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._requests = RequestStore(self.state_dir / REQUESTS_FILE)
+        return self._requests
 
     @property
     def first_run_code(self) -> Path:
@@ -143,6 +156,9 @@ def create_app(
     register_plex(app)
     register_settings(app)
     register_apps(app)
+    register_hooks(app)
+    register_posters(app)
+    register_requests(app)
     return app
 
 
@@ -162,18 +178,32 @@ def _check_request():
     st = auth.web_state()
     g.principal = None
     g.session = None
+    g.webhook_app = None
+    is_webhook_post = request.method == "POST" and request.path in hooks.WEBHOOK_PATHS
     # 1. Host allowlist, for every request (also /healthz and static files).
-    if not security.host_allowed(request.environ, st.setup.current()):
+    # Exact POST webhook routes also accept the internal Docker hostname orama-server.
+    host_ok = (
+        security.webhook_host_allowed(request.environ, st.setup.current())
+        if is_webhook_post
+        else security.host_allowed(request.environ, st.setup.current())
+    )
+    if not host_ok:
         return rejected(security.HOST_REJECTED, 400)
     # 2. No OPTIONS (and so no CORS preflight) anywhere.
     if request.method == "OPTIONS":
         return rejected(MESSAGES[405], 405)
-    # 3. The session, from the cookie.
+    # 3. Narrowly scoped webhook authentication after Host validation.
+    if is_webhook_post:
+        if not hooks.webhook_token_ok(request, st.store):
+            return rejected(security.CSRF_REJECTED, 403)
+        g.webhook_app = hooks.WEBHOOK_PATHS[request.path]
+        return None
+    # 4. The session, from the cookie.
     session = st.sessions.get(request.cookies.get(auth.COOKIE), request.remote_addr or "")
     if session is not None:
         g.session = session
         g.principal = session.principal
-    # 4. CSRF on every state-changing request.
+    # 5. CSRF on every state-changing request.
     if request.method in security.UNSAFE_METHODS and not security.csrf_ok():
         return rejected(security.CSRF_REJECTED, 403)
     return None
@@ -225,7 +255,13 @@ def _auth_pages() -> Blueprint:
         if not (st.state_dir / SETUP_FILE).exists():
             return redirect("/setup/media", 303)
         setup = st.setup.current()
-        return render_template("home.html", summary=running_summary(setup) if setup else None)
+        recent = [to_request_view(r) for r in st.requests.list_recent(10)]
+        return render_template(
+            "home.html",
+            summary=running_summary(setup) if setup else None,
+            disk_warning=disk_warning(setup),
+            recent_requests=recent,
+        )
 
     @pages.route("/signin", methods=["GET", "POST"])
     def signin():

@@ -1063,3 +1063,23 @@ def test_bazarr_seed_refuses_alias_bomb_fast_before_stopping(agent, roots):
     assert time.monotonic() - started < 5
     assert path.read_text() == text
     assert agent.runner.stops == [] and agent.runner.starts == []
+
+
+def test_data_space_returns_bytes_and_refuses_arguments_or_bad_root(agent, roots, tmp_path):
+    space = agent.client.data_space()
+    assert isinstance(space, dict)
+    assert set(space) == {"total_bytes", "free_bytes"}
+    assert isinstance(space["total_bytes"], int) and space["total_bytes"] > 0
+    assert isinstance(space["free_bytes"], int) and 0 <= space["free_bytes"] <= space["total_bytes"]
+
+    # Extra or malicious path arguments are refused
+    for bad_args in ({"path": "/"}, {"path": str(tmp_path)}, {"extra": 1}):
+        resp = agent.call("data-space", bad_args)
+        assert resp["ok"] is False
+        assert "no arguments" in resp["error"]
+
+    # If the data root is missing or a symlink (stat error), data-space refuses cleanly
+    shutil.rmtree(roots.data)
+    with pytest.raises(AgentError):
+        agent.client.data_space()
+

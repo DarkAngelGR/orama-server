@@ -196,3 +196,10 @@ nav.wizard-steps { display: block; }
   nav a, nav .button { padding: .5rem .55rem; }
   nav { flex-wrap: nowrap; }
 }
+
+.media-row { align-items: center; }
+.media-meta { display: grid; gap: 0.2rem; flex: 1; min-width: 0; }
+.media-header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; margin-bottom: 1.25rem; }
+.poster-thumb { width: 3.5rem; height: 5.25rem; object-fit: cover; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); flex-shrink: 0; }
+.poster-large { width: 7.5rem; height: 11.25rem; object-fit: cover; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); flex-shrink: 0; }
+

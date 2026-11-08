@@ -13,11 +13,12 @@ from pathlib import Path
 
 import waitress
 
+from orama.agent_client import AgentClient
 from orama.requests.client import MediaClient
 from orama.requests.store import RequestStore
-from orama.requests.worker import RequestWorker
+from orama.requests.worker import RequestWorker, schedule_startup_check
 from orama.secrets import SecretStore, install_redaction
-from orama.web import MAX_REQUEST_BYTES, SECRETS_FILE, SetupReader, create_app
+from orama.web import MAX_REQUEST_BYTES, REQUESTS_FILE, SECRETS_FILE, SetupReader, create_app
 from orama.wiring.http import Http
 
 HOST = "0.0.0.0"
@@ -41,16 +42,22 @@ def main() -> None:
     secret_store = SecretStore(state_dir / SECRETS_FILE)
     install_redaction(secret_store)
 
-    db_path = state_dir / "requests.db"
+    agent = AgentClient()
+    db_path = state_dir / REQUESTS_FILE
     request_store = RequestStore(db_path)
     setup_reader = SetupReader(state_dir)
     worker = RequestWorker(
         store=request_store,
-        client_factory=lambda: MediaClient(setup_reader, secret_store, Http()),
+        client_factory=lambda: MediaClient(
+            setup_reader.current(), secret_store, Http(), use_service_hosts=True
+        ),
+        agent=agent,
     )
+    app = create_app(state_dir, agent=agent, request_worker=worker)
+    st = app.extensions["orama"]
+    schedule_startup_check(state_dir, st.agent, st.jobs, st.apply_gate)
     worker.start()
     try:
-        app = create_app(state_dir, request_worker=worker)
         waitress.serve(app, **SERVE_OPTIONS)
     finally:
         worker.stop()

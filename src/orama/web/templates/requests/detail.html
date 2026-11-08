@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ req.title }} · Orama{% endblock %}
+{% block content %}
+<section class="apps">
+  <h1>{{ req.title }}{% if req.year %} ({{ req.year }}){% endif %}</h1>
+  <p class="lead">{{ req.kind_label }} request</p>
+
+  <section aria-live="polite"
+           {% if live %}
+           hx-get="{{ url_for('requests.status', request_id=req.id) }}"
+           hx-trigger="every 5s"
+           hx-swap="innerHTML"
+           {% endif %}>
+    {% include "requests/_status.html" %}
+  </section>
+
+  <div class="actions">
+    {% if req.can_retry %}
+    <form method="post" action="{{ url_for('requests.retry', request_id=req.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button id="request-retry" type="submit" class="button button-secondary">Retry search</button>
+    </form>
+    {% endif %}
+    <a class="button button-secondary" href="{{ url_for('auth.home') }}">Back to Home</a>
+  </div>
+</section>
+{% endblock %}

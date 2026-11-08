@@ -2,3 +2,10 @@ name: Safest (plays on almost anything)
 verified: true
 unplayable: [dv, dv_no_fallback, dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, pcm_multichannel, flac, truehd, truehd_atmos]
 preferred: [hdr10]
+capabilities:
+  source: Universal baseline compatibility profile (Spec §6.1)
+  video_codecs: [h264, hevc, av1, mpeg4, vp9]
+  audio_codecs: [aac, ac3, eac3, mp3, opus, pcm_stereo]
+  hdr_formats: [hdr10, hlg]
+  text_subtitles: [srt, subrip, vtt, webvtt]
+  image_subtitles_burn_in: [pgs, hdmv_pgs_subtitle, vobsub, dvd_subtitle]

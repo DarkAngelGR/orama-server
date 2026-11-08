@@ -158,12 +158,17 @@ def test_generated_key_format():
 def test_ensure_app_keys_is_idempotent(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
     ensure_app_keys(st, ["sonarr", "radarr", "prowlarr", "bazarr", "plex"])
-    assert sorted(st.names()) == ["apikey:bazarr", "apikey:prowlarr", "apikey:radarr", "apikey:sonarr", "plex:client_id"]
+    assert sorted(st.names()) == [
+        "apikey:bazarr", "apikey:prowlarr", "apikey:radarr", "apikey:sonarr",
+        "plex:client_id", "webhook:radarr", "webhook:sonarr",
+    ]
     before = {n: st.get(n) for n in st.names()}
     ensure_app_keys(st, ["sonarr", "radarr", "prowlarr"])
     assert {n: st.get(n) for n in st.names()} == before
     for name, value in before.items():
-        if name != "plex:client_id":
+        if name.startswith("webhook:"):
+            assert re.fullmatch(r"[0-9a-f]{64}", value)
+        elif name != "plex:client_id":
             assert re.fullmatch(r"[0-9a-f]{32}", value)
 
 
@@ -380,13 +385,15 @@ DOWNLOAD_APPS = ["sonarr", "sabnzbd", "qbittorrent", "gluetun"]
 def test_ensure_app_keys_creates_download_client_secrets(tmp_path):
     st = SecretStore(tmp_path / "s.bin")
     ensure_app_keys(st, ["sonarr"])
-    assert st.names() == ["apikey:sonarr"]
+    assert sorted(st.names()) == ["apikey:sonarr", "webhook:sonarr"]
     ensure_app_keys(st, DOWNLOAD_APPS)
     assert sorted(st.names()) == [
-        "apikey:sabnzbd", "apikey:sonarr", "nzbkey:sabnzbd", "password:qbittorrent",
+        "apikey:sabnzbd", "apikey:sonarr", "nzbkey:sabnzbd",
+        "password:qbittorrent", "webhook:sonarr",
     ]
     assert re.fullmatch(r"[0-9a-f]{32}", st.get("apikey:sabnzbd"))
     assert re.fullmatch(r"[0-9a-f]{32}", st.get("nzbkey:sabnzbd"))
+    assert re.fullmatch(r"[0-9a-f]{64}", st.get("webhook:sonarr"))
     assert st.get("apikey:sabnzbd") != st.get("nzbkey:sabnzbd")
     assert re.fullmatch(r"[A-Za-z0-9_-]{32}", st.get("password:qbittorrent"))
     before = {n: st.get(n) for n in st.names()}
@@ -522,6 +529,7 @@ def test_redaction_leaves_bookkeeping_values_alone(tmp_path):
 SECRET_NAMES = [
     "vpn:wireguard_private_key", "password:jellyfin", "password:qbittorrent",
     "password:gluetun-proxy", "apikey:sonarr", "apikey:bazarr", "nzbkey:sabnzbd", "token:plex",
+    "webhook:sonarr", "webhook:radarr",
     "indexer:nyaa:apiKey", "indexer:nyaa:cookie", "indexer:nyaa:sent",
     "usenet:news-example:password", "qbhash:qbittorrent", "opensubtitles:password",
     "opensubtitles:username", "draft:set:vpn:wireguard_private_key",

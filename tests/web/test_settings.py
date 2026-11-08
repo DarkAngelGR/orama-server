@@ -1300,3 +1300,36 @@ def test_first_install_writes_the_store_directly(signed, app):
                            jellyfin_password=pw)
     assert response.status_code == 303
     assert store.get("password:jellyfin") == pw and draft_names(store) == []
+
+
+def test_requests_policy_saves_and_validates(signed, app, runner):
+    html = page(signed.get("/settings"))
+    assert 'action="/settings/requests"' in html
+
+    response = post(
+        signed,
+        "/settings/requests",
+        request_wait_mode="timed",
+        request_wait_hours="48",
+        disk_warning_percent="10",
+    )
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/settings?saved=requests"
+    saved = live(app)
+    assert saved.request_wait_mode == "timed"
+    assert saved.request_wait_hours == 48
+    assert saved.disk_warning_percent == 10
+    assert starts(runner) == []
+
+    # Invalid hours and disk warning percent show plain error without saving
+    bad = post(
+        signed,
+        "/settings/requests",
+        request_wait_mode="timed",
+        request_wait_hours="900",
+        disk_warning_percent="0",
+    )
+    assert bad.status_code == 400
+    assert "between 1 and 720" in page(bad)
+    assert live(app).request_wait_hours == 48
+

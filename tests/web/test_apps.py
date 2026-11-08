@@ -222,7 +222,7 @@ def test_home_signed_out_goes_to_signin(client, password):
 
 def test_home_shows_welcome_links_and_status(signed):
     html = get(signed, "/").get_data(as_text=True)
-    assert "Requests arrive in the next update." in html
+    assert "Request a movie or show" in html
     assert 'href="/apps"' in html and 'href="/settings"' in html
     assert "4 of 6 apps running" in html
 

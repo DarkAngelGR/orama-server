@@ -240,12 +240,21 @@ def _pages() -> Blueprint:
         saved = request.args.get("saved", "")
         if not message and saved == "addresses":
             message = "Saved. The new name works from the next page you open."
+        elif not message and saved == "requests":
+            message = "Saved. New requests and storage checks use these settings."
         elif not message and saved == "password":
             message = "Your password is changed. Other sessions were signed out."
+        req_override = overrides.get("requests", {})
+        request_values = (
+            req_override.get("values")
+            or (forms.read_requests(setup, st.store) if setup else {})
+        )
         return render_template(
             "settings/index.html", setup=setup, draft=has_draft, sections=sections, job=job,
             show_job=show_job, running=bool(job and job.status == "running"),
             message=message, problem=problem, address_errors=overrides.get("addresses", {}).get("errors", {}),
+            request_values=request_values,
+            request_errors=req_override.get("errors", {}),
             password_errors=overrides.get("password", {}).get("errors", {}),
             indexer_count=len(setup.indexers) if setup else 0,
             usenet_count=len(setup.usenet_servers) if setup else 0,
@@ -381,6 +390,28 @@ def _pages() -> Blueprint:
             return {"addresses": {"errors": errors or {}}}
 
         return commit("addresses", change, start=False, echo=shown)
+
+    @pages.post("/settings/requests")
+    @auth.requires("settings")
+    def requests_policy():
+        st = auth.web_state()
+        form = request.form
+
+        def change(setup: DesiredSetup) -> DesiredSetup:
+            return forms.apply_requests(setup, form, st.store)
+
+        def shown(errors):
+            setup = _load(st, SETUP_FILE)
+            if setup is None:
+                return None
+            return {
+                "requests": {
+                    "values": forms.echo_requests(setup, form, st.store),
+                    "errors": errors or {},
+                }
+            }
+
+        return commit("requests", change, start=False, echo=shown)
 
     @pages.post("/settings/graphics")
     @auth.requires("settings")

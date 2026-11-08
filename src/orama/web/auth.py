@@ -54,7 +54,10 @@ class Principal:
     permissions: frozenset[str]
 
 
-ADMIN = Principal("admin", frozenset({"setup", "settings", "apps"}))
+ADMIN = Principal(
+    "admin",
+    frozenset({"setup", "settings", "apps", "requests:read", "requests:write"}),
+)
 
 
 def password_length_ok(password: str) -> bool:

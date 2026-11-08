@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import notice, button, field, secret_field %}
+{% from "_macros.html" import notice, button, field, secret_field, choice %}
 {% block title %}Settings · Orama{% endblock %}
 {% block content %}
 <div class="settings">
@@ -27,6 +27,18 @@
   </section>
   {% else %}
   {% for s in sections %}{% include "settings/_section.html" %}{% endfor %}
+
+  <section class="settings-section" id="requests-policy" aria-labelledby="requests-policy-title">
+    <h2 id="requests-policy-title">Requests and storage</h2>
+    <p class="field-help">How long Orama waits for a directly playable release before accepting a file that may need conversion, and when to warn about low free space.</p>
+    <form method="post" action="/settings/requests" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ choice('request_wait_mode', 'When no directly playable release is found yet', request_values.wait_modes, request_values.request_wait_mode, request_errors.request_wait_mode) }}
+      {{ field('request_wait_hours', 'Hours to wait before accepting another format', request_values.request_wait_hours, request_errors.request_wait_hours, 'Between 1 and 720 hours (default 24). Used when waiting a set number of hours.', 'number', 'off') }}
+      {{ field('disk_warning_percent', 'Warn when free storage drops below (%)', request_values.disk_warning_percent, request_errors.disk_warning_percent, 'Between 1% and 50% of the media drive (default 5%).', 'number', 'off') }}
+      <div class="wizard-actions">{{ button('Save') }}</div>
+    </form>
+  </section>
 
   <section class="settings-section" id="indexers" aria-labelledby="indexers-title">
     <h2 id="indexers-title">Indexers</h2>

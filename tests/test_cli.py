@@ -507,7 +507,7 @@ def store_values(cfg):
 def credential_values(cfg):
     """The keys, passwords and hashes in the store, without wiring's bookkeeping markers."""
     store = SecretStore(cfg / "orama" / "secrets.bin")
-    prefixes = ("apikey:", "nzbkey:", "password:", "qbhash:", "indexer:", "vpn:")
+    prefixes = ("apikey:", "nzbkey:", "password:", "qbhash:", "indexer:", "vpn:", "webhook:")
     return [store.get(n) for n in store.names() if n.startswith(prefixes)
             and not n.endswith(":sent")]
 
@@ -538,7 +538,7 @@ def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, ro
     assert {f"✓ {a} started" for a in enabled_apps(setup)} <= set(lines)
 
     secrets = credential_values(cfg)
-    assert len(secrets) == 6  # includes Bazarr API key
+    assert len(secrets) == 8  # includes Bazarr API key and Sonarr/Radarr webhook tokens
     for value in secrets:
         assert value not in out.out and value not in out.err and value not in caplog.text
 
@@ -815,7 +815,8 @@ def test_apply_plex_pending_sign_in_skips_only_plex_steps(capsys, roots, agent):
     assert not [line for line in out if line.startswith("✗")]
     assert fleet.bazarr.profiles and fleet.bazarr.settings["general"]["use_sonarr"] is True
     assert fleet.recyclarr.calls and fleet.profiles["sonarr"].profiles[-1]["name"] == "Orama"
-    assert fleet.sonarr.notifications == {} and fleet.radarr.notifications == {}
+    assert [n["name"] for n in fleet.sonarr.notifications.values()] == ["Orama events (Orama)"]
+    assert [n["name"] for n in fleet.radarr.notifications.values()] == ["Orama events (Orama)"]
     assert fleet.plex.sections == []  # libraries wait for the owner too
 
 
@@ -853,7 +854,7 @@ def test_apply_both_servers_then_deselecting_jellyfin_removes_only_its_notificat
     fleet = agent.fleet
     for arr in (fleet.sonarr, fleet.radarr):
         assert sorted(n["name"] for n in arr.notifications.values()) == [
-            "Jellyfin (Orama)", "Plex (Orama)"]
+            "Jellyfin (Orama)", "Orama events (Orama)", "Plex (Orama)"]
         assert arr.field(arr.notification("Plex (Orama)"), "authToken") == token
     assert token not in first and store.get("apikey:jellyfin") not in first
     assert cli.main(["apply", "--setup", str(path)]) == 0
@@ -862,7 +863,9 @@ def test_apply_both_servers_then_deselecting_jellyfin_removes_only_its_notificat
     assert cli.main(["apply", "--setup", str(path)]) == 0
     capsys.readouterr()
     for arr in (fleet.sonarr, fleet.radarr):
-        assert [n["name"] for n in arr.notifications.values()] == ["Plex (Orama)"]
+        assert sorted(n["name"] for n in arr.notifications.values()) == [
+            "Orama events (Orama)", "Plex (Orama)"
+        ]
 
 
 def test_apply_plex_failure_is_a_failure_but_a_waiting_plex_is_not(capsys, roots, agent):

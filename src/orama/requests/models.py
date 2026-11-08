@@ -1,11 +1,16 @@
 """Data models and validation for media requests."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 RequestKind = Literal["movie", "episode", "season", "series"]
 VALID_KINDS: frozenset[str] = frozenset({"movie", "episode", "season", "series"})
+VALID_STAGES: frozenset[str] = frozenset(
+    {"requested", "searching", "downloading", "importing", "ready", "unavailable"}
+)
+
+_UNSET: Any = object()
 
 
 class ValidationError(ValueError):
@@ -70,15 +75,77 @@ class RequestRecord:
     next_check_at: float | None = None
     claim_owner: str | None = None
     claim_expires_at: float | None = None
+    remote_id: int | None = None
+    wait_mode: str | None = None
+    fallback_deadline: float | None = None
+    fallback_applied: bool = False
+    title: str | None = None
+    year: int | None = None
 
 
 @dataclass(frozen=True)
-class RequestUpdate:
-    """Changes applied atomically to an existing RequestRecord."""
+class EpisodeTarget:
+    """Shared child episode status for TV requests."""
 
-    stage: str | None = None
-    waiting_reason: str | None = None
-    progress: int | None = None
-    playback_note: str | None = None
-    subtitle_note: str | None = None
-    next_check_at: float | None = None
+    series_id: int
+    season: int
+    episode: int
+    title: str = ""
+    stage: str = "searching"
+    has_file: bool = False
+
+
+@dataclass(frozen=True, init=False)
+class RequestUpdate:
+    """Changes applied atomically to an existing RequestRecord.
+
+    Distinguishes omitted fields (left unchanged in SQLite) from fields
+    explicitly passed as ``None`` (cleared to NULL in SQLite).
+    """
+
+    stage: str | None
+    waiting_reason: str | None
+    progress: int | None
+    playback_note: str | None
+    subtitle_note: str | None
+    next_check_at: float | None
+    remote_id: int | None
+    wait_mode: str | None
+    fallback_deadline: float | None
+    fallback_applied: bool | None
+    provided_fields: frozenset[str] = field(repr=False, compare=False)
+
+    def __init__(
+        self,
+        *,
+        stage: str | None = _UNSET,
+        waiting_reason: str | None = _UNSET,
+        progress: int | None = _UNSET,
+        playback_note: str | None = _UNSET,
+        subtitle_note: str | None = _UNSET,
+        next_check_at: float | None = _UNSET,
+        remote_id: int | None = _UNSET,
+        wait_mode: str | None = _UNSET,
+        fallback_deadline: float | None = _UNSET,
+        fallback_applied: bool | None = _UNSET,
+    ) -> None:
+        provided: set[str] = set()
+        raw = {
+            "stage": stage,
+            "waiting_reason": waiting_reason,
+            "progress": progress,
+            "playback_note": playback_note,
+            "subtitle_note": subtitle_note,
+            "next_check_at": next_check_at,
+            "remote_id": remote_id,
+            "wait_mode": wait_mode,
+            "fallback_deadline": fallback_deadline,
+            "fallback_applied": fallback_applied,
+        }
+        for name, val in raw.items():
+            if val is _UNSET:
+                object.__setattr__(self, name, None)
+            else:
+                provided.add(name)
+                object.__setattr__(self, name, val)
+        object.__setattr__(self, "provided_fields", frozenset(provided))
