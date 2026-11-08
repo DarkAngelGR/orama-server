@@ -76,7 +76,7 @@ def serve(tmp_path, monkeypatch):
     servers = []
 
     def start(*, first_run: bool, installed: bool = False) -> Served:
-        state_dir = tmp_path / "orama"
+        state_dir = tmp_path / (f"orama-{len(servers)}" if servers else "orama")
         state_dir.mkdir(mode=0o700)
         # The installer leaves a draft; the first apply turns it into the real setup.
         write_setup(state_dir, "setup.json" if installed else "setup.draft.json", ports=PORTS)

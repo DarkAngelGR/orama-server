@@ -509,7 +509,7 @@ async function requests() {
     await page.getByLabel("Title").fill("UnknownTitle");
     await click(page, page.getByRole("button", { name: "Search" }), "empty search results");
     await expectPath(page, "/search");
-    if (!(await page.locator("main#content").innerText()).includes("No matching results found")) {
+    if (!(await page.locator("main#content").innerText()).includes("No matches found")) {
       fail("empty search did not explain that no matching results were found");
     }
 
