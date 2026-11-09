@@ -71,8 +71,6 @@ jobs:
     # Real Chromium drives the whole web app (tests/web/test_browser.py), with fakes for the
     # Agent, Prowlarr, SABnzbd, Plex and the apply child. A separate job on purpose: a browser
     # install hiccup must be visible without hiding the unit results.
-    # `publish` does NOT need this job yet. Make it a requirement once it has been green on
-    # three pushes in a row, so a flaky browser install cannot block the version tag.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -129,7 +127,7 @@ jobs:
 
   publish:
     # A red commit must never publish: <version> is the tag users install.
-    needs: [unit, images, integration]
+    needs: [unit, images, browser, integration]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

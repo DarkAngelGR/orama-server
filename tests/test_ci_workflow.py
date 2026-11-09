@@ -37,7 +37,7 @@ def test_images_job_pushes_only_the_sha_tag():
 
 def test_version_tag_published_only_after_integration_on_main():
     publish = JOBS["publish"]
-    assert set(publish["needs"]) == {"unit", "images", "integration"}
+    assert set(publish["needs"]) == {"unit", "images", "browser", "integration"}
     assert publish["if"] == MAIN_PUSH
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     script = "\n".join(s.get("run", "") for s in publish["steps"])
@@ -47,10 +47,10 @@ def test_version_tag_published_only_after_integration_on_main():
     assert set(JOBS["integration"]["needs"]) >= {"unit", "images"}
 
 
-def test_browser_job_is_separate_pinned_and_does_not_gate_publish():
+def test_browser_job_is_separate_pinned_and_gates_publish():
     browser = JOBS["browser"]
     assert "needs" not in browser  # unit results stay visible whatever the browser does
-    assert "browser" not in JOBS["publish"]["needs"]  # until it has been green three times
+    assert "browser" in JOBS["publish"]["needs"]
     script = "\n".join(s.get("run", "") for s in browser["steps"])
     assert "playwright@$PLAYWRIGHT_VERSION" in script and "install --with-deps chromium" in script
     assert browser["env"]["PLAYWRIGHT_VERSION"].count(".") == 2  # an exact version

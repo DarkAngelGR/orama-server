@@ -834,6 +834,44 @@ def test_jellyfin_interrupted_apply_recovers(clean_host: Host, rerun: dict, outp
     assert [line for line in output.splitlines() if line.startswith("✓")] == ["✓ Folders ready"]
 
 
+def test_debian_12_installer_and_agent_self_update_contract(
+    clean_host: Host, installed: dict, rerun: dict, outputs: Outputs
+):
+    """Verify install.sh under Debian 12 os-release and the Agent's self-update validation."""
+    before = container_ids()
+    debian_os = REPO_ROOT / "tests/fixtures/os-release/debian-12"
+    env = {
+        **os.environ,
+        "OS_RELEASE_FILE": str(debian_os),
+        "ORAMA_BUILD_LOCAL": "1",
+        "ORAMA_SRC": str(REPO_ROOT),
+        "ORAMA_DATA_ROOT": str(clean_host.data_root),
+        "ORAMA_CONFIG_ROOT": str(clean_host.config_root),
+        "ORAMA_PUID": str(clean_host.puid),
+        "ORAMA_PGID": str(clean_host.pgid),
+    }
+    out = run(["bash", str(REPO_ROOT / "install.sh")], env=env, timeout=INSTALL_TIMEOUT)
+    outputs.add(clean_host, "install-debian-12", out.stdout)
+    assert out.returncode == 0, f"Debian 12 install.sh failed (exit {out.returncode}):\n{out.stdout}"
+    assert " on debian." in out.stdout
+    assert orama_port(out.stdout) == installed["port"]
+    assert container_ids() == before
+    assert http_get(installed["port"], "/healthz") == (200, "ok")
+
+    # Verify the live Agent refuses any arguments to self-update over the real socket.
+    probe = (
+        "from orama.agent_client import AgentClient, AgentError\n"
+        "client = AgentClient()\n"
+        "try:\n"
+        "    client._call('self-update', {'image': 'evil:latest'})\n"
+        "except AgentError as e:\n"
+        "    assert 'no arguments' in e.message, e.message\n"
+        "    print('refused-ok')\n"
+    )
+    checked = run(["docker", "exec", "orama-server", "python", "-c", probe])
+    assert checked.returncode == 0 and checked.stdout.strip() == "refused-ok"
+
+
 def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Outputs):
     # Short entries are flags and markers (e.g. "1"), which any text contains; real secrets are longer.
     values = [v for v in stored_secrets(clean_host).values() if len(v) >= 8]
