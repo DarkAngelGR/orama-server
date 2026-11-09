@@ -139,9 +139,13 @@ def test_unknown_command_refused(agent):
     resp = agent.call("rm -rf", {})
     assert resp == {"id": "t1", "ok": False, "error": "unknown command"}
 
-def test_self_update_not_implemented(agent):
+def test_self_update_requires_core_compose(agent):
     resp = agent.call("self-update", {})
-    assert resp == {"id": "t1", "ok": False, "error": "not implemented in Plan 1"}
+    assert resp == {
+        "id": "t1",
+        "ok": False,
+        "error": "Orama's core compose file is missing; run the installer first.",
+    }
 
 @pytest.mark.parametrize(
     "line",
@@ -1082,4 +1086,60 @@ def test_data_space_returns_bytes_and_refuses_arguments_or_bad_root(agent, roots
     shutil.rmtree(roots.data)
     with pytest.raises(AgentError):
         agent.client.data_space()
+
+
+def test_self_update_runs_and_refuses_args_or_links(agent, roots, tmp_path):
+    core_file = roots.config / "core.compose.yaml"
+    core_file.write_text("name: orama-core\nservices: {}\n")
+    assert agent.client.self_update() is True
+    assert agent.runner.self_update_calls == 1
+    env_file = Path(app_env_dir(PurePosixPath(roots.config))) / "compose.env"
+    assert env_file.exists() and stat.S_IMODE(os.lstat(env_file).st_mode) == 0o600
+
+    # Any arguments are refused
+    for bad in ({"image": "evil:latest"}, {"flags": "--privileged"}, {"x": 1}):
+        resp = agent.call("self-update", bad)
+        assert resp["ok"] is False and "no arguments" in resp["error"]
+    assert agent.runner.self_update_calls == 1
+
+    # Symlink at core.compose.yaml is refused without running self_update
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("name: evil\n")
+    core_file.unlink()
+    core_file.symlink_to(outside)
+    with pytest.raises(AgentError, match="link"):
+        agent.client.self_update()
+    assert agent.runner.self_update_calls == 1
+
+    # Runner failure surfaces plain message
+    core_file.unlink()
+    core_file.write_text("name: orama-core\nservices: {}\n")
+    agent.runner.fail_next_self_update = True
+    with pytest.raises(AgentError, match="Updating Orama failed"):
+        agent.client.self_update()
+
+
+def test_compose_runner_self_update_argv_and_pull_failure(roots):
+    core = str(roots.config / "core.compose.yaml")
+    expected_prefix = [
+        "docker", "compose",
+        "--project-directory", str(roots.config),
+        "--env-file", str(roots.config / "app-env" / "compose.env"),
+        "-p", "orama-core",
+        "-f", core,
+    ]
+    run = FakeRun(["", ""])
+    ComposeRunner(roots, run=run).self_update()
+    assert len(run.calls) == 2
+    assert run.calls[0][0] == expected_prefix + ["pull", "--quiet"]
+    assert run.calls[0][1]["timeout"] == PULL_TIMEOUT
+    assert run.calls[1][0] == expected_prefix + ["up", "-d", "--remove-orphans", "--wait"]
+    assert run.calls[1][1]["timeout"] == UP_TIMEOUT
+
+    # When pull fails, up -d must not run so running containers stay untouched
+    fail_pull = FakeRun([None, ""])
+    with pytest.raises(RunnerError, match="Updating Orama failed"):
+        ComposeRunner(roots, run=fail_pull).self_update()
+    assert len(fail_pull.calls) == 1
+
 

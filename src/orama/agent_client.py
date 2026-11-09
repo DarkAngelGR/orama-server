@@ -64,6 +64,10 @@ class AgentClient:
         """Return ``{"total_bytes": int, "free_bytes": int}`` for the configured data root."""
         return self._call("data-space", {})
 
+    def self_update(self) -> bool:
+        """Pull Orama's core images and recreate the core containers if updated."""
+        return bool(self._call("self-update", {})["updated"])
+
     def _call(self, cmd: str, args: dict[str, Any]) -> Any:
         rid = uuid.uuid4().hex
         request = json.dumps({"id": rid, "cmd": cmd, "args": args}).encode() + b"\n"

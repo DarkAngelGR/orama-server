@@ -145,6 +145,18 @@
     </form>
   </section>
 
+  <section class="settings-section" id="update-orama" aria-labelledby="update-orama-title">
+    <h2 id="update-orama-title">Update Orama</h2>
+    <p>Check for a newer Orama release and restart Orama if one is downloaded. Your apps and media keep running.</p>
+    <form method="post" action="/settings/update-orama" style="margin-top: 1rem;">
+      <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
+      <% if (typeof token !== 'undefined' && token) { %>
+        <input type="hidden" name="token" value="<%= token %>">
+      <% } %>
+      <button type="submit" class="button button-secondary">Update Orama</button>
+    </form>
+  </section>
+
   <section class="settings-section" id="change-setup" aria-labelledby="change-setup-title">
     <h2 id="change-setup-title">Change setup</h2>
     <p>Go through the whole setup wizard again to modify your stack configuration.</p>

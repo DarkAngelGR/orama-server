@@ -729,6 +729,8 @@ app.get('/settings', requireAuth, (req: Request, res: Response) => {
     message = 'Your password is changed. Other sessions were signed out.';
   } else if (req.query.saved === 'policy') {
     message = 'Request & Quality fallback policy updated successfully.';
+  } else if (req.query.saved === 'updated') {
+    message = 'Orama is up to date.';
   } else if (req.query.applied === '1') {
     message = 'Settings applied successfully.';
   }
@@ -902,6 +904,11 @@ app.post('/settings/usenet/:slug/remove', requireAuth, (req: Request, res: Respo
   const slug = String(req.params.slug);
   setupState.usenet_servers = setupState.usenet_servers.filter((srv) => srv.slug !== slug);
   res.redirect(appendToken('/settings/indexers', res.locals.token));
+});
+
+// Update Orama trigger (Agent self-update)
+app.post('/settings/update-orama', requireAuth, (_req: Request, res: Response) => {
+  res.redirect(appendToken('/settings?saved=updated', res.locals.token));
 });
 
 // Change setup trigger

@@ -102,9 +102,10 @@ def test_settings_needs_sign_in(client, password):
 def test_page_lists_every_section(signed, app):
     html = page(signed.get("/settings"))
     for text in ("Media servers", "Folders", "Downloads and VPN", "Playback", "Subtitles",
-                 "Indexers", "Addresses", "Orama password", "Change setup"):
+                 "Indexers", "Addresses", "Update Orama", "Orama password", "Change setup"):
         assert text in html
     assert 'action="/settings/media"' in html and 'action="/settings/change-setup"' in html
+    assert 'action="/settings/update-orama"' in html
 
 
 def test_embedded_sections_leak_no_page_title(signed):
@@ -1332,4 +1333,63 @@ def test_requests_policy_saves_and_validates(signed, app, runner):
     assert bad.status_code == 400
     assert "between 1 and 720" in page(bad)
     assert live(app).request_wait_hours == 48
+
+
+def test_update_orama_calls_agent_and_guards_busy_or_draft(signed, app, tmp_path):
+    from orama.agent_client import AgentError
+
+    calls = []
+
+    class StubAgent:
+        def __init__(self):
+            self.fail = False
+
+        def self_update(self):
+            calls.append(1)
+            if self.fail:
+                raise AgentError(
+                    "Updating Orama failed. To see why, run: sudo docker logs orama-server-agent"
+                )
+            return True
+
+    stub = StubAgent()
+    app.extensions["orama"].agent = stub
+
+    # 1. Successful update redirects and displays confirmation notice
+    response = post(signed, "/settings/update-orama")
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/settings?saved=updated"
+    assert len(calls) == 1
+    assert "Orama is up to date." in page(signed.get("/settings?saved=updated"))
+
+    # 2. AgentError returns 502 with plain message
+    stub.fail = True
+    failed = post(signed, "/settings/update-orama")
+    assert failed.status_code == 502
+    assert "Updating Orama failed." in page(failed)
+    stub.fail = False
+
+    # 3. Unfinished draft blocks update-orama
+    write_setup(sd(app), "setup.draft.json", device="apple_tv")
+    draft_resp = post(signed, "/settings/update-orama")
+    assert draft_resp.status_code == 409
+    assert "Nothing was saved." in page(draft_resp)
+    assert len(calls) == 2
+    (sd(app) / "setup.draft.json").unlink()
+
+    # 4. Running apply job blocks update-orama with 409 Busy
+    gate = tmp_path / "gate"
+    code = f"import time,pathlib\nwhile not pathlib.Path({str(gate)!r}).exists(): time.sleep(0.02)\n"
+    job = JobRunner(sd(app), lambda p: [sys.executable, "-c", code])
+    app.extensions["orama"].jobs = job
+    job.start(sd(app) / "setup.json")
+    try:
+        busy_resp = post(signed, "/settings/update-orama")
+    finally:
+        gate.write_text("x")
+        job.wait(10)
+    assert busy_resp.status_code == 409
+    assert "Orama is busy applying the setup." in page(busy_resp)
+    assert len(calls) == 2
+
 

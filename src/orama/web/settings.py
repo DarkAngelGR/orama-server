@@ -22,6 +22,7 @@ from flask import (
 from pydantic import ValidationError
 
 from orama import state
+from orama.agent_client import AgentError
 from orama.secrets import SecretStore
 from orama.setup_model import MAX_EXTRA_HOST_NAMES, DesiredSetup
 from orama.web import auth, catalogue, draft, forms, security
@@ -244,6 +245,8 @@ def _pages() -> Blueprint:
             message = "Saved. New requests and storage checks use these settings."
         elif not message and saved == "password":
             message = "Your password is changed. Other sessions were signed out."
+        elif not message and saved == "updated":
+            message = "Orama is up to date."
         req_override = overrides.get("requests", {})
         request_values = (
             req_override.get("values")
@@ -476,6 +479,33 @@ def _pages() -> Blueprint:
                         st.store.update(stale)
                     live.save(st.state_dir / DRAFT_FILE)
         return redirect("/setup/media", 303)
+
+    @pages.post("/settings/update-orama")
+    @auth.requires("settings")
+    def update_orama():
+        st = auth.web_state()
+        path = st.state_dir / SETUP_FILE
+        if not path.exists():
+            return render_template(
+                "rejected.html",
+                message="Orama has no setup to change yet. Finish the setup first.",
+            ), 409
+        if (st.state_dir / DRAFT_FILE).exists():
+            return draft_page()
+        try:
+            with apply_operation(st):
+                job = st.jobs.current()
+                if job and job.status == "running":
+                    raise state.Busy
+                with state.locked(state.apply_lock(st.state_dir), blocking=False):
+                    if (st.state_dir / DRAFT_FILE).exists():
+                        return draft_page()
+                    st.agent.self_update()
+        except state.Busy:
+            return render_page(409, message=TEST_BUSY, problem=True)
+        except AgentError as e:
+            return render_page(502, message=e.message, problem=True)
+        return redirect("/settings?saved=updated", 303)
 
     @pages.post("/settings/discard-draft")
     @auth.requires("settings")

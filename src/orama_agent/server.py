@@ -33,7 +33,13 @@ from orama.catalog import CATALOG
 from orama.compose import dump_yaml
 from orama.layout import app_config_dir, app_env_dir, data_folders
 from orama_agent import recyclarr, seed
-from orama_agent.runner import AGENT_ENV_FILE, COMPOSE_FILE, RunnerError, project_file
+from orama_agent.runner import (
+    AGENT_ENV_FILE,
+    COMPOSE_FILE,
+    CORE_COMPOSE_FILE,
+    RunnerError,
+    project_file,
+)
 from orama_agent.validate import (
     Refused,
     Roots,
@@ -58,7 +64,7 @@ ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
 COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
-                      "recyclarr-sync", "data-space"})
+                      "recyclarr-sync", "data-space", "self-update"})
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -247,6 +253,7 @@ class Agent:
             "seed-config": self.seed_config,
             "recyclarr-sync": self.recyclarr_sync,
             "data-space": self.data_space,
+            "self-update": self.self_update,
         }[cmd]
         with self._lock:
             return handler(args)
@@ -444,6 +451,25 @@ class Agent:
             raise Refused(f"{_show(app)} is not an app Orama knows about.")
         self._ensure_agent_env_file()
         self.runner.restart(app)
+
+    def self_update(self, args: dict[str, Any]) -> dict[str, bool]:
+        """Pull Orama's core images and update the core project from core.compose.yaml."""
+        _expect_keys(args, set())
+        config_fd = os.open(self.roots.config, _DIR_FLAGS)
+        try:
+            shown = self.roots.config / CORE_COMPOSE_FILE
+            if _read_regular(config_fd, CORE_COMPOSE_FILE, shown) is None:
+                raise Refused("Orama's core compose file is missing; run the installer first.")
+            env_fd = self._open_env_dir(config_fd)
+            try:
+                if not _exists(env_fd, AGENT_ENV_FILE):
+                    _write_atomic(env_fd, AGENT_ENV_FILE, b"", 0o600)
+            finally:
+                os.close(env_fd)
+        finally:
+            os.close(config_fd)
+        self.runner.self_update()
+        return {"updated": True}
 
     # ------------------------------------------------------------ seed-config
 
@@ -745,9 +771,6 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             log.warning("refused a malformed request: %s", e)
             return {"id": None, "ok": False, "error": str(e)}
         shown_id = _show(rid)
-        if cmd == "self-update":
-            log.info("%s id=%s: not implemented", cmd, shown_id)
-            return {"id": rid, "ok": False, "error": "not implemented in Plan 1"}
         if cmd not in COMMANDS:
             log.warning("unknown command %s id=%s", _show(cmd), shown_id)
             return {"id": rid, "ok": False, "error": "unknown command"}

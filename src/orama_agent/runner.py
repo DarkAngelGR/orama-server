@@ -28,6 +28,8 @@ from orama_agent.recyclarr import CONTAINER_CONFIG
 from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots
 
 COMPOSE_FILE = "compose.yaml"
+CORE_PROJECT_NAME = "orama-core"
+CORE_COMPOSE_FILE = "core.compose.yaml"
 AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
 # Worst case for one apply: ps (60) + pull (3600) + up (720) + ps (60) = 4440 s, which
 # leaves a 60 s margin under the client's default of 4500 s
@@ -47,6 +49,7 @@ _WHAT = {
     "stop": "Stopping the app",
     "start": "Starting the app",
     "recyclarr": "Updating the quality profiles",
+    "self-update": "Updating Orama",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -71,6 +74,10 @@ def _tail(text: str | bytes | None) -> str:
 
 def project_file(roots: Roots) -> Path:
     return roots.config / COMPOSE_FILE
+
+
+def core_project_file(roots: Roots) -> Path:
+    return roots.config / CORE_COMPOSE_FILE
 
 
 def agent_env_file(roots: Roots) -> Path:
@@ -109,12 +116,12 @@ class ComposeRunner:
         self._roots = roots
         self._run = run
 
-    def _prefix(self, file: str) -> list[str]:
+    def _prefix(self, file: str, project: str = PROJECT_NAME) -> list[str]:
         return [
             "docker", "compose",
             "--project-directory", str(self._roots.config),
             "--env-file", str(agent_env_file(self._roots)),
-            "-p", PROJECT_NAME,
+            "-p", project,
             "-f", file,
         ]
 
@@ -181,6 +188,14 @@ class ComposeRunner:
 
     def _one_app(self, action: str, app: str) -> None:
         self._compose(str(project_file(self._roots)), [action, _checked_app(app)], UP_TIMEOUT)
+
+    def self_update(self) -> None:
+        """Pull the core images and recreate the core project from core.compose.yaml."""
+        file = str(core_project_file(self._roots))
+        prefix = self._prefix(file, CORE_PROJECT_NAME)
+        what = _WHAT["self-update"]
+        self._exec(prefix + ["pull", "--quiet"], what, PULL_TIMEOUT)
+        self._exec(prefix + ["up", "-d", "--remove-orphans", "--wait"], what, UP_TIMEOUT)
 
     def recyclarr_sync(self) -> None:
         """Run Recyclarr once on the config the Agent wrote, as PUID:PGID on orama-net."""
@@ -254,6 +269,8 @@ class FakeRunner:
         self.recyclarr_calls = 0
         self.on_recyclarr: Callable[[], None] | None = None
         self.fail_next_recyclarr = False
+        self.self_update_calls = 0
+        self.fail_next_self_update = False
 
     def up(self, project_file: str) -> list[str]:
         self.up_calls += 1
@@ -281,6 +298,12 @@ class FakeRunner:
     def start(self, app: str) -> None:
         self.starts.append(_checked_app(app))
         self._stopped.discard(app)
+
+    def self_update(self) -> None:
+        self.self_update_calls += 1
+        if self.fail_next_self_update:
+            self.fail_next_self_update = False
+            raise RunnerError(f"{_WHAT['self-update']} failed. {LOG_HINT}", "exit code 1")
 
     def recyclarr_sync(self) -> None:
         self.recyclarr_calls += 1

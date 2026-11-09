@@ -60,6 +60,12 @@ class FakeAgent:
     def status(self):
         return {name: "running" for name in PORTS}
 
+    def data_space(self):
+        return {"total_bytes": 1000 * 1024**3, "free_bytes": 500 * 1024**3}
+
+    def self_update(self):
+        return True
+
 
 class Served:
     def __init__(self, base: str, state_dir: Path, code: str, password: str) -> None:
