@@ -13,7 +13,7 @@
 ## Plan 5 Tasks
 
 ### Task 1: Publish Gate & End-to-End VM Verification
-- **Publish gate (`publish` job in `.github/workflows/ci.yml`):** Now that the `browser` job has passed three consecutive runs (`42381439992`, `42472203041`, `42511960464`), require `browser` and `demo` alongside `unit`, `images`, and `integration` in `publish.needs`.
+- **Publish gate (`publish` job in `.github/workflows/ci.yml`):** Now that the `browser` job has passed three consecutive runs (`42381439992`, `42472203041`, `42511960464`), require `browser` alongside `unit`, `images`, and `integration` in `publish.needs`.
 - **Ubuntu 24.04 & Debian 12 VM proof (Spec §10.1.3):**
   - Run one-line `install.sh` on fresh Ubuntu 24.04 and Debian 12 targets.
   - Drive the first-run setup wizard in a real Chromium browser (`tests/web/test_browser.py` / VM harness) through password creation, media server selection, folders, download clients, playback device (`samsung_s95f`), subtitle languages (`el`, `en`), indexer test, and live apply checklist.

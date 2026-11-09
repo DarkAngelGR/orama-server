@@ -13,17 +13,18 @@ Read `AGENTS.md` first.
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`fd5fa71`, `58287fb`, `f32d993`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
-| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | draft in `docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`; real VM CI & owner NAS checklist next |
+| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | Tasks 1–2 code complete (`needs review`, Gemini); Tasks 3–4 (owner DXP4800 Plus hardware checklist & Claude Security scans) next |
 
-## Current handoff (Gemini, 2026-11-08)
+## Current handoff (Gemini, 2026-11-09)
 
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
 project work. The Plan 2b, Plan 3, and Plan 4 scans remain pending; they are not development blockers.
-All 11 tasks in Plan 4 (Requests) plus the review fix wave (`fd5fa71`, `58287fb`, `f32d993`) are
-implemented and verified in CI run `42511960464` on `test` (2,014 non-integration Python tests,
-`npm test`, Ruff, ShellCheck, 4 real Chromium browser scenarios, Docker image builds, and all 41
-real-container integration tests including `tests/integration/test_requests.py`). Self-update
-remains a separate outstanding operations subplan before Release 1 completion; see the Plan 4 notes.
+All 11 tasks in Plan 4 (Requests) are implemented and verified in CI on `test`.
+In Plan 5 (`docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`), Task 1 (`publish.needs` now
+requires `browser` alongside `unit`, `images`, and `integration`, plus Debian 12 installer verification)
+and Task 2 (root-side `self-update` on the Agent and `POST /settings/update-orama` in Settings) are
+implemented and tested (`needs review`). Tasks 3 and 4 are the owner's physical UGREEN DXP4800 Plus
+hardware checklist and the Wednesday 2026-11-11 Claude Security review + GHCR promotion.
 
 ## Test branch CI repair (Codex, 2026-11-07)
 
@@ -57,8 +58,8 @@ real-container integration tests.
 
 | # | Task | State | Owner |
 |---|---|---|---|
-| 1 | Publish gate & end-to-end VM verification | open | — |
-| 2 | Root-side self-update operations subplan | open | — |
+| 1 | Publish gate & end-to-end VM verification | needs review | Gemini |
+| 2 | Root-side self-update operations subplan | needs review | Gemini |
 | 3 | Owner hardware checklist (DXP4800 Plus / UGOS Pro) | open | Owner |
 | 4 | Security review, GHCR packaging & Release 1 sign-off | open | Owner + Claude |
 
