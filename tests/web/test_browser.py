@@ -198,3 +198,8 @@ def test_requests_browser_flow(serve):
     run_browser("requests", serve(first_run=False, installed=True))
     run_browser("requests", serve(first_run=False, installed=True), width=360, scheme="dark")
 
+
+def test_settings_password_strength_browser(serve):
+    run_browser("password-strength", serve(first_run=False, installed=True))
+
+

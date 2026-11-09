@@ -1,18 +1,29 @@
 {# Public interfaces for later wizard, Settings and Apps pages. Text stays escaped. #}
-{% macro field(name, label, value='', error='', help='', type='text', autocomplete='') -%}
+{% macro field(name, label, value='', error='', help='', type='text', autocomplete='', strength_meter=false) -%}
 <div class="field">
   <label for="{{ name }}">{{ label }}</label>
   {% if help %}<p class="field-help" id="{{ name }}-help">{{ help }}</p>{% endif %}
   <input id="{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ (value|default('', true)) if type != 'password' else '' }}"
     {% if autocomplete %}autocomplete="{{ autocomplete }}"{% elif type == 'password' %}autocomplete="new-password"{% endif %}
     {% if error %}aria-invalid="true"{% endif %}
-    {% if help or error %}aria-describedby="{% if help %}{{ name }}-help{% endif %}{% if help and error %} {% endif %}{% if error %}{{ name }}-error{% endif %}"{% endif %}>
+    {% if help or error or strength_meter %}aria-describedby="{% if help %}{{ name }}-help{% endif %}{% if help and (strength_meter or error) %} {% endif %}{% if strength_meter %}password-strength-label{% endif %}{% if strength_meter and error %} {% endif %}{% if error %}{{ name }}-error{% endif %}"{% endif %}>
+  {% if strength_meter %}
+  <div class="password-strength" id="password-strength-meter" aria-live="polite" hidden>
+    <div class="strength-meter" aria-hidden="true">
+      <span class="strength-segment"></span>
+      <span class="strength-segment"></span>
+      <span class="strength-segment"></span>
+      <span class="strength-segment"></span>
+    </div>
+    <p class="strength-label" id="password-strength-label"></p>
+  </div>
+  {% endif %}
   {% if error %}<p class="field-error" id="{{ name }}-error">{{ error|default('', true) }}</p>{% endif %}
 </div>
 {%- endmacro %}
 
-{% macro secret_field(name, label, saved=false, error='', help='') -%}
-{{ field(name, label, '', error, (help ~ ' ' if help else '') ~ ('Saved — leave empty to keep.' if saved else ''), 'password', 'new-password') }}
+{% macro secret_field(name, label, saved=false, error='', help='', strength_meter=false) -%}
+{{ field(name, label, '', error, (help ~ ' ' if help else '') ~ ('Saved — leave empty to keep.' if saved else ''), 'password', 'new-password', strength_meter) }}
 {%- endmacro %}
 
 {# options: sequence of (value, label) pairs. selected: one value. #}

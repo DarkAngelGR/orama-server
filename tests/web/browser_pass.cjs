@@ -547,10 +547,84 @@ async function requests() {
   }
 }
 
+async function passwordStrength() {
+  const { browser, page } = await launch();
+  try {
+    await page.goto(`${base}/signin`);
+    await page.getByLabel("Orama password").fill(password);
+    await Promise.all([page.waitForNavigation(), page.getByRole("button", { name: "Sign in" }).click()]);
+    await goto(page, "/settings", "settings password strength");
+
+    const input = page.locator("#new_password");
+    const meter = page.locator("#password-strength-meter");
+    const label = page.locator("#password-strength-label");
+
+    if (!(await meter.isHidden())) {
+      fail("password strength meter should be hidden when #new_password is empty");
+    }
+
+    await input.fill("short");
+    if (await meter.isHidden()) {
+      fail("password strength meter did not appear when typing in #new_password");
+    }
+    if ((await meter.getAttribute("data-score")) !== "1") {
+      fail(`expected data-score=1 for short password, got ${await meter.getAttribute("data-score")}`);
+    }
+    const weakText = await label.innerText();
+    if (!weakText.includes("Password guidance: Weak") || !weakText.includes("at least 12 characters")) {
+      fail(`unexpected weak guidance text: ${weakText}`);
+    }
+
+    await input.fill("abcdefGHIJKL");
+    if ((await meter.getAttribute("data-score")) !== "2") {
+      fail(`expected data-score=2 for fair password, got ${await meter.getAttribute("data-score")}`);
+    }
+    const fairText = await label.innerText();
+    if (!fairText.includes("Password guidance: Fair") || !fairText.includes("Heuristic guidance")) {
+      fail(`unexpected fair guidance text: ${fairText}`);
+    }
+
+    await input.fill("abcdEFGH1234");
+    if ((await meter.getAttribute("data-score")) !== "3") {
+      fail(`expected data-score=3 for good password, got ${await meter.getAttribute("data-score")}`);
+    }
+    const goodText = await label.innerText();
+    if (!goodText.includes("Password guidance: Good") || !goodText.includes("Heuristic guidance")) {
+      fail(`unexpected good guidance text: ${goodText}`);
+    }
+
+    await input.fill("Correct-Horse-Battery-2026!");
+    if ((await meter.getAttribute("data-score")) !== "4") {
+      fail(`expected data-score=4 for strong password, got ${await meter.getAttribute("data-score")}`);
+    }
+    const strongText = await label.innerText();
+    if (!strongText.includes("Password guidance: Strong") || !strongText.includes("Heuristic guidance only")) {
+      fail(`unexpected strong guidance text: ${strongText}`);
+    }
+    await audit(page, "settings password strength visible");
+
+    await input.fill("");
+    if (!(await meter.isHidden())) {
+      fail("password strength meter did not hide after clearing #new_password");
+    }
+    if ((await meter.getAttribute("data-score")) !== null) {
+      fail("data-score attribute was not cleared when #new_password became empty");
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
 // ------------------------------------------------------------------ main
 
 async function main() {
-  const scenarios = { wizard, keyboard, "apps-focus": appsFocus, requests };
+  const scenarios = {
+    wizard,
+    keyboard,
+    "apps-focus": appsFocus,
+    requests,
+    "password-strength": passwordStrength,
+  };
   if (!scenarios[scenario]) {
     console.error("unknown scenario " + scenario);
     process.exit(1);
@@ -569,4 +643,5 @@ async function main() {
 }
 
 main();
+
 

@@ -384,6 +384,31 @@ def test_password_change_ends_other_sessions(signed, app, password):
     assert new not in page(signed.get("/settings"))
 
 
+def test_password_section_renders_new_password_strength_meter(signed, password):
+    from .test_static import Elements
+
+    html = page(signed.get("/settings"))
+    dom = Elements(html)
+    new_pw = next(i for i in dom.named("input") if i.get("id") == "new_password")
+    assert new_pw["name"] == "new_password"
+    assert new_pw["type"] == "password"
+    assert new_pw["aria-describedby"].split() == ["new_password-help", "password-strength-label"]
+    meter = next(d for d in dom.named("div") if d.get("id") == "password-strength-meter")
+    assert meter.get("aria-live") == "polite"
+    assert "hidden" in meter
+    assert any(p.get("id") == "password-strength-label" for p in dom.named("p"))
+
+    short = post(signed, "/settings/password", current_password=password,
+                 new_password="short", repeat_password="short")
+    short_dom = Elements(page(short))
+    short_pw = next(i for i in short_dom.named("input") if i.get("id") == "new_password")
+    assert short_pw["aria-describedby"].split() == [
+        "new_password-help",
+        "password-strength-label",
+        "new_password-error",
+    ]
+
+
 # ------------------------------------------------------------------ Change setup and drafts
 
 

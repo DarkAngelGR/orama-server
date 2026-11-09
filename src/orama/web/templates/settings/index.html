@@ -109,7 +109,7 @@
     <form method="post" action="/settings/password" class="wizard-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {{ secret_field('current_password', 'Current password', false, password_errors.current_password) }}
-      {{ secret_field('new_password', 'New password', false, password_errors.new_password, 'At least 12 characters.') }}
+      {{ secret_field('new_password', 'New password', false, password_errors.new_password, 'At least 12 characters.', strength_meter=true) }}
       {{ secret_field('repeat_password', 'New password again', false, password_errors.repeat_password) }}
       <p class="field-help">Changing it signs you out of Orama on other devices.</p>
       <div class="wizard-actions">{{ button('Change password') }}</div>
