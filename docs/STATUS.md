@@ -12,18 +12,18 @@ Read `AGENTS.md` first.
 | 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `b41db6a`. Owner Claude Security scan pending. |
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
-| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini): Tasks 1–11 implemented and verified (`822e4cb`; 2,003 unit tests, Ruff, ShellCheck pass). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
-| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | not written |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`fd5fa71`, `58287fb`, `f32d993`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
+| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | draft in `docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`; real VM CI & owner NAS checklist next |
 
-## Current handoff (Gemini, 2026-11-07)
+## Current handoff (Gemini, 2026-11-08)
 
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
 project work. The Plan 2b, Plan 3, and Plan 4 scans remain pending; they are not development blockers.
-All 11 tasks in Plan 4 (Requests) are now implemented and marked `needs review` at `822e4cb`
-(2,003 non-integration tests, Ruff, and ShellCheck green; Task 1 real-container contracts green in
-CI run `42381439992`; Task 11 real-container pipeline tests in `tests/integration/test_requests.py`
-and browser scenario in `tests/web/test_browser.py`). Self-update remains a separate outstanding
-operations subplan before Release 1 completion; see the Plan 4 notes.
+All 11 tasks in Plan 4 (Requests) plus the review fix wave (`fd5fa71`, `58287fb`, `f32d993`) are
+implemented and verified in CI run `42511960464` on `test` (2,014 non-integration Python tests,
+`npm test`, Ruff, ShellCheck, 4 real Chromium browser scenarios, Docker image builds, and all 41
+real-container integration tests including `tests/integration/test_requests.py`). Self-update
+remains a separate outstanding operations subplan before Release 1 completion; see the Plan 4 notes.
 
 ## Test branch CI repair (Codex, 2026-11-07)
 
@@ -52,6 +52,15 @@ real-container integration tests.
 | 9 | Search, request detail and live Home | needs review | Gemini |
 | 10 | Reboot/drift reconciliation and disk warning | needs review | Gemini |
 | 11 | Real request pipeline and browser proof | needs review | Gemini |
+
+## Plan 5 — task board (details in `docs/tasks/plan-5/Tnn.md`)
+
+| # | Task | State | Owner |
+|---|---|---|---|
+| 1 | Publish gate & end-to-end VM verification | open | — |
+| 2 | Root-side self-update operations subplan | open | — |
+| 3 | Owner hardware checklist (DXP4800 Plus / UGOS Pro) | open | Owner |
+| 4 | Security review, GHCR packaging & Release 1 sign-off | open | Owner + Claude |
 
 ## Resume here (updated by ChatGPT/Codex, 2026-11-05)
 

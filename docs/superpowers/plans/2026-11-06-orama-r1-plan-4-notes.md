@@ -157,3 +157,32 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
      Wednesday 2026-11-11, plus the separate root-side `self-update` operations plan before
      Release 1 completion.
 
+### Review fix wave and CI proof (`fd5fa71`, `58287fb`, `f32d993`, 2026-11-08)
+
+- **Exact episode/season file readiness (`client.py`, `reconcile.py`)**: `MediaClient.snapshot`
+  fetches Sonarr `episode?seriesId=<id>` alongside `episodefile?seriesId=<id>`. `reconcile`
+  requires target episode/season/aired-series files (`hasFile` / matching `episodefile`) rather
+  than series-wide `episodeFileCount > 0`, and filters queue/history events by requested
+  coordinates so an unrelated episode never marks a request `ready`.
+- **Safe retry & missing episode metadata (`submit.py`, `client.py`, `fallback.py`)**:
+  `submit` persists `remote_id` immediately after `ensure_movie`/`ensure_series`, checks
+  `has_active_search_or_download` before starting a new search, marks already-downloaded targets
+  `ready` without searching, and sets `waiting_reason="Waiting for episode metadata"` when
+  `monitor_episodes` returns `[]` so `search_targets` never falls through to a season/series
+  search.
+- **Ongoing show re-checks (`reconcile.py`, `store.py`, `worker.py`, `web/requests.py`)**:
+  Whole-show (`series`) requests remain active in `list_active` and `claim_due` (`now + 300.0`)
+  after reaching `ready`, update `episode_targets` as new episodes air, transition back to
+  `downloading` when newly aired episodes lack files, and keep `live=True` on the detail page.
+- **Unsubmitted request retry (`web/requests.py`, `worker.py`)**: `POST /requests/<id>/retry`
+  and `retry_request` preserve `stage="requested"` when `remote_id is None`, and `worker.tick`
+  routes unsubmitted requests (`remote_id is None`) through `submit()` instead of stranding them.
+- **Coordinate-matched playback & subtitles (`client.py`, `subtitles.py`, `worker.py`)**:
+  `file_media_info` and `subtitle_languages` match exact `(season, episode)` or `season` without
+  falling back to `files[0]` or `rows[0]`; season and series requests evaluate per-episode
+  subtitle availability via `assess_episode_subtitles`.
+- **Traceback secrecy & CI (`tests/integration/test_requests.py`)**: Integration helpers keep
+  credentials inside `__tracebackhide__ = True` frames. CI runs `42472203041` (`58287fb`) and
+  `42511960464` (`f32d993`) passed `unit` (2,014 tests), `demo`, `browser`, `images`, and all
+  41 real-container `integration` tests.
+
