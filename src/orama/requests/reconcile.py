@@ -81,18 +81,21 @@ def _extract_tv_identifiers(
             return False, None, None, None, None
 
     if entry_ep_ids is not None:
-        for eid in entry_ep_ids:
+        if len(entry_ep_ids) == 1:
+            eid = next(iter(entry_ep_ids))
             if eid in ep_coords:
                 known_s, known_e = ep_coords[eid]
                 if season_num is not None and known_s is not None and season_num != known_s:
                     return False, None, None, None, None
-                if (
-                    episode_num is not None
-                    and len(entry_ep_ids) == 1
-                    and known_e is not None
-                    and episode_num != known_e
-                ):
+                if episode_num is not None and known_e is not None and episode_num != known_e:
                     return False, None, None, None, None
+        else:
+            # Multi-episode download / cross-season pack / series batch:
+            # Sonarr's episodeIds array is authoritative for which episodes are included.
+            # Multi-season packs commonly list episodes spanning different seasons while
+            # specifying only a single top-level seasonNumber (e.g. season 1).
+            # We do not reject multi-episode arrays due to cross-season membership.
+            pass
 
     return True, ep_id, entry_ep_ids, season_num, episode_num
 
@@ -112,16 +115,21 @@ def _matches_tv_event(
     if not valid:
         return False
 
+    # Prefer authoritative episode IDs when available on both sides.
+    # For multi-season packs or multi-episode downloads, the episode IDs array
+    # authoritatively defines which episodes are included in the download, even if
+    # the event-level seasonNumber is ambiguous or only reflects one of the seasons.
+    if target_ep_ids:
+        if entry_ep_ids is not None:
+            return bool(entry_ep_ids & target_ep_ids)
+        if ep_id is not None:
+            return ep_id in target_ep_ids
+
     if record.spec.kind == "episode":
         if season_num is not None and season_num != record.spec.season:
             return False
         if episode_num is not None and episode_num != record.spec.episode:
             return False
-        if target_ep_ids:
-            if ep_id is not None:
-                return ep_id in target_ep_ids
-            if entry_ep_ids is not None:
-                return bool(entry_ep_ids & target_ep_ids)
         return (
             season_num is not None
             and episode_num is not None
@@ -132,21 +140,21 @@ def _matches_tv_event(
     if record.spec.kind == "season":
         if season_num is not None and season_num != record.spec.season:
             return False
-        if target_ep_ids:
-            if ep_id is not None:
-                return ep_id in target_ep_ids
-            if entry_ep_ids is not None:
-                return bool(entry_ep_ids & target_ep_ids)
         return season_num is not None and season_num == record.spec.season
 
-    if season_num is not None and season_num <= 0:
-        return False
-    if target_ep_ids:
-        if ep_id is not None:
-            return ep_id in target_ep_ids
-        if entry_ep_ids is not None:
-            return bool(entry_ep_ids & target_ep_ids)
-    return True
+    # Whole-series requests (record.spec.kind == "series"):
+    # Documented limitation:
+    # Sonarr series-wide events (such as whole series refresh or complete-series
+    # downloads) may completely lack episode identifiers. When authoritative episode
+    # IDs are available in the event, they are prioritized and checked against
+    # target_ep_ids above. When an event contains no episode identifiers at all,
+    # we accept it as matching the whole-series request (unless seasonNumber is
+    # an invalid non-positive value).
+    # Note: An incomplete episode-specific event lacking all episode metadata cannot
+    # be distinguished from a genuine series-wide event; authoritative episode IDs
+    # are preferred whenever provided.
+    return season_num is None or season_num > 0
+
 
 
 def reconcile(

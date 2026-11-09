@@ -466,12 +466,12 @@ def test_reconcile_season_packs_incomplete_arrays_and_conflicting_episode_identi
                 "episode": {"seasonNumber": 2, "episodeNumber": 2},
                 "status": "importPending",
             },
-            # episodeIds includes an episode from Season 2 (2001) while claiming seasonNumber=1
+            # Single episodeIds element (2001 = Season 2) conflicts with seasonNumber=1
             {
                 "id": 37,
                 "seriesId": 77,
                 "seasonNumber": 1,
-                "episodeIds": [1002, 2001],
+                "episodeIds": [2001],
                 "status": "importPending",
             },
         ],
@@ -506,4 +506,97 @@ def test_reconcile_season_packs_incomplete_arrays_and_conflicting_episode_identi
     s1_pack_update = reconcile(s1_rec, season_pack_snapshot, now, remote_id=77)
     assert s1_pack_update.stage == "downloading"
     assert s1_pack_update.progress == 75
+
+    # 3. Valid cross-season / multi-season pack (e.g. S01-S02 batch)
+    # Sonarr queue entries for multi-season packs may specify the first season in seasonNumber
+    # while episodeIds spans episodes from multiple seasons (e.g. 1002 in S1 and 2001 in S2).
+    # These must NOT be rejected, and must match requests for any included episode or season.
+    multi_season_snapshot = AppSnapshot(
+        complete=True,
+        items={77: {"id": 77, "tvdbId": 81189}},
+        queue=[
+            {
+                "id": 41,
+                "seriesId": 77,
+                "seasonNumber": 1,
+                "episodeIds": [1002, 2001],
+                "status": "downloading",
+                "size": 6000,
+                "sizeleft": 1500,
+            }
+        ],
+        history=[],
+        files=files,
+    )
+    s2_rec = RequestRecord(
+        id="req-s2",
+        spec=RequestSpec(kind="season", source_id=81189, season=2),
+        created_at=now - 50,
+        updated_at=now - 50,
+        revision=1,
+        stage="searching",
+        remote_id=77,
+    )
+    # ep2_rec (S01E02, id 1002) matches
+    ep2_multi_update = reconcile(ep2_rec, multi_season_snapshot, now, remote_id=77)
+    assert ep2_multi_update.stage == "downloading"
+    assert ep2_multi_update.progress == 75
+
+    # s1_rec (Season 1, includes 1002) matches
+    s1_multi_update = reconcile(s1_rec, multi_season_snapshot, now, remote_id=77)
+    assert s1_multi_update.stage == "downloading"
+    assert s1_multi_update.progress == 75
+
+    # s2_rec (Season 2, includes 2001) matches despite seasonNumber=1 on the pack
+    s2_multi_update = reconcile(s2_rec, multi_season_snapshot, now, remote_id=77)
+    assert s2_multi_update.stage == "downloading"
+    assert s2_multi_update.progress == 75
+
+    # ep1_rec (S01E01, id 1001) is NOT in this pack, so it does not match
+    ep1_rec = RequestRecord(
+        id="req-ep1",
+        spec=RequestSpec(kind="episode", source_id=81189, season=1, episode=1),
+        created_at=now - 50,
+        updated_at=now - 50,
+        revision=1,
+        stage="searching",
+        remote_id=77,
+    )
+    assert reconcile(ep1_rec, multi_season_snapshot, now, remote_id=77).stage == "searching"
+
+    # 4. Whole-series event attribution:
+    # A series request matches authoritative episode IDs when available,
+    # and matches genuine series-wide events that lack episode identifiers.
+    series_rec = RequestRecord(
+        id="req-series",
+        spec=RequestSpec(kind="series", source_id=81189),
+        created_at=now - 50,
+        updated_at=now - 50,
+        revision=1,
+        stage="searching",
+        remote_id=77,
+    )
+    # Multi-season pack matches series
+    assert reconcile(series_rec, multi_season_snapshot, now, remote_id=77).stage == "downloading"
+
+    # Series-wide event without episode IDs matches series
+    series_wide_snapshot = AppSnapshot(
+        complete=True,
+        items={77: {"id": 77, "tvdbId": 81189}},
+        queue=[
+            {
+                "id": 42,
+                "seriesId": 77,
+                "status": "downloading",
+                "size": 10000,
+                "sizeleft": 2000,
+            }
+        ],
+        history=[],
+        files=files,
+    )
+    series_wide_update = reconcile(series_rec, series_wide_snapshot, now, remote_id=77)
+    assert series_wide_update.stage == "downloading"
+    assert series_wide_update.progress == 80
+
 

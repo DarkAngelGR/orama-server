@@ -184,6 +184,15 @@
         <label for="new_password">New password</label>
         <p class="field-help">At least 12 characters.</p>
         <input id="new_password" name="new_password" type="password" autocomplete="new-password" required minlength="12">
+        <div class="password-strength" id="password-strength-meter" aria-live="polite" hidden>
+          <div class="strength-meter" role="meter" aria-label="Password strength" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0" aria-valuetext="No password entered">
+            <span class="strength-segment"></span>
+            <span class="strength-segment"></span>
+            <span class="strength-segment"></span>
+            <span class="strength-segment"></span>
+          </div>
+          <div class="strength-label" id="password-strength-label"></div>
+        </div>
       </div>
       <div class="field">
         <label for="repeat_password">New password again</label>
