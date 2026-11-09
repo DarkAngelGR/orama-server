@@ -20,11 +20,18 @@ Read `AGENTS.md` first.
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
 project work. The Plan 2b, Plan 3, and Plan 4 scans remain pending; they are not development blockers.
 All 11 tasks in Plan 4 (Requests) are implemented and verified in CI on `test`.
-In Plan 5 (`docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`), Task 1 (`publish.needs` now
-requires `browser` alongside `unit`, `images`, and `integration`, plus Debian 12 installer verification)
-and Task 2 (root-side `self-update` on the Agent and `POST /settings/update-orama` in Settings) are
-implemented and tested (`needs review`). Tasks 3 and 4 are the owner's physical UGREEN DXP4800 Plus
-hardware checklist and the Wednesday 2026-11-11 Claude Security review + GHCR promotion.
+In Plan 5 (`docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`):
+- Task 1: `publish.needs` requires `[unit, images, browser, integration]`. Debian 12 platform detection,
+  package repository configuration, and live Agent contracts are verified in CI; full bare-metal VM verification
+  is tracked alongside the physical NAS checklist (Spec §10.1.3). Image pull retries in `runner.py` are strictly
+  bounded by `PULL_TIMEOUT` (3600s) to guarantee the client's `DEFAULT_TIMEOUT` (4500s) is never exceeded.
+- Task 2: Root-side `self-update` executes via an independent helper container (`orama-updater`) mounting the
+  Docker socket and `<config_root>`, ensuring the Agent container recreation does not interrupt the update mid-command.
+  Settings `POST /settings/update-orama` is wired and tested (`needs review`).
+- Reverted unapproved experimental voice endpoints (`907d907`), preserving clean Release 1 scope without deprecated
+  APIs or unconstrained search/series downloads.
+Tasks 3 and 4 are the owner's physical UGREEN DXP4800 Plus hardware checklist and the Wednesday 2026-11-11
+Claude Security review + GHCR promotion.
 
 ## Test branch CI repair (Codex, 2026-11-07)
 

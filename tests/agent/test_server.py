@@ -1128,15 +1128,30 @@ def test_compose_runner_self_update_argv_and_pull_failure(roots):
         "-p", "orama-core",
         "-f", core,
     ]
-    run = FakeRun(["", ""])
+    expected_helper = [
+        "docker", "run", "-d", "--rm",
+        "--name", "orama-updater",
+        "-v", "/var/run/docker.sock:/var/run/docker.sock",
+        "-v", f"{roots.config}:{roots.config}",
+        "ghcr.io/darkangelgr/orama-agent:0.1.0",
+        "docker", "compose",
+        "--project-directory", str(roots.config),
+        "--env-file", str(roots.config / "app-env" / "compose.env"),
+        "-p", "orama-core",
+        "-f", core,
+        "up", "-d", "--remove-orphans", "--wait",
+    ]
+    run = FakeRun(["", "", ""])
     ComposeRunner(roots, run=run).self_update()
-    assert len(run.calls) == 2
+    assert len(run.calls) == 3
     assert run.calls[0][0] == expected_prefix + ["pull", "--quiet"]
-    assert run.calls[0][1]["timeout"] == PULL_TIMEOUT
-    assert run.calls[1][0] == expected_prefix + ["up", "-d", "--remove-orphans", "--wait"]
-    assert run.calls[1][1]["timeout"] == UP_TIMEOUT
+    assert run.calls[0][1]["timeout"] <= PULL_TIMEOUT
+    assert run.calls[1][0] == ["docker", "rm", "-f", "orama-updater"]
+    assert run.calls[1][1]["timeout"] == CALL_TIMEOUT
+    assert run.calls[2][0] == expected_helper
+    assert run.calls[2][1]["timeout"] == CALL_TIMEOUT
 
-    # When pull fails, up -d must not run so running containers stay untouched
+    # When pull fails, neither updater removal nor helper container run happens
     fail_pull = FakeRun([None, ""])
     with pytest.raises(RunnerError, match="Updating Orama failed"):
         ComposeRunner(roots, run=fail_pull).self_update()
@@ -1178,3 +1193,30 @@ def test_compose_runner_pull_falls_back_to_sequential_on_toomanyrequests(roots, 
     assert calls[5] == expected + ["up", "-d", "--remove-orphans", "--wait"]
 
 
+def test_compose_runner_pull_deadline_exceeded(roots, monkeypatch):
+    import orama_agent.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.time, "sleep", lambda _s: None)
+    compose = roots.config / "compose.yaml"
+    compose.write_text("name: orama-apps\nservices:\n  radarr: {}\n")
+
+    current_time = 0.0
+
+    def fake_monotonic():
+        return current_time
+
+    monkeypatch.setattr(runner_mod.time, "monotonic", fake_monotonic)
+
+    def fake_run(argv, **_kw):
+        nonlocal current_time
+        if "pull" in argv:
+            # Advance time beyond PULL_TIMEOUT
+            current_time += 4000.0
+            return subprocess.CompletedProcess(
+                argv, 1, stdout="", stderr="toomanyrequests: rate limit"
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+
+    runner = ComposeRunner(roots, run=fake_run)
+    with pytest.raises(RunnerError, match="Downloading the apps did not finish in time"):
+        runner.up(str(compose))

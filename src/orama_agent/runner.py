@@ -23,7 +23,7 @@ from typing import Any
 
 import yaml
 
-from orama.catalog import CATALOG
+from orama.catalog import CATALOG, CORE
 from orama.layout import app_config_dir, app_env_dir
 from orama_agent.recyclarr import CONTAINER_CONFIG
 from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots
@@ -40,6 +40,7 @@ UP_TIMEOUT = 720  # up, restart, stop and start
 CALL_TIMEOUT = 60  # ps
 RECYCLARR_TIMEOUT = 900  # one sync of Sonarr and Radarr, including its guide download
 RECYCLARR_CONTAINER = "orama-recyclarr"
+UPDATER_CONTAINER = "orama-updater"
 STDERR_TAIL_LINES = 40
 LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
 _WHAT = {
@@ -165,6 +166,7 @@ class ComposeRunner:
     def _pull(self, file: str, project: str = PROJECT_NAME, what: str = _WHAT["pull"]) -> None:
         """Pull all images for ``file``; fall back to sequential pulls on burst rate limits."""
         prefix = self._prefix(file, project)
+        deadline = time.monotonic() + PULL_TIMEOUT
         try:
             self._exec(prefix + ["pull", "--quiet"], what, PULL_TIMEOUT)
             return
@@ -181,14 +183,21 @@ class ComposeRunner:
             if not services:
                 raise
         for service in services:
-            for attempt in range(5):
+            for attempt in range(3):
+                remaining = int(deadline - time.monotonic())
+                if remaining <= 0:
+                    raise RunnerError(
+                        f"{what} did not finish in time. {LOG_HINT}",
+                        "Pull timeout exceeded",
+                    )
+                timeout = min(remaining, 600)
                 try:
-                    self._exec(prefix + ["pull", "--quiet", service], what, PULL_TIMEOUT)
+                    self._exec(prefix + ["pull", "--quiet", service], what, timeout)
                     break
                 except RunnerError as service_err:
-                    if attempt == 4 or not _is_transient_pull_error(service_err.detail):
+                    if attempt == 2 or not _is_transient_pull_error(service_err.detail):
                         raise
-                    time.sleep(0.5 * (attempt + 1))
+                    time.sleep(min(2.0, 0.5 * (attempt + 1)))
 
     def _containers(self, file: str) -> list[dict[str, Any]]:
         out = self._compose(file, ["ps", "-a", "--format", "json"], CALL_TIMEOUT)
@@ -231,13 +240,47 @@ class ComposeRunner:
     def _one_app(self, action: str, app: str) -> None:
         self._compose(str(project_file(self._roots)), [action, _checked_app(app)], UP_TIMEOUT)
 
+    def _core_agent_image(self, file: str) -> str:
+        """The pinned or configured agent image to use for the helper container."""
+        try:
+            doc = yaml.safe_load(Path(file).read_text())
+            img = doc.get("services", {}).get("orama-agent", {}).get("image")
+            if isinstance(img, str) and img.strip():
+                return img.strip()
+        except (OSError, yaml.YAMLError, AttributeError):
+            pass
+        return CORE["orama-agent"].image
+
+    def _remove_updater(self) -> None:
+        """``docker rm -f`` any previous helper container; none being there is fine."""
+        argv = ["docker", "rm", "-f", UPDATER_CONTAINER]
+        what = _WHAT["self-update"]
+        try:
+            self._exec(argv, what, CALL_TIMEOUT)
+        except RunnerError:
+            pass
+
     def self_update(self) -> None:
-        """Pull the core images and recreate the core project from core.compose.yaml."""
+        """Pull core images and recreate the core project via an independent helper container."""
         file = str(core_project_file(self._roots))
-        prefix = self._prefix(file, CORE_PROJECT_NAME)
         what = _WHAT["self-update"]
         self._pull(file, CORE_PROJECT_NAME, what)
-        self._exec(prefix + ["up", "-d", "--remove-orphans", "--wait"], what, UP_TIMEOUT)
+        self._remove_updater()
+        agent_image = self._core_agent_image(file)
+        argv = [
+            "docker", "run", "-d", "--rm",
+            "--name", UPDATER_CONTAINER,
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{self._roots.config}:{self._roots.config}",
+            agent_image,
+            "docker", "compose",
+            "--project-directory", str(self._roots.config),
+            "--env-file", str(agent_env_file(self._roots)),
+            "-p", CORE_PROJECT_NAME,
+            "-f", file,
+            "up", "-d", "--remove-orphans", "--wait",
+        ]
+        self._exec(argv, what, CALL_TIMEOUT)
 
     def recyclarr_sync(self) -> None:
         """Run Recyclarr once on the config the Agent wrote, as PUID:PGID on orama-net."""
