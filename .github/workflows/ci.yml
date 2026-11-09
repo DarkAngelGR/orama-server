@@ -9,18 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  demo:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm install --package-lock=false --no-audit --no-fund
-      - run: npm test
-
   unit:
     runs-on: ubuntu-24.04
     steps:

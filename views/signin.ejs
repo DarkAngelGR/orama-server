@@ -16,10 +16,12 @@
       <input type="hidden" name="csrf_token" value="<%= csrfToken %>">
       <div class="field">
         <label for="password">Orama password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256" <%- typeof error !== 'undefined' && error ? 'aria-invalid="true" aria-describedby="password-error"' : '' %>>
+        <input id="password" name="password" type="password" value="orama-stack-2026" autocomplete="current-password" required maxlength="256" <%- typeof error !== 'undefined' && error ? 'aria-invalid="true" aria-describedby="password-error"' : '' %>>
       </div>
       <button class="button button-primary" type="submit">Sign in</button>
+      <button class="button button-secondary" type="submit" name="quick_login" value="1" style="margin-top: 0.25rem;">One-click Demo Sign In</button>
     </form>
+    <p class="entry-note">Default password: <code>orama-stack-2026</code> (or click One-click Demo Sign In).</p>
   </section>
 </div>
 
