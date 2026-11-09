@@ -1143,3 +1143,38 @@ def test_compose_runner_self_update_argv_and_pull_failure(roots):
     assert len(fail_pull.calls) == 1
 
 
+def test_compose_runner_pull_falls_back_to_sequential_on_toomanyrequests(roots, monkeypatch):
+    import orama_agent.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.time, "sleep", lambda _s: None)
+    compose = roots.config / "compose.yaml"
+    compose.write_text("name: orama-apps\nservices:\n  radarr: {}\n  sonarr: {}\n")
+    calls = []
+    responses = [
+        (0, "[]", ""),  # ps before
+        (1, "", "Error response from daemon: toomanyrequests: retry-after: 912.725µs"),  # batch pull
+        (1, "", "Error response from daemon: toomanyrequests: retry-after: 224.113µs"),  # radarr try 1
+        (0, "", ""),  # radarr try 2
+        (0, "", ""),  # sonarr try 1
+        (0, "", ""),  # up -d --remove-orphans --wait
+        (0, json.dumps([
+            {"Service": "radarr", "ID": "r1", "State": "running"},
+            {"Service": "sonarr", "ID": "s1", "State": "running"},
+        ]), ""),  # ps after
+    ]
+
+    def fake_run(argv, **_kw):
+        calls.append(argv)
+        rc, out, err = responses.pop(0)
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
+
+    runner = ComposeRunner(roots, run=fake_run)
+    assert runner.up(str(compose)) == ["radarr", "sonarr"]
+    expected = _prefix(roots) + ["-f", str(compose)]
+    assert calls[1] == expected + ["pull", "--quiet"]
+    assert calls[2] == expected + ["pull", "--quiet", "radarr"]
+    assert calls[3] == expected + ["pull", "--quiet", "radarr"]
+    assert calls[4] == expected + ["pull", "--quiet", "sonarr"]
+    assert calls[5] == expected + ["up", "-d", "--remove-orphans", "--wait"]
+
+

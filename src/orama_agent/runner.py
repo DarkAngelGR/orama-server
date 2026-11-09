@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -52,6 +53,19 @@ _WHAT = {
     "self-update": "Updating Orama",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_TRANSIENT_PULL_MARKERS = (
+    "toomanyrequests",
+    "rate limit",
+    "429 too many requests",
+    "tls handshake timeout",
+    "connection reset by peer",
+    "temporary failure in name resolution",
+)
+
+
+def _is_transient_pull_error(detail: str) -> bool:
+    lowered = (detail or "").lower()
+    return any(marker in lowered for marker in _TRANSIENT_PULL_MARKERS)
 
 
 class RunnerError(Exception):
@@ -148,6 +162,34 @@ class ComposeRunner:
             )
         return proc.stdout
 
+    def _pull(self, file: str, project: str = PROJECT_NAME, what: str = _WHAT["pull"]) -> None:
+        """Pull all images for ``file``; fall back to sequential pulls on burst rate limits."""
+        prefix = self._prefix(file, project)
+        try:
+            self._exec(prefix + ["pull", "--quiet"], what, PULL_TIMEOUT)
+            return
+        except RunnerError as err:
+            if not _is_transient_pull_error(err.detail):
+                raise
+            try:
+                doc = yaml.safe_load(Path(file).read_text())
+                services = sorted(
+                    s for s in (doc.get("services") or {}) if isinstance(s, str)
+                )
+            except (OSError, yaml.YAMLError, AttributeError, TypeError):
+                raise err from None
+            if not services:
+                raise
+        for service in services:
+            for attempt in range(5):
+                try:
+                    self._exec(prefix + ["pull", "--quiet", service], what, PULL_TIMEOUT)
+                    break
+                except RunnerError as service_err:
+                    if attempt == 4 or not _is_transient_pull_error(service_err.detail):
+                        raise
+                    time.sleep(0.5 * (attempt + 1))
+
     def _containers(self, file: str) -> list[dict[str, Any]]:
         out = self._compose(file, ["ps", "-a", "--format", "json"], CALL_TIMEOUT)
         try:
@@ -161,7 +203,7 @@ class ComposeRunner:
     def up(self, project_file: str) -> list[str]:
         """Bring the project up; return services whose container is new or recreated."""
         before = {c.get("Service"): c.get("ID") for c in self._containers(project_file)}
-        self._compose(project_file, ["pull", "--quiet"], PULL_TIMEOUT)
+        self._pull(project_file)
         self._compose(
             project_file, ["up", "-d", "--remove-orphans", "--wait"], UP_TIMEOUT
         )
@@ -194,7 +236,7 @@ class ComposeRunner:
         file = str(core_project_file(self._roots))
         prefix = self._prefix(file, CORE_PROJECT_NAME)
         what = _WHAT["self-update"]
-        self._exec(prefix + ["pull", "--quiet"], what, PULL_TIMEOUT)
+        self._pull(file, CORE_PROJECT_NAME, what)
         self._exec(prefix + ["up", "-d", "--remove-orphans", "--wait"], what, UP_TIMEOUT)
 
     def recyclarr_sync(self) -> None:
