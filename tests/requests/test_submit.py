@@ -196,3 +196,34 @@ def test_submit_retry_skips_duplicate_search_when_command_or_queue_active(tmp_pa
     # No duplicate POST /api/v3/command was sent
     assert not any(c.path == "/api/v3/command" and c.method == "POST" for c in http.calls)
 
+
+def test_submit_refuses_when_orama_quality_profile_missing(tmp_path):
+    import pytest
+
+    from orama.requests.client import RequestError
+
+    store = RequestStore(tmp_path / "requests.db")
+    now = 1000.0
+    movie_rec, _ = store.create(RequestSpec(kind="movie", source_id=101), now)
+    series_rec, _ = store.create(RequestSpec(kind="episode", source_id=303, season=1, episode=1), now)
+
+    http = FakeHttp()
+    http.route("GET", "/api/v3/movie/lookup", lambda call: json_resp([{"tmdbId": 101, "title": "Test Movie"}]))
+    http.route("GET", "/api/v3/movie", lambda call: json_resp([]))
+    http.route("GET", "/api/v3/series/lookup", lambda call: json_resp([{"tvdbId": 303, "title": "Show A"}]))
+    http.route("GET", "/api/v3/series", lambda call: json_resp([]))
+    # Only default non-Orama quality profiles exist
+    http.route("GET", "/api/v3/qualityprofile", lambda call: json_resp([{"id": 1, "name": "Any"}, {"id": 2, "name": "HD-1080p"}]))
+    http.route("GET", "/api/v3/rootfolder", lambda call: json_resp([{"id": 1, "path": "/data/media/movies"}]))
+    http.route("POST", "/api/v3/movie", lambda call: json_resp({"id": 55, "title": "Test Movie"}))
+    http.route("POST", "/api/v3/series", lambda call: json_resp({"id": 77, "title": "Show A"}))
+
+    client = make_client(http)
+    with pytest.raises(RequestError, match="Orama quality profile is not configured"):
+        submit(movie_rec, client, store, now)
+    with pytest.raises(RequestError, match="Orama quality profile is not configured"):
+        submit(series_rec, client, store, now)
+
+    # Neither movie nor series was posted with an unintended fallback profile
+    assert not any(c.method == "POST" and c.path in ("/api/v3/movie", "/api/v3/series") for c in http.calls)
+

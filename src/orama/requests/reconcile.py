@@ -13,9 +13,7 @@ def _matches_tv_event(
     if record.spec.kind == "movie":
         return True
     ep_id = entry.get("episodeId")
-    if target_ep_ids and isinstance(ep_id, int):
-        return ep_id in target_ep_ids
-
+    raw_ep_ids = entry.get("episodeIds")
     ep_obj = entry.get("episode") if isinstance(entry.get("episode"), dict) else entry
     season_num = (
         entry.get("seasonNumber")
@@ -33,10 +31,33 @@ def _matches_tv_event(
             return False
         if episode_num is not None and episode_num != record.spec.episode:
             return False
-    elif record.spec.kind == "season":
+        if target_ep_ids and type(ep_id) is int:
+            return ep_id in target_ep_ids
+        if target_ep_ids and isinstance(raw_ep_ids, list):
+            entry_ep_ids = {eid for eid in raw_ep_ids if type(eid) is int}
+            if entry_ep_ids:
+                return bool(entry_ep_ids & target_ep_ids)
+        return (
+            season_num is not None
+            and episode_num is not None
+            and season_num == record.spec.season
+            and episode_num == record.spec.episode
+        )
+
+    if record.spec.kind == "season":
         if season_num is not None and season_num != record.spec.season:
             return False
-    return True
+        if target_ep_ids and type(ep_id) is int:
+            return ep_id in target_ep_ids
+        if target_ep_ids and isinstance(raw_ep_ids, list):
+            entry_ep_ids = {eid for eid in raw_ep_ids if type(eid) is int}
+            if entry_ep_ids:
+                return bool(entry_ep_ids & target_ep_ids)
+        return season_num is not None and season_num == record.spec.season
+
+    if target_ep_ids and type(ep_id) is int:
+        return ep_id in target_ep_ids
+    return not (season_num is not None and type(season_num) is int and season_num <= 0)
 
 
 def reconcile(

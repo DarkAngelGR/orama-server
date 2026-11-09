@@ -5,7 +5,7 @@ import copy
 from typing import Any
 
 from orama.profiles.compile import UNPLAYABLE_SCORE
-from orama.requests.client import MediaClient
+from orama.requests.client import MediaClient, RequestError
 from orama.requests.models import RequestRecord, RequestUpdate
 from orama.requests.store import RequestStore
 
@@ -66,13 +66,19 @@ def ensure_fallback_profile(app_name: str, client: MediaClient, setup: Any = Non
             elif p.get("name") == FALLBACK_PROFILE_NAME:
                 existing_fallback = p
 
-    if existing_fallback is not None and (strict_profile is None or "items" not in strict_profile):
-        return int(existing_fallback["id"])
+    if strict_profile is None or type(strict_profile.get("id")) is not int:
+        raise RequestError(
+            f"Orama quality profile is not configured in {app_name.capitalize()} yet."
+        )
 
-    template = copy.deepcopy(
-        strict_profile
-        or (profiles[0] if isinstance(profiles, list) and profiles else {})
-    )
+    if existing_fallback is not None and "items" not in strict_profile:
+        if type(existing_fallback.get("id")) is not int:
+            raise RequestError(
+                f"Invalid {FALLBACK_PROFILE_NAME} profile in {app_name.capitalize()}."
+            )
+        return existing_fallback["id"]
+
+    template = copy.deepcopy(strict_profile)
     strict_min = int(template.get("minFormatScore", 0))
     fallback_doc: dict[str, Any] = {
         **template,
@@ -81,7 +87,11 @@ def ensure_fallback_profile(app_name: str, client: MediaClient, setup: Any = Non
     }
 
     if existing_fallback is not None:
-        fb_id = int(existing_fallback["id"])
+        if type(existing_fallback.get("id")) is not int:
+            raise RequestError(
+                f"Invalid {FALLBACK_PROFILE_NAME} profile in {app_name.capitalize()}."
+            )
+        fb_id = existing_fallback["id"]
         fallback_doc["id"] = fb_id
         if (
             existing_fallback.get("items") != fallback_doc.get("items")
@@ -95,7 +105,11 @@ def ensure_fallback_profile(app_name: str, client: MediaClient, setup: Any = Non
 
     fallback_doc.pop("id", None)
     created = client._request(app_name, "qualityprofile", method="POST", json_body=fallback_doc)
-    return int(created.get("id", template.get("id", 1)))
+    if not isinstance(created, dict) or type(created.get("id")) is not int:
+        raise RequestError(
+            f"Could not create {FALLBACK_PROFILE_NAME} profile in {app_name.capitalize()}."
+        )
+    return created["id"]
 
 
 def _covered_by_record(ep: dict[str, Any], record: RequestRecord) -> bool:
@@ -151,15 +165,19 @@ def apply_fallback(
     if isinstance(profiles, list):
         for p in profiles:
             if isinstance(p, dict):
-                if p.get("name") == "Orama":
-                    strict_id = p.get("id")
-                elif p.get("name") == FALLBACK_PROFILE_NAME:
-                    existing_fb_id = p.get("id")
+                if p.get("name") == "Orama" and type(p.get("id")) is int:
+                    strict_id = p["id"]
+                elif p.get("name") == FALLBACK_PROFILE_NAME and type(p.get("id")) is int:
+                    existing_fb_id = p["id"]
+
+    if strict_id is None:
+        raise RequestError(
+            f"Orama quality profile is not configured in {app_name.capitalize()} yet."
+        )
 
     current_profile_id = target_item.get("qualityProfileId")
     if (
-        strict_id is not None
-        and current_profile_id is not None
+        current_profile_id is not None
         and current_profile_id != strict_id
         and (existing_fb_id is None or current_profile_id != existing_fb_id)
     ):

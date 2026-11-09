@@ -425,11 +425,15 @@ class MediaClient:
         profiles = self._request(app_name, "qualityprofile")
         if isinstance(profiles, list):
             for p in profiles:
-                if p.get("name") == "Orama":
+                if (
+                    isinstance(p, dict)
+                    and p.get("name") == "Orama"
+                    and type(p.get("id")) is int
+                ):
                     return p["id"]
-            if profiles:
-                return profiles[0]["id"]
-        return 1
+        raise RequestError(
+            f"Orama quality profile is not configured in {app_name.capitalize()} yet."
+        )
 
     def _get_root_folder_path(self, app_name: str) -> str:
         folders = self._request(app_name, "rootfolder")

@@ -183,3 +183,100 @@ def test_reconcile_unrelated_episode_file_does_not_mark_episode_or_season_ready(
     ep1_update = reconcile(ep1_rec, snapshot, now, remote_id=77)
     assert ep1_update.stage == "ready"
 
+
+def test_reconcile_ignores_incomplete_tv_event_metadata_for_targeted_requests():
+    now = 1000.0
+    ep2_rec = RequestRecord(
+        id="req-ep2",
+        spec=RequestSpec(kind="episode", source_id=81189, season=1, episode=2),
+        created_at=now - 50,
+        updated_at=now - 50,
+        revision=1,
+        stage="searching",
+        remote_id=77,
+    )
+    s2_rec = RequestRecord(
+        id="req-s2",
+        spec=RequestSpec(kind="season", source_id=81189, season=2),
+        created_at=now - 50,
+        updated_at=now - 50,
+        revision=1,
+        stage="searching",
+        remote_id=77,
+    )
+
+    # Queue and history entries from the same series (77) but missing episodeId,
+    # episodeNumber, or seasonNumber must NOT match targeted episode or season requests.
+    incomplete_snapshot = AppSnapshot(
+        complete=True,
+        items={77: {"id": 77, "tvdbId": 81189}},
+        queue=[
+            # Missing episodeId, seasonNumber, and episodeNumber
+            {"id": 10, "seriesId": 77, "status": "importPending"},
+            # Has seasonNumber=1, but missing episodeId and episodeNumber (cannot match ep 2)
+            {"id": 11, "seriesId": 77, "seasonNumber": 1, "status": "importPending"},
+            # Has episodeNumber=2, but missing episodeId and seasonNumber
+            {"id": 12, "seriesId": 77, "episodeNumber": 2, "status": "importPending"},
+            # Unrelated episodeId=1001 (S01E01)
+            {"id": 13, "seriesId": 77, "episodeId": 1001, "status": "importPending"},
+        ],
+        history=[
+            # Incomplete failure event without episode/season identifiers
+            {"id": 20, "seriesId": 77, "eventType": "downloadFailed"},
+            {"id": 21, "seriesId": 77, "seasonNumber": 1, "eventType": "downloadFailed"},
+        ],
+        files=[
+            {
+                "id": 1001,
+                "seriesId": 77,
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "monitored": True,
+                "hasFile": False,
+            },
+            {
+                "id": 1002,
+                "seriesId": 77,
+                "seasonNumber": 1,
+                "episodeNumber": 2,
+                "monitored": True,
+                "hasFile": False,
+            },
+        ],
+    )
+
+    ep2_update = reconcile(ep2_rec, incomplete_snapshot, now, remote_id=77)
+    assert ep2_update.stage == "searching"
+    assert ep2_update.waiting_reason is None
+
+    s2_update = reconcile(s2_rec, incomplete_snapshot, now, remote_id=77)
+    assert s2_update.stage == "searching"
+    assert s2_update.waiting_reason is None
+
+    # A positive match by episodeId (1002) or by full (seasonNumber=1, episodeNumber=2) succeeds
+    positive_ep_id_snapshot = AppSnapshot(
+        complete=True,
+        items={77: {"id": 77, "tvdbId": 81189}},
+        queue=[{"id": 14, "seriesId": 77, "episodeId": 1002, "status": "importPending"}],
+        history=[],
+        files=incomplete_snapshot.files,
+    )
+    assert reconcile(ep2_rec, positive_ep_id_snapshot, now, remote_id=77).stage == "importing"
+
+    positive_se_ep_snapshot = AppSnapshot(
+        complete=True,
+        items={77: {"id": 77, "tvdbId": 81189}},
+        queue=[
+            {
+                "id": 15,
+                "seriesId": 77,
+                "seasonNumber": 1,
+                "episodeNumber": 2,
+                "status": "importPending",
+            }
+        ],
+        history=[],
+        files=[],
+    )
+    assert reconcile(ep2_rec, positive_se_ep_snapshot, now, remote_id=77).stage == "importing"
+

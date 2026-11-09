@@ -391,3 +391,52 @@ def test_failed_fallback_assignment_retries_by_read_back(tmp_path):
     assert len(commands) == 1
     assert commands[0] == {"name": "MoviesSearch", "movieIds": [10]}
     assert update.fallback_applied is True
+
+
+def test_fallback_refuses_when_strict_orama_profile_missing(tmp_path):
+    store = RequestStore(tmp_path / "requests.sqlite3")
+    created_at = 100_000.0
+    setup = SimpleNamespace(
+        ports={"radarr": 7878}, request_wait_mode="timed", request_wait_hours=24
+    )
+    rec, _ = store.create(
+        RequestSpec(kind="movie", source_id=27205), created_at, setup=setup
+    )
+
+    http = FakeHttp()
+    unrelated_profile = {**_strict_profile(), "id": 1, "name": "Any"}
+    movie_obj = {"id": 10, "tmdbId": 27205, "qualityProfileId": 1, "hasFile": False}
+    put_calls: list = []
+    post_calls: list = []
+
+    http.route(
+        "GET",
+        "/api/v3/qualityprofile",
+        lambda call: Response(200, {}, json.dumps([unrelated_profile]).encode()),
+    )
+    http.route(
+        "GET",
+        "/api/v3/movie",
+        lambda call: Response(200, {}, json.dumps([movie_obj]).encode()),
+    )
+    http.route(
+        "POST",
+        "/api/v3/qualityprofile",
+        lambda call: (post_calls.append(call), Response(201, {}, json.dumps({"id": 2}).encode()))[1],
+    )
+    http.route(
+        "PUT",
+        "/api/v3/movie/10",
+        lambda call: (put_calls.append(call), Response(202, {}, json.dumps(movie_obj).encode()))[1],
+    )
+
+    client = MediaClient(setup=setup, store=_fake_store(), http=http)
+
+    with pytest.raises(RequestError, match="Orama quality profile is not configured"):
+        ensure_fallback_profile("radarr", client)
+    assert post_calls == []
+
+    with pytest.raises(RequestError, match="Orama quality profile is not configured"):
+        apply_fallback(rec, client, store, setup, now=created_at + 25 * 3600)
+    assert post_calls == []
+    assert put_calls == []
