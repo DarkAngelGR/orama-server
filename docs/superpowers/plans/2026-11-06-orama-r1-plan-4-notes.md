@@ -198,3 +198,23 @@ or the "Express package", they describe that removed scaffold. Two things stay a
 Playwright into its own folder with `npm install --prefix` (no root `package.json` is needed;
 checked locally and in CI). `tests/test_repo_hygiene.py::test_node_demo_server_stays_removed`
 fails if the demo files come back.
+
+### Review fixes to requests (Claude, 2026-11-11)
+
+- **Plain words on the page.** When Sonarr or Radarr answers with an error, the page used to say
+  "Sonarr returned HTTP 500" (or "returned malformed JSON"). It now says "Sonarr did not answer
+  as expected. Try again in a minute." The status is written to Orama's log only
+  (`orama.requests`: app, method, fixed API path, status), never the search words, the key or
+  the app's own error text.
+- **Only the exact title.** Posters, the detail page and adding a title all looked a title up by
+  sending its numeric id as a search word and, when no result had that id, took the **first**
+  result. A number is also a word ("300", "24", "1917"), so this could show another title's
+  poster and description and, worse, add a different film or show than the one requested. Now
+  the app is asked by id (`tmdb:<id>` for films, `tvdb:<id>` for shows; contract already checked
+  in `tests/integration/request_contracts.py`) and only an item whose own TMDB id (films) or
+  TVDB id (shows) is exactly that number is used. The app's row number (`id`) and the other
+  catalogue's id never count. No exact match means: placeholder poster, a "Media #<id>" detail
+  page, and "Could not locate ... metadata" instead of adding anything.
+  New helper: `MediaClient.find(kind, source_id)`. Files: `src/orama/requests/client.py`,
+  `src/orama/web/posters.py`; tests in `tests/requests/test_client.py`,
+  `tests/requests/test_submit.py`, `tests/web/test_posters.py`.

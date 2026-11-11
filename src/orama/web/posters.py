@@ -3,6 +3,9 @@
 Never proxies a browser-supplied URL. Looks up the media item via MediaClient, verifies the
 poster URL against pinned HTTPS image origins, enforces strict MIME and size bounds, refuses
 redirects, and falls back to a local SVG placeholder.
+
+The item is looked up by its exact catalogue id (TMDB for movies, TVDB for series). When the
+app does not return that very id, the placeholder is shown: never another title's poster.
 """
 
 from __future__ import annotations
@@ -118,13 +121,9 @@ def register_posters(app: Flask) -> None:
 
         client = MediaClient(setup=setup, store=st.store, http=st.http)
         try:
-            results = client.search(kind, str(sid))  # type: ignore[arg-type]
+            matched = client.find(kind, sid)  # type: ignore[arg-type]
         except RequestError:
             return _placeholder_response()
-
-        matched = next((r for r in results if r.source_id == sid), None)
-        if matched is None and results:
-            matched = results[0]
         if matched is None:
             return _placeholder_response()
 

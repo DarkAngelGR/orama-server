@@ -278,3 +278,73 @@ def test_file_media_info_and_subtitles_never_fall_back_to_wrong_episode():
     assert client.file_media_info("sonarr", 7, season=2) is None
     assert client.subtitle_languages("season", 7, season=2) is None
 
+
+
+@pytest.mark.parametrize("status", [400, 404, 409, 500, 502, 503])
+def test_unexpected_status_is_plain_words_with_the_detail_only_in_the_log(status, caplog):
+    http = FakeHttp()
+    http.route(
+        "GET",
+        "/api/v3/movie/lookup",
+        lambda call: Response(status, {}, b"NzbDrone.Core.Exceptions: radarr-key-secret"),
+    )
+    client = make_client(http)
+
+    with caplog.at_level("WARNING", logger="orama.requests"), \
+            pytest.raises(RequestError) as exc_info:
+        client.search("movie", "Secret Title")
+    message = str(exc_info.value)
+    assert message == "Radarr did not answer as expected. Try again in a minute."
+    assert "HTTP" not in message and not any(ch.isdigit() for ch in message)
+    # The log says what happened, without the key, the search words or the app's own text.
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert f"radarr answered GET movie/lookup with status {status}" in logged
+    for private in ("radarr-key-secret", "Secret", "NzbDrone"):
+        assert private not in logged
+
+
+def test_unreadable_answer_is_plain_words():
+    http = FakeHttp()
+    http.route("GET", "/api/v3/series/lookup", lambda call: Response(200, {}, b"<html>oops"))
+    client = make_client(http)
+    with pytest.raises(RequestError) as exc_info:
+        client.search("series", "Test")
+    message = str(exc_info.value)
+    assert message == "Sonarr did not answer as expected. Try again in a minute."
+    assert "JSON" not in message
+
+
+def test_find_returns_only_the_exact_catalogue_id():
+    http = FakeHttp()
+    http.route("GET", "/api/v3/movie/lookup", lambda call: json_resp([
+        {"tmdbId": 999, "title": "Other"},
+        {"id": 550, "title": "Row number, not a TMDB id"},
+        {"tmdbId": 550, "title": "Fight Club", "year": 1999},
+    ]))
+    http.route("GET", "/api/v3/series/lookup", lambda call: json_resp([
+        {"tmdbId": 81189, "title": "Wrong catalogue"},
+    ]))
+    client = make_client(http)
+    found = client.find("movie", 550)
+    assert found is not None and (found.source_id, found.title) == (550, "Fight Club")
+    assert client.find("movie", 551) is None
+    assert client.find("series", 81189) is None
+    assert [c.url.split("?", 1)[1] for c in http.calls] == [
+        "term=tmdb%3A550", "term=tmdb%3A551", "term=tvdb%3A81189"]
+
+
+def test_detail_never_describes_another_title():
+    http = FakeHttp()
+    http.route("GET", "/api/v3/movie/lookup", lambda call: json_resp([
+        {"tmdbId": 999, "title": "Other Film", "year": 1990,
+         "images": [{"coverType": "poster", "remoteUrl": "https://image.tmdb.org/t/p/o.jpg"}]},
+        {"id": 500, "title": "Row 500, not TMDB 500"},
+    ]))
+    http.route("GET", "/api/v3/movie", lambda call: json_resp([]))
+    client = make_client(http)
+    detail = client.detail("movie", 500)
+    assert detail.result.source_id == 500
+    assert "Other" not in detail.result.title and "Row" not in detail.result.title
+    assert detail.result.poster_ref is None and detail.result.year is None
+    lookup = next(c for c in http.calls if c.path.endswith("/lookup"))
+    assert lookup.url.endswith("term=tmdb%3A500")

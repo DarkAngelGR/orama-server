@@ -227,3 +227,56 @@ def test_submit_refuses_when_orama_quality_profile_missing(tmp_path):
     # Neither movie nor series was posted with an unintended fallback profile
     assert not any(c.method == "POST" and c.path in ("/api/v3/movie", "/api/v3/series") for c in http.calls)
 
+
+
+def _ensure_http(kind: str, lookup_items) -> FakeHttp:
+    app_path = "movie" if kind == "movie" else "series"
+    http = FakeHttp()
+    http.route("GET", f"/api/v3/{app_path}", lambda call: json_resp([]))
+    http.route("GET", f"/api/v3/{app_path}/lookup", lambda call: json_resp(lookup_items))
+    http.route("GET", "/api/v3/qualityprofile", lambda call: json_resp([{"id": 1, "name": "Orama"}]))
+    http.route("GET", "/api/v3/rootfolder", lambda call: json_resp([{"id": 1, "path": "/data/media/x"}]))
+    http.route("POST", f"/api/v3/{app_path}", lambda call: json_resp({"id": 55}))
+    return http
+
+
+def test_ensure_movie_never_adds_a_different_title():
+    import pytest
+
+    from orama.requests.client import RequestError
+
+    # A text search for "300" finds the film called 300, which is not TMDB id 300.
+    http = _ensure_http("movie", [
+        {"tmdbId": 1271, "title": "300"},
+        {"id": 300, "title": "Row 300, another film"},
+    ])
+    with pytest.raises(RequestError, match="Could not locate movie metadata"):
+        make_client(http).ensure_movie(300)
+    assert [c for c in http.calls if c.method == "POST"] == []
+
+    # The exact id is used wherever it is in the answer.
+    http = _ensure_http("movie", [{"tmdbId": 1271, "title": "300"},
+                                  {"tmdbId": 300, "title": "The right one"}])
+    assert make_client(http).ensure_movie(300) == (55, False)
+    posted = next(c for c in http.calls if c.method == "POST")
+    assert posted.json["tmdbId"] == 300 and posted.json["title"] == "The right one"
+
+
+def test_ensure_series_never_adds_a_different_show():
+    import pytest
+
+    from orama.requests.client import RequestError
+
+    http = _ensure_http("series", [
+        {"tvdbId": 9999, "title": "24"},
+        {"tmdbId": 24, "title": "Wrong catalogue"},
+    ])
+    with pytest.raises(RequestError, match="Could not locate series metadata"):
+        make_client(http).ensure_series(24)
+    assert [c for c in http.calls if c.method == "POST"] == []
+
+    http = _ensure_http("series", [{"tvdbId": 9999, "title": "24"},
+                                   {"tvdbId": 24, "title": "The right show"}])
+    assert make_client(http).ensure_series(24)[0] == 55
+    posted = next(c for c in http.calls if c.method == "POST")
+    assert posted.json["tvdbId"] == 24 and posted.json["title"] == "The right show"

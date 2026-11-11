@@ -223,3 +223,90 @@ def test_poster_rejects_unknown_mime_oversize_and_redirect(tmp_path: Path):
     resp_redir = client_redir.get("/posters/movie/703")
     assert resp_redir.status_code == 200
     assert "image/svg+xml" in resp_redir.headers["Content-Type"]
+
+
+# ---------------------------------------------------------------- exact id match only
+
+JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+OTHER_JPEG = JPEG + b"other"
+
+
+def _lookup(items):
+    return lambda call: Response(
+        200, {"Content-Type": "application/json"}, json.dumps(items).encode())
+
+
+def _poster_item(id_field: str, value: int, name: str, **extra) -> dict:
+    return {
+        id_field: value, "title": name, "year": 2000,
+        "images": [{"coverType": "poster",
+                    "remoteUrl": f"https://image.tmdb.org/t/p/w500/{name}.jpg"}],
+        **extra,
+    }
+
+
+def _poster_http(lookup_path: str, items) -> FakeHttp:
+    http = FakeHttp()
+    http.route("GET", lookup_path, _lookup(items))
+    http.route("GET", "/t/p/w500/wanted.jpg",
+               lambda call: Response(200, {"Content-Type": "image/jpeg"}, JPEG))
+    http.route("GET", "/t/p/w500/other.jpg",
+               lambda call: Response(200, {"Content-Type": "image/jpeg"}, OTHER_JPEG))
+    return http
+
+
+def _fetched(http: FakeHttp) -> list[str]:
+    return [c.path for c in http.calls if c.path.startswith("/t/p/")]
+
+
+def test_poster_is_never_another_titles_when_the_first_result_has_a_different_id(tmp_path: Path):
+    # The app answers with other titles only (as a text search for "550" would).
+    http = _poster_http("/api/v3/movie/lookup", [
+        _poster_item("tmdbId", 999, "other"),
+        _poster_item("tmdbId", 5500, "other"),
+    ])
+    client, _ = _signed_in_client(tmp_path, http)
+    resp = client.get("/posters/movie/550")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("image/svg+xml")  # the local placeholder
+    assert _fetched(http) == []  # the other title's poster was never even downloaded
+
+
+def test_poster_picks_the_exact_id_wherever_it_is_in_the_results(tmp_path: Path):
+    http = _poster_http("/api/v3/movie/lookup", [
+        _poster_item("tmdbId", 999, "other"),
+        _poster_item("tmdbId", 550, "wanted"),
+    ])
+    client, _ = _signed_in_client(tmp_path, http)
+    resp = client.get("/posters/movie/550")
+    assert resp.headers["Content-Type"] == "image/jpeg" and resp.data == JPEG
+    assert _fetched(http) == ["/t/p/w500/wanted.jpg"]
+
+
+def test_poster_lookup_asks_by_id_not_by_text(tmp_path: Path):
+    http = _poster_http("/api/v3/movie/lookup", [_poster_item("tmdbId", 550, "wanted")])
+    http.route("GET", "/api/v3/series/lookup", _lookup([_poster_item("tvdbId", 81189, "wanted")]))
+    client, _ = _signed_in_client(tmp_path, http)
+    assert client.get("/posters/movie/550").data == JPEG
+    assert client.get("/posters/series/81189").data == JPEG
+    lookups = [c.url.split("?", 1)[1] for c in http.calls if c.path.endswith("/lookup")]
+    assert lookups == ["term=tmdb%3A550", "term=tvdb%3A81189"]
+
+
+def test_poster_matches_only_the_id_field_of_its_kind(tmp_path: Path):
+    # The app's own row number ("id") and the other catalogue's id are different numbers
+    # that can collide with the one asked for: neither may select a poster.
+    http = _poster_http("/api/v3/movie/lookup", [
+        _poster_item("id", 550, "other"),
+        _poster_item("tvdbId", 550, "other"),
+        _poster_item("tmdbId", "550", "other"),
+    ])
+    http.route("GET", "/api/v3/series/lookup", _lookup([
+        _poster_item("tmdbId", 550, "other"),
+        _poster_item("id", 550, "other", tvdbId=7),
+    ]))
+    client, _ = _signed_in_client(tmp_path, http)
+    for path in ("/posters/movie/550", "/posters/series/550"):
+        resp = client.get(path)
+        assert resp.headers["Content-Type"].startswith("image/svg+xml"), path
+    assert _fetched(http) == []

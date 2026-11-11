@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 import urllib.parse
 from dataclasses import dataclass
@@ -11,11 +12,31 @@ from orama.requests.models import RequestKind
 from orama.secrets import SecretStore
 from orama.wiring.http import Http, Unreachable
 
+_LOG = logging.getLogger("orama.requests")
+# The catalogue id each kind is known by, and how Radarr/Sonarr look one up exactly
+# (contract checked in tests/integration/request_contracts.py).
+_ID_FIELD = {"movie": "tmdbId", "series": "tvdbId"}
+_ID_TERM = {"movie": "tmdb", "series": "tvdb"}
+
 SAFE_URL_PATTERN = re.compile(r"^https?://[a-zA-Z0-9_.~:/?#\[\]@!$&'()*+,;=-]+$")
 
 
 class RequestError(Exception):
     """Domain error for media lookup and read operations."""
+
+
+def _exact(items: Any, field: str, wanted: int) -> dict[str, Any] | None:
+    """The lookup item whose ``field`` (a catalogue id) is exactly ``wanted``, else None.
+
+    A lookup can answer with other titles (a number is also a search word). The app's row
+    number (``id``) and the other catalogue's id are different numbers: they never count.
+    """
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and type(item.get(field)) is int and item[field] == wanted:
+            return item
+    return None
 
 
 @dataclass(frozen=True)
@@ -160,15 +181,23 @@ class MediaClient:
 
         if resp.status == 401 or resp.status == 403:
             raise RequestError(f"Authentication failed for {app_name.capitalize()}")
+        # What the user reads is plain words. The status goes to the log only, with the
+        # fixed API path: never the query (search words), the key or the app's own text.
+        unexpected = RequestError(
+            f"{app_name.capitalize()} did not answer as expected. Try again in a minute.")
         if resp.status not in (200, 201, 202):
-            raise RequestError(f"{app_name.capitalize()} returned HTTP {resp.status}")
+            _LOG.warning("%s answered %s %s with status %s",
+                         app_name, method, path.lstrip("/"), resp.status)
+            raise unexpected
 
         if not resp.body:
             return {}
         try:
             return resp.json()
         except ValueError:
-            raise RequestError(f"{app_name.capitalize()} returned malformed JSON") from None
+            _LOG.warning("%s answered %s %s with something that is not JSON",
+                         app_name, method, path.lstrip("/"))
+            raise unexpected from None
 
     def search(self, kind: RequestKind, query: str) -> list[SearchResult]:
         """Search media through Radarr (movie) or Sonarr (series)."""
@@ -185,67 +214,73 @@ class MediaClient:
 
         results: list[SearchResult] = []
         for item in data[:50]:
-            if not isinstance(item, dict):
-                continue
-            if kind == "movie":
-                source_id = item.get("tmdbId") or item.get("id")
-                in_library = (
-                    bool(item.get("hasFile"))
-                    if "hasFile" in item
-                    else bool(item.get("id"))
-                )
-            else:
-                source_id = item.get("tvdbId") or item.get("id")
-                stats = item.get("statistics", {})
-                in_library = (
-                    bool(stats.get("episodeFileCount", 0) > 0)
-                    if isinstance(stats, dict) and "episodeFileCount" in stats
-                    else bool(item.get("id"))
-                )
+            result = self._search_result(kind, item)
+            if result is not None:
+                results.append(result)
+        return results
 
-            if not source_id or not isinstance(source_id, int):
-                continue
+    def find(self, kind: RequestKind, source_id: int) -> SearchResult | None:
+        """The one title with exactly this TMDB id (movie) or TVDB id (series), else None.
 
-            title = _sanitize_title(str(item.get("title", "")))
-            year = item.get("year")
-            images = item.get("images", [])
-            poster_url = None
-            if isinstance(images, list):
-                for img in images:
-                    if isinstance(img, dict) and img.get("coverType") == "poster":
-                        poster_url = _sanitize_poster_url(img.get("remoteUrl"))
-                        break
+        The app is asked by id (``tmdb:<id>`` / ``tvdb:<id>``), and only an item whose own
+        catalogue id is that number is accepted: never the first result, and never a match
+        on the app's row number or on the other catalogue's id.
+        """
+        app_name = "radarr" if kind == "movie" else "sonarr"
+        path = "movie/lookup" if kind == "movie" else "series/lookup"
+        data = self._request(app_name, path, params={"term": f"{_ID_TERM[kind]}:{source_id}"})
+        return self._search_result(kind, _exact(data, _ID_FIELD[kind], source_id))
 
-            results.append(
-                SearchResult(
-                    kind=kind,
-                    source_id=source_id,
-                    title=title,
-                    year=year if isinstance(year, int) else None,
-                    in_library=in_library,
-                    poster_ref=poster_url,
-                )
+    @staticmethod
+    def _search_result(kind: RequestKind, item: Any) -> SearchResult | None:
+        if not isinstance(item, dict):
+            return None
+        if kind == "movie":
+            source_id = item.get("tmdbId") or item.get("id")
+            in_library = (
+                bool(item.get("hasFile"))
+                if "hasFile" in item
+                else bool(item.get("id"))
+            )
+        else:
+            source_id = item.get("tvdbId") or item.get("id")
+            stats = item.get("statistics", {})
+            in_library = (
+                bool(stats.get("episodeFileCount", 0) > 0)
+                if isinstance(stats, dict) and "episodeFileCount" in stats
+                else bool(item.get("id"))
             )
 
-        return results
+        if not source_id or not isinstance(source_id, int):
+            return None
+
+        title = _sanitize_title(str(item.get("title", "")))
+        year = item.get("year")
+        images = item.get("images", [])
+        poster_url = None
+        if isinstance(images, list):
+            for img in images:
+                if isinstance(img, dict) and img.get("coverType") == "poster":
+                    poster_url = _sanitize_poster_url(img.get("remoteUrl"))
+                    break
+
+        return SearchResult(
+            kind=kind,
+            source_id=source_id,
+            title=title,
+            year=year if isinstance(year, int) else None,
+            in_library=in_library,
+            poster_ref=poster_url,
+        )
 
     def detail(self, kind: RequestKind, source_id: int) -> MediaDetail:
         """Fetch media detail by source ID."""
         app_name = "radarr" if kind == "movie" else "sonarr"
         lookup_path = "movie/lookup" if kind == "movie" else "series/lookup"
-        raw_lookup = self._request(app_name, lookup_path, params={"term": str(source_id)})
-        lookup_items = raw_lookup if isinstance(raw_lookup, list) else []
-
-        matched_raw: dict[str, Any] | None = None
-        for item in lookup_items:
-            if not isinstance(item, dict):
-                continue
-            sid = item.get("tmdbId" if kind == "movie" else "tvdbId") or item.get("id")
-            if sid == source_id:
-                matched_raw = item
-                break
-        if matched_raw is None and lookup_items and isinstance(lookup_items[0], dict):
-            matched_raw = lookup_items[0]
+        raw_lookup = self._request(
+            app_name, lookup_path, params={"term": f"{_ID_TERM[kind]}:{source_id}"})
+        # Only the title with exactly this catalogue id: never the first result.
+        matched_raw = _exact(raw_lookup, _ID_FIELD[kind], source_id)
 
         if matched_raw is not None:
             sid = (
@@ -450,12 +485,13 @@ class MediaClient:
                     return m["id"], bool(m.get("hasFile"))
 
         lookup_res = self._request("radarr", "movie/lookup", params={"term": f"tmdb:{tmdb_id}"})
-        if not isinstance(lookup_res, list) or not lookup_res:
+        movie_data = _exact(lookup_res, "tmdbId", tmdb_id)
+        if movie_data is None:
             lookup_res = self._request("radarr", "movie/lookup", params={"term": str(tmdb_id)})
-        if not isinstance(lookup_res, list) or not lookup_res:
+            movie_data = _exact(lookup_res, "tmdbId", tmdb_id)
+        if movie_data is None:  # never add whatever came first: it can be another film
             raise RequestError(f"Could not locate movie metadata for TMDB #{tmdb_id}")
 
-        movie_data = lookup_res[0]
         qp_id = self._get_quality_profile_id("radarr")
         root_path = self._get_root_folder_path("radarr")
 
@@ -489,12 +525,13 @@ class MediaClient:
                     return s["id"], has_file
 
         lookup_res = self._request("sonarr", "series/lookup", params={"term": f"tvdb:{tvdb_id}"})
-        if not isinstance(lookup_res, list) or not lookup_res:
+        series_data = _exact(lookup_res, "tvdbId", tvdb_id)
+        if series_data is None:
             lookup_res = self._request("sonarr", "series/lookup", params={"term": str(tvdb_id)})
-        if not isinstance(lookup_res, list) or not lookup_res:
+            series_data = _exact(lookup_res, "tvdbId", tvdb_id)
+        if series_data is None:  # never add whatever came first: it can be another show
             raise RequestError(f"Could not locate series metadata for TVDB #{tvdb_id}")
 
-        series_data = lookup_res[0]
         qp_id = self._get_quality_profile_id("sonarr")
         root_path = self._get_root_folder_path("sonarr")
 

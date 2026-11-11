@@ -32,6 +32,11 @@ Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and is fix
   the newest version"). A failed or offline download changes nothing. Proved with unit tests and a
   real-Docker integration test. Details and the one decision that differs from the spec (two
   commands instead of one): `docs/superpowers/plans/2026-11-07-orama-r1-plan-5-notes.md`.
+- **F4 — plain error wording and exact titles.** A failing Sonarr/Radarr no longer puts "HTTP
+  500" on a page; it says "Sonarr did not answer as expected. Try again in a minute." (the
+  detail goes to the log). Posters, the detail page and adding a title now use only the title
+  with exactly the requested id; before, a missing match fell back to the first search result,
+  which could show, and even add, a different film or show. Details in the Plan 4 notes.
 
 ## Current handoff (Gemini, 2026-11-09)
 
