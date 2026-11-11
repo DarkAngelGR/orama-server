@@ -13,12 +13,12 @@ Read `AGENTS.md` first.
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`fd5fa71`, `58287fb`, `f32d993`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
-| 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | Tasks 1–2 code complete (`needs review`, Gemini); Tasks 3–4 (owner DXP4800 Plus hardware checklist & Claude Security scans) next |
+| 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) **open, not started**. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
 
 ## Review fixes (Claude, 2026-11-11)
 
-Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and is fixing the findings on
-`test` only. `main` is untouched and nothing is merged.
+Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and fixed the four findings
+on `test` only. `main` is untouched and nothing is merged. **Read this section first.**
 
 - **F1 — Node demo server removed.** `server.ts`, `views/`, `public/`, `package.json`,
   `tsconfig.json` and `metadata.json` are deleted: an unused second web server with fixed passwords
@@ -37,8 +37,43 @@ Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and is fix
   detail goes to the log). Posters, the detail page and adding a title now use only the title
   with exactly the requested id; before, a missing match fell back to the first search result,
   which could show, and even add, a different film or show. Details in the Plan 4 notes.
+- **F3 — Plan 5 told honestly and written properly.** The old status said Debian 12 was
+  "verified in CI" and called Task 1 "publish gate & end-to-end VM verification". Only the
+  publish gate was built; the Debian test runs on Ubuntu with a Debian name file. The plan
+  (`docs/superpowers/plans/2026-11-07-orama-r1-plan-5-proof.md`) is rewritten in the same shape
+  as Plan 4, with five tasks, and the end-to-end proof is now its own **open** Task 3, specified
+  step by step but **not built**. The owner's NAS checklist is rewritten in plain language as
+  `docs/OWNER-CHECKLIST.md` (sixteen steps: do / you should see / write down if it differs).
+  Task files were renumbered to match: `T03` end-to-end proof, `T04` owner checklist (was T03),
+  `T05` security and sign-off (was T04).
 
-## Current handoff (Gemini, 2026-11-09)
+**Tested commits and CI** (`unit`, `browser`, `images`, `integration` all green; `publish` runs
+only on `main`): `125a581` run 43014605227, `9d7d668` run 43018409477, `ab07f0e` run
+43019567102. Locally at `ab07f0e`: 2,096 unit tests, Ruff, ShellCheck and the 6 real-browser
+scenarios passed. The commits after `ab07f0e` change documents only.
+
+**Not in scope, left alone:** the
+owner's personal e-mail address is the author of many commits on `main` and `test`. That is an
+owner decision (Plan 5 Task 5, line 4); no history was rewritten.
+
+**What is still open, in order:**
+
+1. Owner: the three deferred Claude Security scans (Plan 2b base `441c1a8`, Plan 3 base
+   `6a39133`, Plan 4 base `56ac787`) and the whole-codebase review. Still not passed.
+2. Owner: decide about the e-mail address in the commit history.
+3. Then merge `test` into `main` (not before 1).
+4. Owner: `docs/OWNER-CHECKLIST.md` on the NAS.
+5. Anyone: Plan 5 Task 3, the end-to-end proof (first step: find out what the hosted CI
+   machines provide, especially whether they can run a virtual machine).
+6. Found during the review and worth knowing: Plan 4's "real request pipeline" test
+   (`tests/integration/test_requests.py`) creates the video file and the hardlink itself and
+   then asks the apps to rescan. It proves Orama's status tracking against real apps, but it
+   does not prove a download or an app-made hardlink. Plan 5 Task 3 is where that is proved.
+
+## Earlier handoff (Gemini, 2026-11-09) — superseded by "Review fixes" above
+
+Kept as a record. Where it says Debian 12 is "verified in CI" or that Task 1 covers the VM
+proof, it is wrong; the self-update it describes was changed on 2026-11-11.
 
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
 project work. The Plan 2b, Plan 3, and Plan 4 scans remain pending; they are not development blockers.
@@ -88,10 +123,11 @@ real-container integration tests.
 
 | # | Task | State | Owner |
 |---|---|---|---|
-| 1 | Publish gate & end-to-end VM verification | needs review | Gemini |
-| 2 | Root-side self-update operations subplan | needs review | Gemini |
-| 3 | Owner hardware checklist (DXP4800 Plus / UGOS Pro) | open | Owner |
-| 4 | Security review, GHCR packaging & Release 1 sign-off | open | Owner + Claude |
+| 1 | Publish gate | done (`04ef940`) | Gemini; Claude corrected the report |
+| 2 | Self-update (two Agent commands, hardened helper) | done (`399d56f`, `621c1a1`, review fixes `9d7d668`) | Gemini, then Claude |
+| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | **open — not started** | — |
+| 4 | Owner checklist on the NAS (`docs/OWNER-CHECKLIST.md`) | open (written, not run) | Owner |
+| 5 | Security scans, packaging, Release 1 sign-off | open | Owner + Claude |
 
 ## Resume here (updated by ChatGPT/Codex, 2026-11-05)
 
