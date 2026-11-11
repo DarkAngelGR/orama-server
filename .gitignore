@@ -5,8 +5,5 @@ __pycache__/
 *.egg-info/
 .superpowers/
 integration-logs/
--e 
-node_modules/
-dist/
+.playwright-node/
 .DS_Store
-bun.lock

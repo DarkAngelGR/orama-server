@@ -15,6 +15,17 @@ Read `AGENTS.md` first.
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`fd5fa71`, `58287fb`, `f32d993`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
 | 5 Proof | end-to-end VM tests, owner's NAS checklist, security review | Tasks 1–2 code complete (`needs review`, Gemini); Tasks 3–4 (owner DXP4800 Plus hardware checklist & Claude Security scans) next |
 
+## Review fixes (Claude, 2026-11-11)
+
+Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and is fixing the findings on
+`test` only. `main` is untouched and nothing is merged.
+
+- **F1 — Node demo server removed.** `server.ts`, `views/`, `public/`, `package.json`,
+  `tsconfig.json` and `metadata.json` are deleted: an unused second web server with fixed passwords
+  and an always-valid session token. The README now describes the real project. A unit test fails
+  if those files come back. The CI `browser` job and `tests/web/browser_pass.cjs` are unchanged and
+  still pass.
+
 ## Current handoff (Gemini, 2026-11-09)
 
 Owner deferred Claude Security scans until Wednesday 2026-11-11 and authorized continued
@@ -39,7 +50,7 @@ The owner requested a CI run and repair on `test`. Run 42316368427 executed and 
 the web entry point imported `SetupReader` from `orama.setup_model`, although the class
 is defined in `orama.web`. Both unit and browser jobs hit that import error; image and
 integration jobs were skipped. The import is corrected in this repair. Run 42316906235 passed unit and image jobs, then exposed a browser-driver module
-conflict from the new root package.json. The driver now has an explicit `.cjs` extension;
+conflict from the new root package.json (since removed, see "Review fixes"). The driver now has an explicit `.cjs` extension;
 all four real Chromium scenarios passed locally. Container probes also inherited three
 failures from main's unfinished Task 1 (run 42279371718); their fixes and validation are
 recorded in the Plan 4 notes, and CI run 42381439992 passed unit, browser, images, and all 38

@@ -84,3 +84,38 @@ def test_private_ipv4_pattern_ignores_non_addresses(text):
 def test_macos_home_rule(text, flagged):
     pattern = re.compile(next(p for p in FORBIDDEN if p.startswith("/Users")))
     assert bool(pattern.search(text)) is flagged
+
+
+# The unused Node/Express demo server (hardcoded passwords, an always-valid session token) was
+# removed in the 2026-11-11 review. Orama is the Python app in src/ only; nothing may bring a
+# second, unreviewed web server back to the repository root.
+DEMO_SERVER_PATHS = ("server.ts", "package.json", "package-lock.json", "tsconfig.json",
+                     "metadata.json", "views/", "public/")
+
+
+def _tracked_files():
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, check=True, capture_output=True
+    ).stdout.decode()
+    return [rel for rel in out.split("\0") if rel]
+
+
+def demo_server_leftovers(tracked):
+    """Tracked paths that belong to the removed Node demo server."""
+    return sorted(rel for rel in tracked
+                  if any(rel == p or (p.endswith("/") and rel.startswith(p))
+                         for p in DEMO_SERVER_PATHS))
+
+
+def test_node_demo_server_stays_removed():
+    assert demo_server_leftovers(_tracked_files()) == [], (
+        "the insecure Node demo server must not come back; the web app lives in src/orama/web")
+    for name in DEMO_SERVER_PATHS:
+        assert not (REPO_ROOT / name.rstrip("/")).exists(), name
+
+
+def test_demo_server_check_sees_files_and_folders():
+    tracked = ["server.ts", "views/home.ejs", "public/orama.js", "package.json",
+               "src/orama/web/static/orama.js", "docs/public/notes.md", "tests/web/views.py"]
+    assert demo_server_leftovers(tracked) == [
+        "package.json", "public/orama.js", "server.ts", "views/home.ejs"]

@@ -186,3 +186,15 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
   `42511960464` (`f32d993`) passed `unit` (2,014 tests), `demo`, `browser`, `images`, and all
   41 real-container `integration` tests.
 
+### Node demo server removed (Claude review, 2026-11-11)
+
+The `test` branch carried a second web server that was never part of the design: a Node/Express
+demo (`server.ts`, `views/*.ejs`, `public/`, `package.json`, `tsconfig.json`, `metadata.json`).
+Nothing in the installer, the images or CI ran it, it had fixed passwords and an always-valid
+session token, and the commit that tightened it (`f32d993`) was reverted (`dee37e1`). All of it is
+deleted. Where earlier notes and task reports mention the `demo` CI job, `npm test`, `server.ts`
+or the "Express package", they describe that removed scaffold. Two things stay as they are:
+`tests/web/browser_pass.cjs` keeps its `.cjs` name, and the CI `browser` job still installs
+Playwright into its own folder with `npm install --prefix` (no root `package.json` is needed;
+checked locally and in CI). `tests/test_repo_hygiene.py::test_node_demo_server_stays_removed`
+fails if the demo files come back.
