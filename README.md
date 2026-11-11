@@ -36,5 +36,7 @@ The source is in [`src/orama/`](src/orama) (the app) and [`src/orama_agent/`](sr
 - [`AGENTS.md`](AGENTS.md): the rules for anyone (person or AI assistant) changing this repo,
   including the checks to run before every commit.
 - [`docs/STATUS.md`](docs/STATUS.md): what is done, what is in progress and what comes next.
+- [`docs/OWNER-CHECKLIST.md`](docs/OWNER-CHECKLIST.md): the plain-language checklist for testing
+  a release on a real NAS.
 - [`docs/superpowers/specs/2026-11-03-orama-release-1-design.md`](docs/superpowers/specs/2026-11-03-orama-release-1-design.md):
   the design for Release 1.
