@@ -12,6 +12,11 @@ MAX_RESPONSE = 16 * 1024 * 1024
 # Strictly above the Agent's worst case for one apply: ps 60 + pull 3600 + up 720 + ps 60
 # = 4440 s (orama_agent.runner.CALL_TIMEOUT / PULL_TIMEOUT / UP_TIMEOUT), plus a 60 s margin.
 DEFAULT_TIMEOUT = 4500.0
+# Updating Orama itself. Download: pull 1200 + two image checks of 60 = 1320 s
+# (orama_agent.runner.CORE_PULL_TIMEOUT / CALL_TIMEOUT). Restart: four calls of 60 = 240 s;
+# Orama holds apply.lock while it waits for this one, so it is kept short.
+SELF_UPDATE_PULL_TIMEOUT = 1500.0
+SELF_UPDATE_TIMEOUT = 300.0
 
 
 class AgentError(Exception):
@@ -64,16 +69,32 @@ class AgentClient:
         """Return ``{"total_bytes": int, "free_bytes": int}`` for the configured data root."""
         return self._call("data-space", {})
 
-    def self_update(self) -> bool:
-        """Pull Orama's core images and recreate the core containers if updated."""
-        return bool(self._call("self-update", {})["updated"])
+    def self_update_pull(self) -> bool:
+        """Download the newest Orama and Agent images; nothing is restarted.
 
-    def _call(self, cmd: str, args: dict[str, Any]) -> Any:
+        True if a restart (:meth:`self_update`) would change anything. Can take minutes.
+        """
+        result = self._call("self-update-pull", {}, self._limit(SELF_UPDATE_PULL_TIMEOUT))
+        return bool(result["newer"])
+
+    def self_update(self) -> bool:
+        """Restart Orama and the Agent on the images already downloaded.
+
+        True if the restart was started (this Orama process is then replaced within
+        seconds); False if both already run the newest downloaded version.
+        """
+        return bool(self._call("self-update", {}, self._limit(SELF_UPDATE_TIMEOUT))["started"])
+
+    def _limit(self, seconds: float) -> float:
+        """A step's own time limit, never above the one this client was made with."""
+        return min(self.timeout, seconds)
+
+    def _call(self, cmd: str, args: dict[str, Any], timeout: float | None = None) -> Any:
         rid = uuid.uuid4().hex
         request = json.dumps({"id": rid, "cmd": cmd, "args": args}).encode() + b"\n"
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-                sock.settimeout(self.timeout)
+                sock.settimeout(self.timeout if timeout is None else timeout)
                 sock.connect(self.socket_path)
                 sock.sendall(request)
                 line = _read_line(sock)

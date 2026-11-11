@@ -23,7 +23,8 @@ import secrets
 import socketserver
 import stat
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -64,7 +65,8 @@ ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
 COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
-                      "recyclarr-sync", "data-space", "self-update"})
+                      "recyclarr-sync", "data-space", "self-update-pull", "self-update"})
+UPDATE_BUSY = "Orama is already downloading or starting an update. Try again in a few minutes."
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -240,6 +242,9 @@ class Agent:
         self.runner = runner
         self._chown = chown
         self._lock = threading.Lock()  # one docker / file-system operation at a time
+        # One update step at a time. Separate from ``_lock`` because the download can take
+        # many minutes and must not make ``status``, ``ensure-folders`` or an apply wait.
+        self._update_lock = threading.Lock()
         self._shared = {str(p) for p in data_folders(PurePosixPath(roots.data))} | {
             str(app_config_dir(PurePosixPath(roots.config), app)) for app in CATALOG
         }
@@ -253,8 +258,12 @@ class Agent:
             "seed-config": self.seed_config,
             "recyclarr-sync": self.recyclarr_sync,
             "data-space": self.data_space,
+            "self-update-pull": self.self_update_pull,
             "self-update": self.self_update,
         }[cmd]
+        if cmd == "self-update-pull":
+            # Only downloads images (see self_update_pull): it takes the update lock alone.
+            return handler(args)
         with self._lock:
             return handler(args)
 
@@ -452,9 +461,43 @@ class Agent:
         self._ensure_agent_env_file()
         self.runner.restart(app)
 
-    def self_update(self, args: dict[str, Any]) -> dict[str, bool]:
-        """Pull Orama's core images and update the core project from core.compose.yaml."""
+    # ------------------------------------------------------------ self-update
+
+    def self_update_pull(self, args: dict[str, Any]) -> dict[str, bool]:
+        """Download Orama's own two images. ``newer`` says if a restart would change anything.
+
+        Runs without the Agent's main lock: it touches no container and writes only the
+        empty ``--env-file`` (atomically, the same bytes an apply writes), so ``status``,
+        ``ensure-folders`` and applies carry on while it downloads. A second download, or
+        a restart while this one runs, is refused.
+        """
         _expect_keys(args, set())
+        with self._updating():
+            self._check_core_files()
+            return {"newer": bool(self.runner.self_update_pull())}
+
+    def self_update(self, args: dict[str, Any]) -> dict[str, bool]:
+        """Restart Orama and the Agent on the images already downloaded (no download here).
+
+        ``started`` is False when both already run the newest downloaded image: then
+        nothing is started or changed.
+        """
+        _expect_keys(args, set())
+        with self._updating():
+            self._check_core_files()
+            return {"started": bool(self.runner.self_update())}
+
+    @contextmanager
+    def _updating(self) -> Iterator[None]:
+        if not self._update_lock.acquire(blocking=False):
+            raise Refused(UPDATE_BUSY)
+        try:
+            yield
+        finally:
+            self._update_lock.release()
+
+    def _check_core_files(self) -> None:
+        """The installer's core compose file is a real file; the empty --env-file exists."""
         config_fd = os.open(self.roots.config, _DIR_FLAGS)
         try:
             shown = self.roots.config / CORE_COMPOSE_FILE
@@ -468,8 +511,6 @@ class Agent:
                 os.close(env_fd)
         finally:
             os.close(config_fd)
-        self.runner.self_update()
-        return {"updated": True}
 
     # ------------------------------------------------------------ seed-config
 

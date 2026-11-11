@@ -89,6 +89,7 @@ def _docker_works() -> bool:
 def _remove_everything() -> None:
     """Remove the test projects' containers, networks and volumes, then the test folders."""
     run(["docker", "rm", "-f", "orama-test-newznab"])  # the fake indexer, not in a project
+    run(["docker", "rm", "-f", "orama-updater"])  # the self-update helper, kept after it exits
     for project in PROJECTS:
         run(["docker", "compose", "-p", project, "down", "-v", "--remove-orphans"],
             timeout=300)
@@ -110,6 +111,9 @@ def _collect_logs(host: Host) -> None:
                       "--filter", f"label=com.docker.compose.project={project}"])
         for name in listed.stdout.split():
             host.save_log(f"container-{name}.log", run(["docker", "logs", name]).stdout)
+    updater = run(["docker", "logs", "orama-updater"])
+    if updater.returncode == 0:
+        host.save_log("container-orama-updater.log", updater.stdout)
     host.save_log("docker-ps.txt", run(["docker", "ps", "-a"]).stdout)
 
 

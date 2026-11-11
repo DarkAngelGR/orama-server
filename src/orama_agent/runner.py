@@ -9,12 +9,28 @@ The one other command is Recyclarr's one-shot ``docker run``, whose argv is fixe
 Agent's own roots and the catalogue: nothing from a request reaches it at all. Its
 container has a fixed name and is removed (``docker rm -f``) before every run and after a
 failed one, so a CLI killed by the timeout never leaves Recyclarr running with the keys.
+
+Updating Orama itself is two steps, neither of which takes anything from a request:
+
+- ``self_update_pull`` downloads the two core images named in the installer's own
+  ``core.compose.yaml``. Nothing is stopped or started, so a failed or offline download
+  leaves every container as it was.
+- ``self_update`` recreates the core project from what is already downloaded. The Agent
+  cannot do that itself (compose would stop the Agent in the middle of its own command),
+  so it starts a short-lived helper container from the Agent image, with a fixed argv. The
+  helper needs the Docker socket and reads the config root, and nothing else: it has no
+  network (the Docker daemon is what downloads images, never the helper), no capabilities,
+  no way to gain privileges, a read-only root file system, the config root mounted
+  read-only, and process and memory limits. It is kept after it exits so that
+  ``docker logs orama-updater`` says what the last update did; the next update removes it.
+  When every core container already runs the image its name points at, no helper is started.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -23,7 +39,7 @@ from typing import Any
 
 import yaml
 
-from orama.catalog import CATALOG, CORE
+from orama.catalog import CATALOG
 from orama.layout import app_config_dir, app_env_dir
 from orama_agent.recyclarr import CONTAINER_CONFIG
 from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots
@@ -36,11 +52,34 @@ AGENT_ENV_FILE = "compose.env"  # empty, lives in app-env (root 0700)
 # leaves a 60 s margin under the client's default of 4500 s
 # (orama.agent_client.DEFAULT_TIMEOUT).
 PULL_TIMEOUT = 3600  # a first install downloads every app image
+# Orama's own two images are small. Worst case for the download step: pull (1200) + two
+# image checks (60 each) = 1320 s; for the restart step: two image checks, rm and run
+# (60 each) = 240 s. The client's limits for both sit above these
+# (orama.agent_client.SELF_UPDATE_PULL_TIMEOUT / SELF_UPDATE_TIMEOUT).
+CORE_PULL_TIMEOUT = 1200
 UP_TIMEOUT = 720  # up, restart, stop and start
 CALL_TIMEOUT = 60  # ps
 RECYCLARR_TIMEOUT = 900  # one sync of Sonarr and Radarr, including its guide download
 RECYCLARR_CONTAINER = "orama-recyclarr"
 UPDATER_CONTAINER = "orama-updater"
+UPDATER_WAIT_SECONDS = "300"  # then the helper gives up instead of waiting for ever
+UPDATER_TMPFS = "/tmp:rw,noexec,nosuid,nodev,size=16m"
+UPDATER_PIDS = "256"
+UPDATER_MEMORY = "512m"
+DOCKER_SOCKET = "/var/run/docker.sock"
+# The core project's services and their fixed container names (orama.compose).
+CORE_CONTAINERS = {"orama": "orama-server", "orama-agent": "orama-server-agent"}
+PULL_FAILED = ("Orama could not download the update, so nothing was changed. "
+               "Check the internet connection and try again.")
+CORE_FILE_BAD = ("Orama's own settings file (core.compose.yaml) is not as the installer wrote "
+                 "it. Run the installer again.")
+# An image name as Docker spells it: lower-case repository, optional tag, optional digest.
+# It can never start with "-" (an option) or hold a space, so it is safe as one argv item.
+_IMAGE_REF = re.compile(
+    r"[a-z0-9][a-z0-9._/-]{0,199}(?::[0-9]{1,5}/[a-z0-9][a-z0-9._/-]{0,199})?"
+    r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?"
+)
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 STDERR_TAIL_LINES = 40
 LOG_HINT = "To see why, run: sudo docker logs orama-server-agent"
 _WHAT = {
@@ -51,6 +90,7 @@ _WHAT = {
     "stop": "Stopping the app",
     "start": "Starting the app",
     "recyclarr": "Updating the quality profiles",
+    "self-update-pull": "Downloading the Orama update",
     "self-update": "Updating Orama",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -118,6 +158,11 @@ def parse_ps(output: str) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def _docker_socket_gid() -> int:
+    """The group of the Docker socket as the Agent sees it (the host's numeric id)."""
+    return os.stat(DOCKER_SOCKET).st_gid
+
+
 def _checked_app(app: str) -> str:
     if not isinstance(app, str) or app not in CATALOG:
         raise Refused("That is not an app Orama knows about.")
@@ -126,10 +171,12 @@ def _checked_app(app: str) -> str:
 
 class ComposeRunner:
     def __init__(
-        self, roots: Roots, run: Callable[..., subprocess.CompletedProcess] = subprocess.run
+        self, roots: Roots, run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        socket_gid: Callable[[], int] = _docker_socket_gid,
     ) -> None:
         self._roots = roots
         self._run = run
+        self._socket_gid = socket_gid
 
     def _prefix(self, file: str, project: str = PROJECT_NAME) -> list[str]:
         return [
@@ -163,12 +210,16 @@ class ComposeRunner:
             )
         return proc.stdout
 
-    def _pull(self, file: str, project: str = PROJECT_NAME, what: str = _WHAT["pull"]) -> None:
-        """Pull all images for ``file``; fall back to sequential pulls on burst rate limits."""
+    def _pull(self, file: str, project: str = PROJECT_NAME, what: str = _WHAT["pull"],
+              budget: int = PULL_TIMEOUT) -> None:
+        """Pull all images for ``file``; fall back to sequential pulls on burst rate limits.
+
+        Everything, retries included, ends within ``budget`` seconds.
+        """
         prefix = self._prefix(file, project)
-        deadline = time.monotonic() + PULL_TIMEOUT
+        deadline = time.monotonic() + budget
         try:
-            self._exec(prefix + ["pull", "--quiet"], what, PULL_TIMEOUT)
+            self._exec(prefix + ["pull", "--quiet"], what, budget)
             return
         except RunnerError as err:
             if not _is_transient_pull_error(err.detail):
@@ -240,16 +291,43 @@ class ComposeRunner:
     def _one_app(self, action: str, app: str) -> None:
         self._compose(str(project_file(self._roots)), [action, _checked_app(app)], UP_TIMEOUT)
 
-    def _core_agent_image(self, file: str) -> str:
-        """The pinned or configured agent image to use for the helper container."""
+    def _core_images(self, file: str) -> dict[str, str]:
+        """``{service: image}`` for the two core services, from the installer's own file.
+
+        The file is root-owned in the root-owned config root; Orama cannot write it. Even
+        so, each image must look like an image name before it is ever put in an argv.
+        """
         try:
             doc = yaml.safe_load(Path(file).read_text())
-            img = doc.get("services", {}).get("orama-agent", {}).get("image")
-            if isinstance(img, str) and img.strip():
-                return img.strip()
-        except (OSError, yaml.YAMLError, AttributeError):
-            pass
-        return CORE["orama-agent"].image
+            services = doc["services"]
+            images = {name: services[name]["image"] for name in CORE_CONTAINERS}
+        except (OSError, yaml.YAMLError, AttributeError, KeyError, TypeError):
+            raise RunnerError(CORE_FILE_BAD) from None
+        for image in images.values():
+            if not isinstance(image, str) or not _IMAGE_REF.fullmatch(image):
+                raise RunnerError(CORE_FILE_BAD)
+        return images
+
+    def _core_is_behind(self, images: dict[str, str]) -> bool:
+        """True unless every core container already runs the image its name points at.
+
+        Compares the image each container was created from with what the image name means
+        now (after a download that is the new version). Any doubt counts as "behind", so
+        the worst a wrong answer does is one unneeded ``up``, which changes nothing.
+        """
+        what = _WHAT["self-update"]
+        try:
+            running = self._exec(
+                ["docker", "container", "inspect", "--format", "{{.Image}}",
+                 *CORE_CONTAINERS.values()], what, CALL_TIMEOUT).split()
+            wanted = self._exec(
+                ["docker", "image", "inspect", "--format", "{{.Id}}",
+                 *(images[name] for name in CORE_CONTAINERS)], what, CALL_TIMEOUT).split()
+        except RunnerError:
+            return True
+        known = len(running) == len(CORE_CONTAINERS) and all(
+            _IMAGE_ID.fullmatch(i) for i in running)
+        return not (known and running == wanted)
 
     def _remove_updater(self) -> None:
         """``docker rm -f`` any previous helper container; none being there is fine."""
@@ -260,27 +338,67 @@ class ComposeRunner:
         except RunnerError:
             pass
 
-    def self_update(self) -> None:
-        """Pull core images and recreate the core project via an independent helper container."""
+    def self_update_pull(self) -> bool:
+        """Download the core images. True if a core container is now behind its image.
+
+        Nothing is stopped, started or recreated here, so a failed download (offline, the
+        registry refusing) leaves every running container untouched.
+        """
+        file = str(core_project_file(self._roots))
+        images = self._core_images(file)
+        try:
+            self._pull(file, CORE_PROJECT_NAME, _WHAT["self-update-pull"], CORE_PULL_TIMEOUT)
+        except RunnerError as e:
+            raise RunnerError(f"{PULL_FAILED} {LOG_HINT}", e.detail) from None
+        return self._core_is_behind(images)
+
+    def self_update(self) -> bool:
+        """Recreate the core project from the downloaded images, through a helper container.
+
+        False, and nothing is started, when every core container is already up to date.
+        The helper outlives this call (and this Agent, which it replaces); see the module
+        docstring for why each of its options is there.
+        """
         file = str(core_project_file(self._roots))
         what = _WHAT["self-update"]
-        self._pull(file, CORE_PROJECT_NAME, what)
+        images = self._core_images(file)
+        if not self._core_is_behind(images):
+            return False
+        try:
+            socket_gid = int(self._socket_gid())
+        except (OSError, ValueError):
+            raise RunnerError(
+                f"{what} failed: Docker's socket was not found. {LOG_HINT}") from None
         self._remove_updater()
-        agent_image = self._core_agent_image(file)
+        config = str(self._roots.config)
         argv = [
-            "docker", "run", "-d", "--rm",
+            "docker", "run", "-d",
             "--name", UPDATER_CONTAINER,
-            "-v", "/var/run/docker.sock:/var/run/docker.sock",
-            "-v", f"{self._roots.config}:{self._roots.config}",
-            agent_image,
+            "--network", "none",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--read-only",
+            "--tmpfs", UPDATER_TMPFS,
+            "--pids-limit", UPDATER_PIDS,
+            "--memory", UPDATER_MEMORY,
+            # Root with no capabilities reaches the socket as its owner or through its group.
+            "--group-add", str(socket_gid),
+            # The docker CLI keeps its (empty) settings in the tmpfs, not the read-only root.
+            "-e", "HOME=/tmp",
+            "-e", "DOCKER_CONFIG=/tmp/.docker",
+            "-v", f"{DOCKER_SOCKET}:{DOCKER_SOCKET}",
+            "-v", f"{config}:{config}:ro",
+            images["orama-agent"],
             "docker", "compose",
-            "--project-directory", str(self._roots.config),
+            "--project-directory", config,
             "--env-file", str(agent_env_file(self._roots)),
             "-p", CORE_PROJECT_NAME,
             "-f", file,
-            "up", "-d", "--remove-orphans", "--wait",
+            "up", "-d", "--pull", "never", "--remove-orphans",
+            "--wait", "--wait-timeout", UPDATER_WAIT_SECONDS,
         ]
         self._exec(argv, what, CALL_TIMEOUT)
+        return True
 
     def recyclarr_sync(self) -> None:
         """Run Recyclarr once on the config the Agent wrote, as PUID:PGID on orama-net."""
@@ -354,8 +472,12 @@ class FakeRunner:
         self.recyclarr_calls = 0
         self.on_recyclarr: Callable[[], None] | None = None
         self.fail_next_recyclarr = False
+        self.self_update_pull_calls = 0
+        self.fail_next_self_update_pull = False
+        self.on_self_update_pull: Callable[[], None] | None = None
         self.self_update_calls = 0
         self.fail_next_self_update = False
+        self.core_is_behind = True  # what both update steps report
 
     def up(self, project_file: str) -> list[str]:
         self.up_calls += 1
@@ -384,11 +506,21 @@ class FakeRunner:
         self.starts.append(_checked_app(app))
         self._stopped.discard(app)
 
-    def self_update(self) -> None:
+    def self_update_pull(self) -> bool:
+        self.self_update_pull_calls += 1
+        if self.on_self_update_pull is not None:
+            self.on_self_update_pull()
+        if self.fail_next_self_update_pull:
+            self.fail_next_self_update_pull = False
+            raise RunnerError(f"{PULL_FAILED} {LOG_HINT}", "exit code 1")
+        return self.core_is_behind
+
+    def self_update(self) -> bool:
         self.self_update_calls += 1
         if self.fail_next_self_update:
             self.fail_next_self_update = False
             raise RunnerError(f"{_WHAT['self-update']} failed. {LOG_HINT}", "exit code 1")
+        return self.core_is_behind
 
     def recyclarr_sync(self) -> None:
         self.recyclarr_calls += 1

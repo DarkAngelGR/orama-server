@@ -63,6 +63,9 @@ class FakeAgent:
     def data_space(self):
         return {"total_bytes": 1000 * 1024**3, "free_bytes": 500 * 1024**3}
 
+    def self_update_pull(self):
+        return True
+
     def self_update(self):
         return True
 

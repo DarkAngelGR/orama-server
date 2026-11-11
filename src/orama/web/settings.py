@@ -66,6 +66,11 @@ GRAPHICS_BAD = ("Orama cannot use what the installer found. Run the installer ag
                 "try once more.")
 IN_USE = ("You are using Orama through that name right now. Open it with another address "
           "first.")
+UPDATE_STARTED = ("Update started. Orama restarts by itself if a newer version was downloaded "
+                  "— reload this page in a minute.")
+UP_TO_DATE = "Orama is already on the newest version. Nothing was changed."
+UPDATE_WAITING = ("The download is finished, but Orama is busy applying the setup, so it has not "
+                  "restarted. Press Update Orama again when that has finished.")
 HOST_NAME_BAD = ("That is not a name Orama can use. Use lower-case letters, digits, dots and "
                  "hyphens, like media.example.")
 
@@ -245,8 +250,10 @@ def _pages() -> Blueprint:
             message = "Saved. New requests and storage checks use these settings."
         elif not message and saved == "password":
             message = "Your password is changed. Other sessions were signed out."
-        elif not message and saved == "updated":
-            message = "Orama is up to date."
+        elif not message and saved == "updating":
+            message = UPDATE_STARTED
+        elif not message and saved == "current":
+            message = UP_TO_DATE
         req_override = overrides.get("requests", {})
         request_values = (
             req_override.get("values")
@@ -483,6 +490,14 @@ def _pages() -> Blueprint:
     @pages.post("/settings/update-orama")
     @auth.requires("settings")
     def update_orama():
+        """Download the newest Orama, then restart on it. Two Agent calls, on purpose.
+
+        The download can take minutes and changes nothing that runs, so it holds none of
+        Orama's locks: applies and Settings saves carry on. The restart replaces this very
+        process, so it must not land in the middle of an apply: it runs only while the
+        apply gate and ``apply.lock`` are free, and holds both for the few seconds the
+        Agent needs to start it.
+        """
         st = auth.web_state()
         path = st.state_dir / SETUP_FILE
         if not path.exists():
@@ -493,6 +508,8 @@ def _pages() -> Blueprint:
         if (st.state_dir / DRAFT_FILE).exists():
             return draft_page()
         try:
+            if not st.agent.self_update_pull():
+                return redirect("/settings?saved=current", 303)
             with apply_operation(st):
                 job = st.jobs.current()
                 if job and job.status == "running":
@@ -500,12 +517,12 @@ def _pages() -> Blueprint:
                 with state.locked(state.apply_lock(st.state_dir), blocking=False):
                     if (st.state_dir / DRAFT_FILE).exists():
                         return draft_page()
-                    st.agent.self_update()
+                    started = st.agent.self_update()
         except state.Busy:
-            return render_page(409, message=TEST_BUSY, problem=True)
+            return render_page(409, message=UPDATE_WAITING, problem=True)
         except AgentError as e:
             return render_page(502, message=e.message, problem=True)
-        return redirect("/settings?saved=updated", 303)
+        return redirect("/settings?saved=updating" if started else "/settings?saved=current", 303)
 
     @pages.post("/settings/discard-draft")
     @auth.requires("settings")

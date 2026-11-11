@@ -14,12 +14,20 @@ import pytest
 import yaml
 from conftest import make_setup, random_secret
 
-from orama.agent_client import DEFAULT_TIMEOUT, AgentClient, AgentError
+from orama.agent_client import (
+    DEFAULT_TIMEOUT,
+    SELF_UPDATE_PULL_TIMEOUT,
+    SELF_UPDATE_TIMEOUT,
+    AgentClient,
+    AgentError,
+)
 from orama.catalog import CATALOG
-from orama.compose import build_apps_compose
+from orama.compose import build_apps_compose, build_core_compose, dump_yaml
 from orama.layout import app_config_dir, app_env_dir, app_env_file, data_folders
 from orama_agent.runner import (
     CALL_TIMEOUT,
+    CORE_CONTAINERS,
+    CORE_PULL_TIMEOUT,
     PULL_TIMEOUT,
     UP_TIMEOUT,
     ComposeRunner,
@@ -27,7 +35,9 @@ from orama_agent.runner import (
     RunnerError,
 )
 from orama_agent.server import (
+    COMMANDS,
     MAX_REQUEST,
+    UPDATE_BUSY,
     AgentServer,
     _env_file_text,
     _parse_env_file,
@@ -139,13 +149,26 @@ def test_unknown_command_refused(agent):
     resp = agent.call("rm -rf", {})
     assert resp == {"id": "t1", "ok": False, "error": "unknown command"}
 
-def test_self_update_requires_core_compose(agent):
-    resp = agent.call("self-update", {})
+
+@pytest.mark.parametrize("cmd", [
+    "self-update-recreate", "self-update-pull ", "self_update", "self-update --pull",
+    "SELF-UPDATE", "update", "pull", "self-update-pull\x00",
+])
+def test_commands_near_self_update_are_unknown(agent, cmd):
+    assert cmd not in COMMANDS
+    assert agent.call(cmd, {}) == {"id": "t1", "ok": False, "error": "unknown command"}
+    assert agent.runner.self_update_pull_calls == agent.runner.self_update_calls == 0
+
+
+@pytest.mark.parametrize("cmd", ["self-update-pull", "self-update"])
+def test_self_update_requires_core_compose(agent, cmd):
+    resp = agent.call(cmd, {})
     assert resp == {
         "id": "t1",
         "ok": False,
         "error": "Orama's core compose file is missing; run the installer first.",
     }
+    assert agent.runner.self_update_pull_calls == agent.runner.self_update_calls == 0
 
 @pytest.mark.parametrize(
     "line",
@@ -545,6 +568,15 @@ def test_client_timeout_exceeds_agent_worst_case():
     assert PULL_TIMEOUT == 3600
     assert DEFAULT_TIMEOUT > CALL_TIMEOUT + PULL_TIMEOUT + UP_TIMEOUT + CALL_TIMEOUT
     assert AgentClient().timeout == DEFAULT_TIMEOUT
+
+
+def test_self_update_client_timeouts_exceed_agent_worst_case():
+    # Download: one pull (with its retries inside the same budget), then two image checks.
+    assert CORE_PULL_TIMEOUT < PULL_TIMEOUT
+    assert SELF_UPDATE_PULL_TIMEOUT > CORE_PULL_TIMEOUT + 2 * CALL_TIMEOUT
+    # Restart: two image checks, remove the old helper, start the new one.
+    assert SELF_UPDATE_TIMEOUT > 4 * CALL_TIMEOUT
+    assert SELF_UPDATE_TIMEOUT <= 600  # apply.lock is held for this call: keep it short
 
 
 def test_client_honours_timeout(tmp_path):
@@ -1088,74 +1120,294 @@ def test_data_space_returns_bytes_and_refuses_arguments_or_bad_root(agent, roots
         agent.client.data_space()
 
 
-def test_self_update_runs_and_refuses_args_or_links(agent, roots, tmp_path):
-    core_file = roots.config / "core.compose.yaml"
-    core_file.write_text("name: orama-core\nservices: {}\n")
+# ---------------------------------------------------------------- self-update
+
+DOCKER_GID = 996
+ORAMA_IMAGE = "ghcr.io/darkangelgr/orama:0.1.0"
+AGENT_IMAGE = "ghcr.io/darkangelgr/orama-agent:0.1.0"
+OLD_ORAMA, OLD_AGENT, NEW_ORAMA = ("sha256:" + c * 64 for c in "abc")
+
+
+def write_core(roots, **images):
+    """The core project file as the installer's bootstrap writes it."""
+    doc = build_core_compose(PurePosixPath(roots.config), PurePosixPath(roots.data),
+                             roots.puid, roots.pgid, DOCKER_GID, 8765, **images)
+    path = roots.config / "core.compose.yaml"
+    path.write_text(dump_yaml(doc))
+    return path
+
+
+def _core_prefix(roots):
+    return [
+        "docker", "compose",
+        "--project-directory", str(roots.config),
+        "--env-file", str(roots.config / "app-env" / "compose.env"),
+        "-p", "orama-core",
+        "-f", str(roots.config / "core.compose.yaml"),
+    ]
+
+
+def _core_runner(roots, outputs):
+    run = FakeRun(outputs)
+    return ComposeRunner(roots, run=run, socket_gid=lambda: DOCKER_GID), run
+
+
+RUNNING_IMAGES = ["docker", "container", "inspect", "--format", "{{.Image}}",
+                  "orama-server", "orama-server-agent"]
+PULLED_IMAGES = ["docker", "image", "inspect", "--format", "{{.Id}}", ORAMA_IMAGE, AGENT_IMAGE]
+SAME = [f"{OLD_ORAMA}\n{OLD_AGENT}\n", f"{OLD_ORAMA}\n{OLD_AGENT}\n"]
+BEHIND = [f"{OLD_ORAMA}\n{OLD_AGENT}\n", f"{NEW_ORAMA}\n{OLD_AGENT}\n"]
+
+
+def test_self_update_steps_run_and_refuse_args_or_links(agent, roots, tmp_path):
+    core_file = write_core(roots)
+    assert agent.client.self_update_pull() is True
     assert agent.client.self_update() is True
-    assert agent.runner.self_update_calls == 1
+    assert (agent.runner.self_update_pull_calls, agent.runner.self_update_calls) == (1, 1)
     env_file = Path(app_env_dir(PurePosixPath(roots.config))) / "compose.env"
     assert env_file.exists() and stat.S_IMODE(os.lstat(env_file).st_mode) == 0o600
 
-    # Any arguments are refused
-    for bad in ({"image": "evil:latest"}, {"flags": "--privileged"}, {"x": 1}):
-        resp = agent.call("self-update", bad)
-        assert resp["ok"] is False and "no arguments" in resp["error"]
-    assert agent.runner.self_update_calls == 1
+    # Nothing newer: both steps say so.
+    agent.runner.core_is_behind = False
+    assert agent.client.self_update_pull() is False
+    assert agent.client.self_update() is False
+    agent.runner.core_is_behind = True
+    assert (agent.runner.self_update_pull_calls, agent.runner.self_update_calls) == (2, 2)
 
-    # Symlink at core.compose.yaml is refused without running self_update
+    # Any argument is refused: no image, flag, path or service can be chosen by the client.
+    for cmd in ("self-update-pull", "self-update"):
+        for bad in ({"image": "evil:latest"}, {"flags": "--privileged"}, {"x": 1},
+                    {"pull": True}, {"services": ["orama"]}, {"path": "/"}):
+            resp = agent.call(cmd, bad)
+            assert resp["ok"] is False and "no arguments" in resp["error"], (cmd, bad)
+    assert (agent.runner.self_update_pull_calls, agent.runner.self_update_calls) == (2, 2)
+
+    # A link at core.compose.yaml is refused before Docker is touched.
     outside = tmp_path / "outside.yaml"
     outside.write_text("name: evil\n")
     core_file.unlink()
     core_file.symlink_to(outside)
-    with pytest.raises(AgentError, match="link"):
-        agent.client.self_update()
-    assert agent.runner.self_update_calls == 1
+    for call in (agent.client.self_update_pull, agent.client.self_update):
+        with pytest.raises(AgentError, match="link"):
+            call()
+    assert (agent.runner.self_update_pull_calls, agent.runner.self_update_calls) == (2, 2)
 
-    # Runner failure surfaces plain message
-    core_file.unlink()
-    core_file.write_text("name: orama-core\nservices: {}\n")
+
+def test_self_update_failures_are_plain(agent, roots):
+    write_core(roots)
+    agent.runner.fail_next_self_update_pull = True
+    with pytest.raises(AgentError) as failed:
+        agent.client.self_update_pull()
+    assert "could not download the update, so nothing was changed" in failed.value.message
+    assert "exit code" not in failed.value.message
+    assert agent.runner.self_update_calls == 0  # a failed download never restarts anything
+
     agent.runner.fail_next_self_update = True
     with pytest.raises(AgentError, match="Updating Orama failed"):
         agent.client.self_update()
+    # The update lock is free again after each failure.
+    assert agent.client.self_update_pull() is True
+    assert agent.client.self_update() is True
 
 
-def test_compose_runner_self_update_argv_and_pull_failure(roots):
-    core = str(roots.config / "core.compose.yaml")
-    expected_prefix = [
-        "docker", "compose",
-        "--project-directory", str(roots.config),
-        "--env-file", str(roots.config / "app-env" / "compose.env"),
-        "-p", "orama-core",
-        "-f", core,
-    ]
+def test_a_long_download_blocks_nothing_but_another_update(agent, roots):
+    write_core(roots)
+    started, release = threading.Event(), threading.Event()
+
+    def slow_download():
+        started.set()
+        assert release.wait(10)
+
+    agent.runner.on_self_update_pull = slow_download
+    results = []
+    worker = threading.Thread(target=lambda: results.append(agent.client.self_update_pull()))
+    worker.start()
+    try:
+        assert started.wait(5)
+        began = time.monotonic()
+        assert agent.client.status() == {}
+        folder = str(data_folders(PurePosixPath(roots.data))[0])
+        assert agent.client.ensure_folders([folder])["created"]
+        assert agent.client.data_space()["total_bytes"] > 0
+        assert time.monotonic() - began < 5
+        # A second download, or a restart in the middle of this one, is refused at once.
+        for cmd in ("self-update-pull", "self-update"):
+            assert agent.call(cmd, {}) == {"id": "t1", "ok": False, "error": UPDATE_BUSY}
+        assert (agent.runner.self_update_pull_calls, agent.runner.self_update_calls) == (1, 0)
+    finally:
+        release.set()
+        worker.join(10)
+    assert results == [True]
+    assert agent.client.self_update() is True
+
+
+def test_download_does_not_wait_for_a_running_apply(agent, roots):
+    write_core(roots)
+    with agent.server.agent._lock:  # an apply (or any other command) is in progress
+        assert agent.client.self_update_pull() is True
+        # The restart does wait for it: it must never run in the middle of an apply.
+        with pytest.raises(AgentError, match="did not answer"):
+            AgentClient(agent.socket_path, timeout=0.5).self_update()
+    assert agent.runner.self_update_pull_calls == 1
+
+
+def test_core_container_names_match_the_core_project(roots):
+    doc = build_core_compose(PurePosixPath(roots.config), PurePosixPath(roots.data),
+                             roots.puid, roots.pgid, DOCKER_GID, 8765)
+    assert CORE_CONTAINERS == {
+        name: service["container_name"] for name, service in doc["services"].items()}
+
+
+def test_compose_runner_self_update_pull_argv_and_result(roots):
+    write_core(roots)
+    runner, run = _core_runner(roots, ["", *BEHIND])
+    assert runner.self_update_pull() is True
+    assert [argv for argv, _ in run.calls] == [
+        _core_prefix(roots) + ["pull", "--quiet"], RUNNING_IMAGES, PULLED_IMAGES]
+    assert run.calls[0][1]["timeout"] == CORE_PULL_TIMEOUT
+    assert run.calls[1][1]["timeout"] == run.calls[2][1]["timeout"] == CALL_TIMEOUT
+    for _, kw in run.calls:
+        assert kw["shell"] is False
+
+    # Every core container already runs what its image name now points at: nothing newer.
+    runner, run = _core_runner(roots, ["", *SAME])
+    assert runner.self_update_pull() is False
+
+
+@pytest.mark.parametrize("answers", [
+    [None, SAME[1]],                                  # the containers cannot be inspected
+    [SAME[0], None],                                  # an image is missing
+    [f"{OLD_ORAMA}\n", f"{OLD_ORAMA}\n"],             # one line instead of two
+    ["yes\nyes\n", "yes\nyes\n"],                     # not image ids
+    [f"{OLD_ORAMA}\n{OLD_AGENT}\n", f"{OLD_AGENT}\n{OLD_ORAMA}\n"],  # swapped
+    ["", ""],
+])
+def test_compose_runner_when_unsure_an_update_counts_as_newer(roots, answers):
+    write_core(roots)
+    runner, _run = _core_runner(roots, ["", *answers])
+    assert runner.self_update_pull() is True
+
+
+@pytest.mark.parametrize("stderr", [
+    'Error response from daemon: Get "https://ghcr.io/v2/": dial tcp: no such host',
+    "Error response from daemon: unauthorized",
+    "manifest unknown",
+])
+def test_compose_runner_failed_download_is_plain_and_changes_nothing(roots, stderr):
+    write_core(roots)
+    calls = []
+
+    def offline(argv, **_kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+    runner = ComposeRunner(roots, run=offline, socket_gid=lambda: DOCKER_GID)
+    with pytest.raises(RunnerError) as failed:
+        runner.self_update_pull()
+    message = str(failed.value)
+    assert message.startswith(
+        "Orama could not download the update, so nothing was changed. "
+        "Check the internet connection and try again.")
+    assert "sudo docker logs orama-server-agent" in message
+    assert stderr not in message and stderr in failed.value.detail
+    # Only the download was tried: nothing was inspected, removed or started.
+    assert calls == [_core_prefix(roots) + ["pull", "--quiet"]]
+
+
+def test_compose_runner_self_update_helper_is_hardened_and_fixed(roots):
+    core = str(write_core(roots))
     expected_helper = [
-        "docker", "run", "-d", "--rm",
+        "docker", "run", "-d",
         "--name", "orama-updater",
+        "--network", "none",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m",
+        "--pids-limit", "256",
+        "--memory", "512m",
+        "--group-add", str(DOCKER_GID),
+        "-e", "HOME=/tmp",
+        "-e", "DOCKER_CONFIG=/tmp/.docker",
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
-        "-v", f"{roots.config}:{roots.config}",
-        "ghcr.io/darkangelgr/orama-agent:0.1.0",
+        "-v", f"{roots.config}:{roots.config}:ro",
+        AGENT_IMAGE,
         "docker", "compose",
         "--project-directory", str(roots.config),
         "--env-file", str(roots.config / "app-env" / "compose.env"),
         "-p", "orama-core",
         "-f", core,
-        "up", "-d", "--remove-orphans", "--wait",
+        "up", "-d", "--pull", "never", "--remove-orphans", "--wait", "--wait-timeout", "300",
     ]
-    run = FakeRun(["", "", ""])
-    ComposeRunner(roots, run=run).self_update()
-    assert len(run.calls) == 3
-    assert run.calls[0][0] == expected_prefix + ["pull", "--quiet"]
-    assert run.calls[0][1]["timeout"] <= PULL_TIMEOUT
-    assert run.calls[1][0] == ["docker", "rm", "-f", "orama-updater"]
-    assert run.calls[1][1]["timeout"] == CALL_TIMEOUT
-    assert run.calls[2][0] == expected_helper
-    assert run.calls[2][1]["timeout"] == CALL_TIMEOUT
+    runner, run = _core_runner(roots, [*BEHIND, "", ""])
+    assert runner.self_update() is True
+    assert [argv for argv, _ in run.calls] == [
+        RUNNING_IMAGES, PULLED_IMAGES, ["docker", "rm", "-f", "orama-updater"], expected_helper]
+    for argv, kw in run.calls:
+        assert kw["timeout"] == CALL_TIMEOUT and kw["shell"] is False
+        assert argv[-2:] != ["pull", "--quiet"]  # the restart step never downloads
+    assert "--privileged" not in expected_helper and "--rm" not in expected_helper
 
-    # When pull fails, neither updater removal nor helper container run happens
-    fail_pull = FakeRun([None, ""])
+    # The helper image is the Agent image named in the installer's own file.
+    write_core(roots, agent_image="ghcr.io/darkangelgr/orama-agent:9.8.7")
+    runner, run = _core_runner(roots, [*BEHIND, "", ""])
+    assert runner.self_update() is True
+    helper = run.calls[-1][0]
+    assert helper[helper.index("docker", 1) - 1] == "ghcr.io/darkangelgr/orama-agent:9.8.7"
+
+
+def test_compose_runner_self_update_starts_no_helper_when_up_to_date(roots):
+    write_core(roots)
+    runner, run = _core_runner(roots, list(SAME))
+    assert runner.self_update() is False
+    assert [argv for argv, _ in run.calls] == [RUNNING_IMAGES, PULLED_IMAGES]
+
+
+def test_compose_runner_self_update_helper_failure_is_plain(roots):
+    write_core(roots)
+    runner, run = _core_runner(roots, [*BEHIND, "", None])
     with pytest.raises(RunnerError, match="Updating Orama failed"):
-        ComposeRunner(roots, run=fail_pull).self_update()
-    assert len(fail_pull.calls) == 1
+        runner.self_update()
+
+    def no_socket():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    run = FakeRun(list(BEHIND))
+    with pytest.raises(RunnerError, match="Updating Orama failed"):
+        ComposeRunner(roots, run=run, socket_gid=no_socket).self_update()
+    assert all(argv[1] != "run" for argv, _ in run.calls)
+
+
+@pytest.mark.parametrize("image", [
+    "--privileged", "-v/:/host", "evil image", "evil:latest --privileged", "img;reboot",
+    "$(reboot)", "IMG:tag", "ghcr.io/x/y:", ":tag", "", "a" * 300, 7, None, ["x"],
+    "ghcr.io/x/y\n--privileged",
+])
+def test_compose_runner_refuses_a_core_file_with_a_strange_image(roots, image):
+    path = write_core(roots)
+    doc = yaml.safe_load(path.read_text())
+    for service in ("orama-agent", "orama"):
+        changed = json.loads(json.dumps(doc))
+        changed["services"][service]["image"] = image
+        path.write_text(yaml.safe_dump(changed))
+        for step in ("self_update_pull", "self_update"):
+            runner, run = _core_runner(roots, ["", *BEHIND, "", ""])
+            with pytest.raises(RunnerError, match="Run the installer again"):
+                getattr(runner, step)()
+            assert run.calls == []  # Docker was never called
+
+
+@pytest.mark.parametrize("text", [
+    "", "[]", "services: 7\n", "services:\n  orama: {image: 'ghcr.io/darkangelgr/orama:1'}\n",
+    "services:\n  orama-agent: 3\n", "{not yaml",
+])
+def test_compose_runner_refuses_a_damaged_core_file(roots, text):
+    (roots.config / "core.compose.yaml").write_text(text)
+    for step in ("self_update_pull", "self_update"):
+        runner, run = _core_runner(roots, ["", *BEHIND, "", ""])
+        with pytest.raises(RunnerError, match="Run the installer again"):
+            getattr(runner, step)()
+        assert run.calls == []
 
 
 def test_compose_runner_pull_falls_back_to_sequential_on_toomanyrequests(roots, monkeypatch):

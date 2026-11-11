@@ -12,6 +12,7 @@ import pytest
 from conftest import make_setup, random_secret
 
 from orama import state
+from orama.agent_client import AgentError
 from orama.secrets import VPN_KEY_NAME, SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import catalogue, draft, forms, wizard
@@ -1360,61 +1361,163 @@ def test_requests_policy_saves_and_validates(signed, app, runner):
     assert live(app).request_wait_hours == 48
 
 
-def test_update_orama_calls_agent_and_guards_busy_or_draft(signed, app, tmp_path):
-    from orama.agent_client import AgentError
+UPDATE_STARTED = ("Update started. Orama restarts by itself if a newer version was downloaded "
+                  "— reload this page in a minute.")
+UP_TO_DATE = "Orama is already on the newest version. Nothing was changed."
+UPDATE_WAITING = "The download is finished, but Orama is busy applying the setup"
 
-    calls = []
 
-    class StubAgent:
-        def __init__(self):
-            self.fail = False
+class UpdateAgent:
+    """The Agent's two update steps, recording which of Orama's locks were held during each."""
 
-        def self_update(self):
-            calls.append(1)
-            if self.fail:
-                raise AgentError(
-                    "Updating Orama failed. To see why, run: sudo docker logs orama-server-agent"
-                )
-            return True
+    def __init__(self, app):
+        self._app = app
+        self.calls: list[str] = []
+        self.locks: dict[str, tuple[bool, bool]] = {}
+        self.newer = True
+        self.started = True
+        self.pull_error = ""
+        self.restart_error = ""
 
-    stub = StubAgent()
-    app.extensions["orama"].agent = stub
+    def _held(self) -> tuple[bool, bool]:
+        """(the in-process apply gate is held, apply.lock is held)."""
+        gate = self._app.extensions["orama"].apply_gate
+        gate_held = not gate.acquire(blocking=False)
+        if not gate_held:
+            gate.release()
+        try:
+            with state.locked(state.apply_lock(sd(self._app)), blocking=False):
+                lock_held = False
+        except state.Busy:
+            lock_held = True
+        return gate_held, lock_held
 
-    # 1. Successful update redirects and displays confirmation notice
+    def self_update_pull(self) -> bool:
+        self.calls.append("pull")
+        self.locks["pull"] = self._held()
+        if self.pull_error:
+            raise AgentError(self.pull_error)
+        return self.newer
+
+    def self_update(self) -> bool:
+        self.calls.append("restart")
+        self.locks["restart"] = self._held()
+        if self.restart_error:
+            raise AgentError(self.restart_error)
+        return self.started
+
+
+@pytest.fixture
+def updater(app):
+    agent = UpdateAgent(app)
+    app.extensions["orama"].agent = agent
+    return agent
+
+
+def test_update_orama_downloads_without_locks_then_restarts_under_apply_lock(signed, updater):
     response = post(signed, "/settings/update-orama")
     assert response.status_code == 303
-    assert response.headers["Location"] == "/settings?saved=updated"
-    assert len(calls) == 1
-    assert "Orama is up to date." in page(signed.get("/settings?saved=updated"))
+    assert response.headers["Location"] == "/settings?saved=updating"
+    assert updater.calls == ["pull", "restart"]
+    # The download (minutes) holds nothing, so applies and Settings saves keep working;
+    # the restart (seconds) holds both, so it never lands in the middle of an apply.
+    assert updater.locks == {"pull": (False, False), "restart": (True, True)}
+    html = page(signed.get("/settings?saved=updating"))
+    assert UPDATE_STARTED in html
+    assert "Orama is up to date" not in html and UP_TO_DATE not in html
+    # Both locks are free again afterwards.
+    assert updater._held() == (False, False)
 
-    # 2. AgentError returns 502 with plain message
-    stub.fail = True
+
+def test_update_orama_says_so_when_nothing_newer_was_downloaded(signed, updater):
+    updater.newer = False
+    response = post(signed, "/settings/update-orama")
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/settings?saved=current"
+    assert updater.calls == ["pull"]  # nothing to restart: no lock taken, no helper started
+    html = page(signed.get("/settings?saved=current"))
+    assert UP_TO_DATE in html and UPDATE_STARTED not in html
+
+    # The Agent's own second look also counts.
+    updater.newer, updater.started = True, False
+    again = post(signed, "/settings/update-orama")
+    assert again.headers["Location"] == "/settings?saved=current"
+    assert updater.calls == ["pull", "pull", "restart"]
+
+
+def test_update_orama_old_success_wording_is_gone(signed):
+    assert "Orama is up to date." not in page(signed.get("/settings?saved=updated"))
+
+
+def test_update_orama_failed_download_is_plain_and_restarts_nothing(signed, updater):
+    updater.pull_error = ("Orama could not download the update, so nothing was changed. "
+                          "Check the internet connection and try again.")
+    failed = post(signed, "/settings/update-orama")
+    assert failed.status_code == 502
+    assert updater.pull_error in page(failed)
+    assert updater.calls == ["pull"]
+    assert UPDATE_STARTED not in page(failed)
+
+
+def test_update_orama_failed_restart_is_plain(signed, updater):
+    updater.restart_error = (
+        "Updating Orama failed. To see why, run: sudo docker logs orama-server-agent")
     failed = post(signed, "/settings/update-orama")
     assert failed.status_code == 502
     assert "Updating Orama failed." in page(failed)
-    stub.fail = False
+    assert updater.calls == ["pull", "restart"]
+    assert updater._held() == (False, False)
 
-    # 3. Unfinished draft blocks update-orama
+
+def test_update_orama_needs_a_setup_and_no_unfinished_change(signed, app, updater):
     write_setup(sd(app), "setup.draft.json", device="apple_tv")
-    draft_resp = post(signed, "/settings/update-orama")
-    assert draft_resp.status_code == 409
-    assert "Nothing was saved." in page(draft_resp)
-    assert len(calls) == 2
+    blocked = post(signed, "/settings/update-orama")
+    assert blocked.status_code == 409
+    assert "Nothing was saved." in page(blocked)
     (sd(app) / "setup.draft.json").unlink()
 
-    # 4. Running apply job blocks update-orama with 409 Busy
+    token = csrf_from(signed.get("/settings"))
+    (sd(app) / "setup.json").unlink()
+    missing = signed.post("/settings/update-orama", data={"csrf_token": token})
+    assert missing.status_code == 409
+    assert "Finish the setup first." in page(missing)
+    assert updater.calls == []
+
+
+def test_update_orama_does_not_restart_during_an_apply(signed, app, updater, tmp_path):
+    # 1. An apply job started from the web is running.
     gate = tmp_path / "gate"
     code = f"import time,pathlib\nwhile not pathlib.Path({str(gate)!r}).exists(): time.sleep(0.02)\n"
     job = JobRunner(sd(app), lambda p: [sys.executable, "-c", code])
     app.extensions["orama"].jobs = job
     job.start(sd(app) / "setup.json")
     try:
-        busy_resp = post(signed, "/settings/update-orama")
+        busy = post(signed, "/settings/update-orama")
     finally:
         gate.write_text("x")
         job.wait(10)
-    assert busy_resp.status_code == 409
-    assert "Orama is busy applying the setup." in page(busy_resp)
-    assert len(calls) == 2
+    assert busy.status_code == 409
+    assert UPDATE_WAITING in page(busy)
+    assert "Press Update Orama again" in page(busy)
+    assert updater.calls == ["pull"]  # the download needs no lock; the restart was not tried
+
+    # 2. An apply started elsewhere (the installer or the command line) holds apply.lock.
+    with state.locked(state.apply_lock(sd(app))):
+        held = post(signed, "/settings/update-orama")
+    assert held.status_code == 409 and UPDATE_WAITING in page(held)
+    assert updater.calls == ["pull", "pull"]
+
+    # 3. Free again: the same button now finishes the update.
+    assert post(signed, "/settings/update-orama").headers["Location"] == "/settings?saved=updating"
+    assert updater.calls == ["pull", "pull", "pull", "restart"]
+
+
+def test_update_orama_needs_csrf_and_sign_in(signed, client, app, updater):
+    assert signed.post("/settings/update-orama", data={}).status_code == 403
+    assert signed.get("/settings/update-orama").status_code == 405
+    fresh = app.test_client()
+    refused = fresh.post("/settings/update-orama", data={})
+    assert refused.status_code in (303, 403)
+    assert updater.calls == []
 
 

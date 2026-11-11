@@ -22,7 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
+from orama import state
 from orama.wiring.plex import WAITING_FOR_SIGN_IN
 from orama_agent import recyclarr
 
@@ -59,6 +61,9 @@ NEWZNAB = "orama-test-newznab"
 PROXY_STAND_IN = "orama-test-proxy"
 FAKE_SERVER_HOST = "fake-nntp.invalid"
 SYNC_TIMEOUT = 120
+UPDATER = "orama-updater"  # the helper container the Agent starts to restart Orama
+UPDATE_TIMEOUT = 600
+CORE_CONTAINERS = {"orama": "orama-server", "orama-agent": "orama-server-agent"}
 WIRED_APPS = ["prowlarr", "sonarr", "radarr", "sabnzbd", "qbittorrent"]
 
 
@@ -870,6 +875,151 @@ def test_debian_12_installer_and_agent_self_update_contract(
     )
     checked = run(["docker", "exec", "orama-server", "python", "-c", probe])
     assert checked.returncode == 0 and checked.stdout.strip() == "refused-ok"
+
+
+def agent_probe(expression: str, timeout: float = 300) -> dict:
+    """One AgentClient call made inside Orama: ``{"result": ...}`` or ``{"error": message}``."""
+    snippet = (
+        "import json\n"
+        "from orama.agent_client import AgentClient, AgentError\n"
+        "client = AgentClient()\n"
+        "try:\n"
+        f"    print(json.dumps({{'result': {expression}}}))\n"
+        "except AgentError as e:\n"
+        "    print(json.dumps({'error': e.message}))\n"
+    )
+    out = run(["docker", "exec", "orama-server", "python", "-c", snippet], timeout=timeout)
+    assert out.returncode == 0, f"the Agent probe failed:\n{out.stdout}"
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def wait_for_idle_orama(host: Host, port: int, timeout: float = APPLY_TIMEOUT) -> None:
+    """Orama answers again and no apply is running (a restarted Orama may start one)."""
+    deadline = time.monotonic() + timeout
+    quiet = 0
+    while quiet < 3:
+        assert time.monotonic() < deadline, "Orama did not settle after its restart"
+        time.sleep(3)
+        try:
+            with state.locked(state.apply_lock(host.state_dir), blocking=False):
+                free = True
+        except state.Busy:
+            free = False
+        quiet = quiet + 1 if free and http_get(port, "/healthz") == (200, "ok") else 0
+
+
+def test_self_update_against_the_real_core_project(
+    clean_host: Host, installed: dict, outputs: Outputs
+):
+    """The Agent's two update steps on the installed core project (Plan 5 Task 2).
+
+    No registry is involved: "a newer version was downloaded" is made by giving the two
+    image names a new image locally, which is exactly the state a real download leaves.
+    """
+    port = installed["port"]
+    core_file = clean_host.config_root / "core.compose.yaml"
+    services = yaml.safe_load(core_file.read_text(encoding="utf-8"))["services"]
+    images = {service: services[service]["image"] for service in CORE_CONTAINERS}
+    run(["docker", "rm", "-f", UPDATER])
+    before = container_ids()
+
+    # Exact commands, no arguments: nothing about the update can be chosen by the caller.
+    for cmd in ("self-update-pull", "self-update"):
+        refused = agent_probe(f"client._call({cmd!r}, {{'image': 'evil:latest'}})")
+        assert "no arguments" in refused["error"], refused
+    assert agent_probe("client._call('self-update-recreate', {})") == {"error": "unknown command"}
+
+    # 1. Nothing newer is downloaded: nothing is started, nothing changes.
+    assert agent_probe("client.self_update()") == {"result": False}
+    assert run(["docker", "inspect", UPDATER]).returncode != 0
+    assert container_ids() == before
+
+    # 2. The registry cannot be reached (as when the server is offline): a plain message,
+    #    and every container is left exactly as it was. The image names are pointed at a
+    #    host that can never resolve for the length of this one call, then put back.
+    original = core_file.read_bytes()
+    unreachable = original.replace(b"ghcr.io/", b"orama-it.invalid/")
+    assert unreachable != original
+    try:
+        core_file.write_bytes(unreachable)
+        failed = agent_probe("client.self_update_pull()", timeout=UPDATE_TIMEOUT)
+    finally:
+        core_file.write_bytes(original)
+    assert failed.get("error", "").startswith(
+        "Orama could not download the update, so nothing was changed. "
+        "Check the internet connection and try again."), failed
+    assert "invalid" not in failed["error"]
+    assert run(["docker", "inspect", UPDATER]).returncode != 0
+    assert container_ids() == before
+    assert http_get(port, "/healthz") == (200, "ok")
+
+    # 3. A newer version of both images is on the machine: the restart step recreates
+    #    Orama and the Agent through the hardened helper, and nothing else.
+    for name in CORE_CONTAINERS.values():  # these containers are about to be replaced
+        outputs.add(clean_host, f"docker-logs-{name}-before-update",
+                    run(["docker", "logs", name]).stdout)
+    newer = {}
+    for service, image in images.items():
+        run(["docker", "rm", "-f", "orama-it-newer"])
+        assert run(["docker", "create", "--name", "orama-it-newer", image]).returncode == 0
+        try:
+            committed = run(["docker", "commit", "--change", "LABEL orama.it=newer",
+                             "orama-it-newer", image])
+            assert committed.returncode == 0, committed.stdout
+        finally:
+            run(["docker", "rm", "-f", "orama-it-newer"])
+        newer[service] = run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image]).stdout.strip()
+    assert agent_probe("client.self_update()") == {"result": True}
+
+    deadline = time.monotonic() + UPDATE_TIMEOUT
+    while True:
+        helper = docker_inspect(UPDATER)
+        if helper["State"]["Status"] == "exited":
+            break
+        assert time.monotonic() < deadline, "the update helper did not finish"
+        time.sleep(3)
+    helper_log = run(["docker", "logs", UPDATER]).stdout
+    outputs.add(clean_host, "docker-logs-orama-updater", helper_log)
+    assert helper["State"]["ExitCode"] == 0, f"the update helper failed:\n{helper_log}"
+
+    # The helper holds the Docker socket, so it gets nothing else it does not need.
+    config = helper["HostConfig"]
+    assert config["NetworkMode"] == "none"
+    assert config["CapDrop"] == ["ALL"] and not config.get("CapAdd")
+    assert "no-new-privileges" in config["SecurityOpt"]
+    assert config["ReadonlyRootfs"] is True and config["Privileged"] is False
+    assert config["PidsLimit"] == 256 and config["Memory"] == 512 * 1024 * 1024
+    assert {m["Destination"]: m["RW"] for m in helper["Mounts"]} == {
+        "/var/run/docker.sock": True, str(clean_host.config_root): False}
+    assert helper["Config"]["Image"] == images["orama-agent"]
+
+    after = container_ids()
+    for service, name in CORE_CONTAINERS.items():
+        assert after[name] != before[name], f"{name} was not recreated"
+        info = docker_inspect(name)
+        assert info["Image"] == newer[service]
+        assert info["Config"]["Labels"]["orama.it"] == "newer"
+        assert info["State"]["Status"] == "running"
+    untouched = set(before) - set(CORE_CONTAINERS.values())
+    assert {n: after[n] for n in untouched} == {n: before[n] for n in untouched}
+    assert docker_inspect("orama-server-agent")["HostConfig"]["NetworkMode"] == "none"
+    assert poll_http(port, "/healthz") == 200
+
+    # 4. The new Agent answers, and a second update finds nothing to do.
+    wait_for_idle_orama(clean_host, port)
+    assert isinstance(agent_probe("client.status()")["result"], dict)
+    settled = container_ids()
+    assert agent_probe("client.self_update()") == {"result": False}
+    assert container_ids() == settled
+
+    # 5. The installer's own command for the core project (the host's compose, not the
+    #    helper's) agrees with what the helper created: running it changes nothing.
+    again = run(["docker", "compose", "-p", "orama-core",
+                 "--project-directory", str(clean_host.config_root),
+                 "-f", str(core_file), "up", "-d", "--wait"], timeout=UPDATE_TIMEOUT)
+    assert again.returncode == 0, again.stdout
+    assert container_ids() == settled, f"the installer's compose recreated Orama:\n{again.stdout}"
 
 
 def test_no_secret_in_logs_or_outputs(clean_host: Host, rerun: dict, outputs: Outputs):

@@ -25,6 +25,13 @@ Claude reviewed the `test` branch (Plan 4/5 work by Gemini and Codex) and is fix
   and an always-valid session token. The README now describes the real project. A unit test fails
   if those files come back. The CI `browser` job and `tests/web/browser_pass.cjs` are unchanged and
   still pass.
+- **F2 — Update Orama hardened and unblocked.** The update is now two Agent commands:
+  `self-update-pull` (download; blocks nothing) and `self-update` (restart; seconds, only while no
+  apply runs). The helper container that does the restart has no network, no capabilities, a
+  read-only file system and limits. The page tells the truth ("Update started…", or "already on
+  the newest version"). A failed or offline download changes nothing. Proved with unit tests and a
+  real-Docker integration test. Details and the one decision that differs from the spec (two
+  commands instead of one): `docs/superpowers/plans/2026-11-07-orama-r1-plan-5-notes.md`.
 
 ## Current handoff (Gemini, 2026-11-09)
 
