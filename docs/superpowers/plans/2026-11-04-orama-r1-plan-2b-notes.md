@@ -2,7 +2,7 @@
 
 Recorded from probes in `tests/integration/media_contracts.py`, run in the disposable CI install.
 Run ids (GitHub Actions): **41925893375** (earlier probes), **41926191557** (probe round 1),
-**41927471905** (probe round 2, commit fd79f88). Each line says *observed* or *assumed*.
+**41927471905** (probe round 2, commit 3c8c0fc). Each line says *observed* or *assumed*.
 Later tasks must keep an owner check (Task 11) for every *assumed* line.
 
 Probes clean up after themselves; anything that can't be undone is listed here. Left behind: the Jellyfin
@@ -72,8 +72,8 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 
 ## Task 3 — continuation (ChatGPT/Codex, 2026-11-05)
 
-- Resumed from a clean checkout at `a8284c5`; Task 2 and the existing Task 3
-  implementation were already committed. CI for `a8284c5` passed (run 41942899479).
+- Resumed from a clean checkout at `66d78f3`; Task 2 and the existing Task 3
+  implementation were already committed. CI for `66d78f3` passed (run 41942899479).
 - Added the missing Bazarr-specific Agent tests for symlinked directories/files,
   FIFOs, oversized files, private file mode and ownership, stop/start behavior,
   unchanged-file idempotence and secret redaction.
@@ -81,7 +81,7 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   last line lacked a newline: the inserted API key joined the preceding setting.
   Added the required separator before insertion; the regression now passes.
   This is a Task 3 correctness fix, with no new command or broader allowlist.
-- Local verification at `26f4c02`: 981 unit tests passed (27 integration tests
+- Local verification at `423f659`: 981 unit tests passed (27 integration tests
   deselected), Ruff passed, ShellCheck passed. CI run 41944049997 passed: unit, images, integration and publish.
 - Task 3 complete. Next task: Task 4 (Plex LAN and NVIDIA capabilities).
 
@@ -94,14 +94,14 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   when NVIDIA is selected. The Agent requires both with its exact GPU reservation
   and refuses them without it. No catalogue change was needed: these settings depend
   on setup choices and belong in the builder and Agent validation.
-- Local verification at `cd24f32`: 1,003 unit tests passed, Ruff and ShellCheck passed.
+- Local verification at `25fca76`: 1,003 unit tests passed, Ruff and ShellCheck passed.
   New builder, Agent and bootstrap tests failed before implementation; installer
   test setup was corrected to provide the existing required image variables.
 - Fresh review found no actionable correctness or security issues.
 - CI run 41945388747: first attempt failed while pulling app images, before app
   startup (apply reported download failure). Detailed log artifact retrieval was
   denied by storage; failed jobs retried with unchanged source. Retry passed: unit, images, integration
-  and publish all green at `cd24f32`. Task 4 complete.
+  and publish all green at `25fca76`. Task 4 complete.
   Next task: Task 5 (Bazarr wiring).
 
 ## Task 6 — profiles (Claude)
@@ -130,7 +130,7 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
 
 ## Task 11 — real-app integration (ChatGPT/Codex)
 
-- Owner handed off Claude's work at `8d3bb0a`. Tasks 5–10 were implemented; CI failed
+- Owner handed off Claude's work at `954ad61`. Tasks 5–10 were implemented; CI failed
   because neither Sonarr nor Radarr had an Orama quality profile.
 - Root cause: Recyclarr 8.8.1 filters duplicate instance names globally across app
   types. Both instances were named `orama`, so both were skipped despite a successful
@@ -152,7 +152,7 @@ Also present: `DD+ ATMOS` (Radarr 1af239278386be2919e1bcee0bde047e, Sonarr 4232a
   Usenet is the only failure after each recovery apply (current checks assert changed
   steps and API-key preservation, alongside the earlier whole-stack failure checks).
 - Verification: 1,267 local unit tests, Ruff and ShellCheck passed. All four CI jobs
-  passed at `4c84502` (run 41988527186). Final assertion-only follow-up `e2f4faa`: all four CI jobs passed in run
+  passed at `bcb27f9` (run 41988527186). Final assertion-only follow-up `ea2bcd5`: all four CI jobs passed in run
   42015057875 on retry. First attempt hit a confirmed GHCR rate limit pulling Bazarr
   before app startup; unchanged source passed on retry. Task 11 complete.
 - Plan 2b still requires its final whole-plan review/fix round and the owner's Claude

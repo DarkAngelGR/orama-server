@@ -24,6 +24,15 @@ never in one tool's memory.
 - Commit and push **straight to `main`**. No branches, no pull requests.
 - The repo will become public: never commit secrets, IP addresses, personal paths or email addresses.
   `tests/test_repo_hygiene.py` enforces this. Build fake keys at runtime in tests.
+- **Every commit is authored by the owner.** Before your first commit in a clone, run:
+  ```bash
+  git config user.name "DarkAngelGR"
+  git config user.email "43799929+DarkAngelGR@users.noreply.github.com"
+  ```
+  Never commit under a tool's own name (Claude, Gemini, Codex …) or with a personal e-mail
+  address. `tests/test_repo_hygiene.py` fails on any other author. The whole history was rewritten
+  this way on 2026-11-11, so every commit id changed: **clones made before that date must be
+  deleted and cloned again** (do not merge or push an old clone).
 - Commit trailer: Claude adds `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
   **If you aren't Claude, don't add that line.** Use your own tool's attribution or none.
   Never add a `Claude-Session:` line.

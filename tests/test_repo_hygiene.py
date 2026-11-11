@@ -119,3 +119,42 @@ def test_demo_server_check_sees_files_and_folders():
                "src/orama/web/static/orama.js", "docs/public/notes.md", "tests/web/views.py"]
     assert demo_server_leftovers(tracked) == [
         "package.json", "public/orama.js", "server.ts", "views/home.ejs"]
+
+
+# The owner is the author of every commit (history rewritten on 2026-11-11). AI tools and
+# people working on the repo commit under this identity and add a Co-Authored-By line; a
+# personal e-mail address or a tool's own name must never enter the public history again.
+OWNER_NAME = "DarkAngelGR"
+OWNER_EMAIL = "43799929+DarkAngelGR@users.noreply.github.com"
+GITHUB_WEB_COMMITTER = "noreply@github.com"  # GitHub's own committer for web edits
+
+
+def foreign_commits(log_lines):
+    """Commits whose author or committer is not the owner (GitHub may be the committer)."""
+    bad = []
+    for line in log_lines:
+        commit, author_name, author_email, committer_email = line.split("\x00")
+        if (author_name, author_email) != (OWNER_NAME, OWNER_EMAIL) or committer_email not in (
+                OWNER_EMAIL, GITHUB_WEB_COMMITTER):
+            bad.append(commit[:7])
+    return bad
+
+
+def test_every_commit_is_authored_by_the_owner():
+    log = subprocess.run(
+        ["git", "log", "--format=%H%x00%an%x00%ae%x00%ce"], cwd=REPO_ROOT, capture_output=True,
+        text=True, check=False)
+    if log.returncode != 0:  # not a git checkout (an unpacked archive)
+        pytest.skip("no git history here")
+    assert foreign_commits(log.stdout.splitlines()) == [], (
+        "commits must be authored as the owner; see AGENTS.md (git config user.name/user.email)")
+
+
+def test_author_check_sees_other_identities():
+    owner = "\x00".join(["a" * 40, OWNER_NAME, OWNER_EMAIL, OWNER_EMAIL])
+    web = "\x00".join(["b" * 40, OWNER_NAME, OWNER_EMAIL, GITHUB_WEB_COMMITTER])
+    tool = "\x00".join(["c" * 40, "Some Tool", "noreply@example.invalid", OWNER_EMAIL])
+    other_committer = "\x00".join(["d" * 40, OWNER_NAME, OWNER_EMAIL, "noreply@example.invalid"])
+    wrong_name = "\x00".join(["e" * 40, "Someone", OWNER_EMAIL, OWNER_EMAIL])
+    assert foreign_commits([owner, web, tool, other_committer, wrong_name]) == [
+        "c" * 7, "d" * 7, "e" * 7]

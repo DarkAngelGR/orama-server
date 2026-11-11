@@ -76,7 +76,7 @@ Release 1 is **not** done until Tasks 3, 4 and 5 are (spec §10.3).
 **Interfaces:** the `publish` job (moves the `<version>` tag users install) needs `unit`, `images`, `browser` and `integration`, and runs only for a push to `main`.
 - [x] Test first: `test_version_tag_published_only_after_integration_on_main` and `test_browser_job_is_separate_pinned_and_gates_publish` require `browser` in `publish.needs`.
 - [x] Add `browser` to `publish.needs` after it passed three runs in a row.
-- [x] Commit `ci: gate publish on browser and prove Debian 12 installer` (`04ef940`).
+- [x] Commit `ci: gate publish on browser and prove Debian 12 installer` (`0bcf21f`).
 
 **What this task did not do** (the old report said otherwise): it did not prove Debian 12. The same commit added `test_debian_12_installer_and_agent_self_update_contract`, which runs the installer on the **Ubuntu** runner with a Debian `os-release` file. Docker is already installed there, so the installer's Debian package-repository steps do not run in it at all; they are covered only by the dry-run unit tests in `tests/test_install_sh.py`. The real Debian 12 proof is Task 3.
 
@@ -87,7 +87,7 @@ Release 1 is **not** done until Tasks 3, 4 and 5 are (spec §10.3).
 - [x] Tests first (they failed before the change): exact argv of both steps; arguments and near-miss command names refused; links and damaged or strange compose files refused before Docker is called; a download does not wait for the main lock and blocks neither `status`, `ensure-folders` nor `data-space`; a second download or a restart during a download is refused; a failed download inspects, removes and starts nothing; the web route holds no lock during the download and both during the restart; busy, draft, CSRF and sign-in guards; the three messages.
 - [x] Implement the split, the hardened helper and the honest messages.
 - [x] Real Docker: `test_self_update_against_the_real_core_project` in the `integration` job (arguments refused over the real socket; nothing newer → no helper; registry unreachable → plain message, nothing touched; newer images → helper exits 0 with the hardened settings, both core containers recreated, no app touched, Orama and the new Agent answer; the installer's own compose command then changes nothing).
-- [x] Commit `fix: harden and unblock Orama self-update` (`9d7d668`), CI green.
+- [x] Commit `fix: harden and unblock Orama self-update` (`dc1cea1`), CI green.
 
 **Not covered by automation:** a real download of a newer *published* image (CI has no newer published image to download). It was done by hand against a local registry during the review (see the notes) and is step 15 of the owner checklist.
 
@@ -148,10 +148,10 @@ Spec §10.1.3 and §10.3.1. **Nothing in this task is built.** Do the steps in o
 
 **Files:** `docs/tasks/plan-5/T05.md`, `docs/STATUS.md`, notes.
 **Interfaces:** none. Order matters; each line is a gate.
-- [x] Delete the Node demo server from `test` (`125a581`); a unit test keeps it out.
-- [ ] **Owner's gate — Claude Security scans** (`/claude-security:claude-security` → Scan changes): Plan 2b (base `441c1a8`), Plan 3 (base `6a39133`), Plan 4 (base `56ac787`; run it after the review fixes so it covers Plan 5's code too). These have been deferred twice and are **not** recorded as passed anywhere. Every finding is fixed or explicitly accepted by the owner.
+- [x] Delete the Node demo server from `test` (`4b85e22`); a unit test keeps it out.
+- [ ] **Owner's gate — Claude Security scans** (`/claude-security:claude-security` → Scan changes): Plan 2b (base `0997d22`), Plan 3 (base `17e6e07`), Plan 4 (base `206a601`; run it after the review fixes so it covers Plan 5's code too). These have been deferred twice and are **not** recorded as passed anywhere. Every finding is fixed or explicitly accepted by the owner.
 - [ ] Whole-codebase review with the built-in `security-review` skill and `engineering:code-review` (spec §10.3.5). If a named skill is not available in the session, say so; do not skip silently.
-- [ ] **Owner decision — commit history.** Many commits on `main` and `test` carry the owner's personal e-mail address as author. The repository is meant to become public (spec §12: no personal details in code *or history*). Options: (a) accept it; (b) rewrite history to a no-reply address before going public (changes every commit id; every clone and every commit id written in the docs goes stale); (c) publish a fresh repository with a squashed history. Nobody rewrites history without the owner saying which.
+- [x] **Owner decision — commit history.** **Done 2026-11-11 (owner decided, Claude did it):** the whole history of `main` and `test` was rewritten so every commit is authored and committed by `DarkAngelGR` with GitHub's no-reply address; the `Co-Authored-By` lines are kept; files, order, dates and messages are unchanged. Every commit id changed; ids in the docs were replaced with the new ones. A test (`tests/test_repo_hygiene.py`) fails on any other author. Old commits may stay reachable on GitHub by their old id until GitHub cleans up; only GitHub Support can purge them sooner.
 - [ ] **Merge `test` into `main` only after the two review lines above pass** and CI on `test` is green on the final commit (fast-forward where possible). `publish` then moves the version tag. The repository and the packages are still private at this point, so nobody else can install it yet.
 - [ ] Owner runs the NAS checklist (Task 4) on that published version. While the packages are private the NAS needs a one-time sign-in to the registry; the owner may instead choose to do the next line first.
 - [ ] Make the two GHCR packages (`orama`, `orama-agent`) public, then run the literal one-line install once on a clean Debian 12 machine (the `e2e-debian` job started by hand on `main` with the checkout build switched off) to prove the real download.

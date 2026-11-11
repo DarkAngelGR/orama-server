@@ -4,7 +4,7 @@ These notes override the plan text where they differ. Read them before touching 
 
 ## Task 2: self-update, as built after the 2026-11-11 review (Claude)
 
-Gemini's first version (`399d56f`, `621c1a1`) worked, but the review found three problems. All
+Gemini's first version (`ea34774`, `da28540`) worked, but the review found three problems. All
 three are fixed in `fix: harden and unblock Orama self-update`.
 
 ### What the user sees

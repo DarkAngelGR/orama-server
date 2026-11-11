@@ -76,11 +76,11 @@ hardlinks on. A second `apply` changes nothing. Orama touches only entries it cr
 apps in CI (`tests/integration`). Subtitles, quality rules, Plex and Jellyfin come in Plan 2b.
 
 **Security:**
-- The Claude Security scan of `2c599c9..f82dd43` (high effort) found two issues, both verified 3/3 and fixed in `fa5007b`:
+- The Claude Security scan of `1a77be4..f82dd43` (high effort) found two issues, both verified 3/3 and fixed in `c6220b6`:
   - env-file values are now an allowlist `[A-Za-z0-9_+/=-]`, with a Compose-style round-trip check;
   - the qBittorrent password is no longer on wget's command line.
 - That scan's research was partly cut by a usage limit.
-- **Still to do (Claude only):** a follow-up scan of `f82dd43..HEAD`. It covers Codex's Agent edits and the cut research.
+- **Still to do (Claude only):** a follow-up scan of `be2b8af..HEAD`. It covers Codex's Agent edits and the cut research.
 
 **Decisions taken while executing Plan 2a (beyond those already listed above and in docs/STATUS.md):**
 - **Gluetun port forwarding:**

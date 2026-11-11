@@ -9,10 +9,10 @@ Read `AGENTS.md` first.
 |---|---|---|
 | 1 Foundation | installer, setup model, compose builder, secrets, Agent, deploy | ✅ done — `docs/superpowers/plans/2026-11-03-orama-r1-plan-1-notes.md` |
 | 2a Download wiring | Prowlarr, Sonarr, Radarr, SABnzbd, qBittorrent (+ Gluetun) connected | ✅ complete — code, review and CI passed; owner confirmed follow-up Claude Security scan passed (2026-11-05) |
-| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `b41db6a`. Owner Claude Security scan pending. |
+| 2b Subtitles, quality, media servers | Bazarr, Recyclarr + device profiles, Plex sign-in, Jellyfin first run | Code complete: Tasks 1–11 + final review/fix wave done, CI green at `d0d545d`. Owner Claude Security scan pending. |
 
-| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `dab238f`). Owner Claude Security scan pending (see below). |
-| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`fd5fa71`, `58287fb`, `f32d993`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
+| 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `fea5f72`). Owner Claude Security scan pending (see below). |
+| 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`729e24c`, `853dce0`, `01903ae`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
 | 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) **open, not started**. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
 
 ## Review fixes (Claude, 2026-11-11)
@@ -48,18 +48,20 @@ on `test` only. `main` is untouched and nothing is merged. **Read this section f
   `T05` security and sign-off (was T04).
 
 **Tested commits and CI** (`unit`, `browser`, `images`, `integration` all green; `publish` runs
-only on `main`): `125a581` run 43014605227, `9d7d668` run 43018409477, `ab07f0e` run
-43019567102. Locally at `ab07f0e`: 2,096 unit tests, Ruff, ShellCheck and the 6 real-browser
-scenarios passed. The commits after `ab07f0e` change documents only.
+only on `main`): `4b85e22` run 43014605227, `dc1cea1` run 43018409477, `ffbdf87` run
+43019567102. Locally at `ffbdf87`: 2,096 unit tests, Ruff, ShellCheck and the 6 real-browser
+scenarios passed. The commits after `ffbdf87` change documents only.
 
-**Not in scope, left alone:** the
-owner's personal e-mail address is the author of many commits on `main` and `test`. That is an
-owner decision (Plan 5 Task 5, line 4); no history was rewritten.
+**History rewritten (owner's decision, 2026-11-11).** Every commit on `main` and `test` is now authored by
+`DarkAngelGR` with GitHub's no-reply address; `Co-Authored-By` lines are kept. **Every commit id changed**
+and the ids in the docs were updated to match. **Any clone made before this must be deleted and cloned
+again** (ChatGPT/Codex, Gemini, Cursor: do not push or merge an old clone). Set your git identity as
+`AGENTS.md` says before committing; CI fails on any other author.
 
 **What is still open, in order:**
 
-1. Owner: the three deferred Claude Security scans (Plan 2b base `441c1a8`, Plan 3 base
-   `6a39133`, Plan 4 base `56ac787`) and the whole-codebase review. Still not passed.
+1. Owner: the three deferred Claude Security scans (Plan 2b base `0997d22`, Plan 3 base
+   `17e6e07`, Plan 4 base `206a601`) and the whole-codebase review. Still not passed.
 2. Owner: decide about the e-mail address in the commit history.
 3. Then merge `test` into `main` (not before 1).
 4. Owner: `docs/OWNER-CHECKLIST.md` on the NAS.
@@ -123,8 +125,8 @@ real-container integration tests.
 
 | # | Task | State | Owner |
 |---|---|---|---|
-| 1 | Publish gate | done (`04ef940`) | Gemini; Claude corrected the report |
-| 2 | Self-update (two Agent commands, hardened helper) | done (`399d56f`, `621c1a1`, review fixes `9d7d668`) | Gemini, then Claude |
+| 1 | Publish gate | done (`0bcf21f`) | Gemini; Claude corrected the report |
+| 2 | Self-update (two Agent commands, hardened helper) | done (`ea34774`, `da28540`, review fixes `dc1cea1`) | Gemini, then Claude |
 | 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | **open — not started** | — |
 | 4 | Owner checklist on the NAS (`docs/OWNER-CHECKLIST.md`) | open (written, not run) | Owner |
 | 5 | Security scans, packaging, Release 1 sign-off | open | Owner + Claude |
@@ -132,26 +134,26 @@ real-container integration tests.
 ## Resume here (updated by ChatGPT/Codex, 2026-11-05)
 
 1. **Plan 2a:** complete. Owner confirmed on 2026-11-05 that the follow-up Claude Security scan passed; no repeat scan required.
-2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at 9c18626). Task 2 complete — CI passed at 06f25f13 (run 41939856043). Task 3 ✅ done (ChatGPT/Codex, 2026-11-05): `26f4c02`; 981 local unit tests, Ruff and ShellCheck passed. CI run 41944049997: unit, images, integration and publish all passed. Task 4 ✅ done (ChatGPT/Codex): `cd24f32`; 1,003 unit tests, Ruff and ShellCheck passed; fresh review clean. CI run 41945388747 passed all four jobs on retry after an app-image download failure. Task 5 ✅ done (Claude): `9953e07`, review clean. Codex's Tasks 2–4 reviewed by Claude (opus); fixes `c56e68f`, `05c0b26` (Bazarr seeding refuses unusual/duplicate/alias YAML via a strict loader; Plex LAN address from the default route), re-review clean. Task 6 ✅ done (Claude): `ed56218`, review clean. Task 7 ✅ done (Claude): `db5eb0d`, `5f25e77`, review clean (one quality profile per app named "Orama"; Recyclarr container named, hardened, removed on timeout). Real-run checks for Task 11 are in the Plan 2b ledger summary below. Task 8 ✅ done (Claude): `3cae6da`, `8472c7b`, review clean (`python -m orama.cli plex-sign-in`; Plex steps skip with "waiting for sign-in" until then). Task 9 ✅ done (Claude): `2e3d118`, `35d346a`, review clean; Jellyfin contract probe now uses a throwaway container. Task 10 ✅ done (Claude): `5f85643`, review clean. Task 11 ✅ done (ChatGPT/Codex, owner handoff): real-app integration added; Recyclarr's duplicate instance names fixed (`1d488ba`); review findings fixed. Final code/test commit `e2f4faa`: 1,267 local unit tests, Ruff and ShellCheck passed; CI run 42015057875 passed unit, images, integration and publish on retry (first attempt hit a confirmed registry rate limit pulling Bazarr). See Plan 2b notes for observed contracts and two minor deferred test-coverage improvements. **Plan 2b code complete (Claude, 2026-11-05):** final whole-plan review (opus) + fix wave `477845c..b41db6a` (Jellyfin recovery via set-secret user:jellyfin + password:jellyfin; Bazarr ignores PGS/VobSub/ASS so it fetches SRT; Recyclarr guide pinned to TRaSH-Guides d0f1a6c / config-templates 89eebad; Jellyfin notify=false; LAN address refreshed on reinstall), re-review clean, CI run 42050590613 green. **Only gate left: the owner's Claude Security scan of Plan 2b** (`/claude-security:claude-security` → Scan changes, base `441c1a8`). Plan 3 (web app) is written: `docs/superpowers/plans/2026-11-05-orama-r1-plan-3-web-app.md` — owner OK'd; executing. Board below. The Jellyfin contract probe already uses its own throwaway container; that carry-forward item is resolved.
+2. ← NEXT: **Plan 2b** (`docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-media-wiring.md`) — owner OK'd; executing (Claude). Task 1 ✅ done (contracts in docs/superpowers/plans/2026-11-04-orama-r1-plan-2b-notes.md, CI green at abd6f40). Task 2 complete — CI passed at 8f4d665c (run 41939856043). Task 3 ✅ done (ChatGPT/Codex, 2026-11-05): `423f659`; 981 local unit tests, Ruff and ShellCheck passed. CI run 41944049997: unit, images, integration and publish all passed. Task 4 ✅ done (ChatGPT/Codex): `25fca76`; 1,003 unit tests, Ruff and ShellCheck passed; fresh review clean. CI run 41945388747 passed all four jobs on retry after an app-image download failure. Task 5 ✅ done (Claude): `54123be`, review clean. Codex's Tasks 2–4 reviewed by Claude (opus); fixes `bf08e4a`, `d78aead` (Bazarr seeding refuses unusual/duplicate/alias YAML via a strict loader; Plex LAN address from the default route), re-review clean. Task 6 ✅ done (Claude): `351b778`, review clean. Task 7 ✅ done (Claude): `6468a05`, `6c251bb`, review clean (one quality profile per app named "Orama"; Recyclarr container named, hardened, removed on timeout). Real-run checks for Task 11 are in the Plan 2b ledger summary below. Task 8 ✅ done (Claude): `8295a96`, `280be49`, review clean (`python -m orama.cli plex-sign-in`; Plex steps skip with "waiting for sign-in" until then). Task 9 ✅ done (Claude): `6cfc95f`, `1275162`, review clean; Jellyfin contract probe now uses a throwaway container. Task 10 ✅ done (Claude): `5f85643`, review clean. Task 11 ✅ done (ChatGPT/Codex, owner handoff): real-app integration added; Recyclarr's duplicate instance names fixed (`4c57c8f`); review findings fixed. Final code/test commit `ea2bcd5`: 1,267 local unit tests, Ruff and ShellCheck passed; CI run 42015057875 passed unit, images, integration and publish on retry (first attempt hit a confirmed registry rate limit pulling Bazarr). See Plan 2b notes for observed contracts and two minor deferred test-coverage improvements. **Plan 2b code complete (Claude, 2026-11-05):** final whole-plan review (opus) + fix wave `26805d3..b41db6a` (Jellyfin recovery via set-secret user:jellyfin + password:jellyfin; Bazarr ignores PGS/VobSub/ASS so it fetches SRT; Recyclarr guide pinned to TRaSH-Guides d0f1a6c / config-templates 89eebad; Jellyfin notify=false; LAN address refreshed on reinstall), re-review clean, CI run 42050590613 green. **Only gate left: the owner's Claude Security scan of Plan 2b** (`/claude-security:claude-security` → Scan changes, base `0997d22`). Plan 3 (web app) is written: `docs/superpowers/plans/2026-11-05-orama-r1-plan-3-web-app.md` — owner OK'd; executing. Board below. The Jellyfin contract probe already uses its own throwaway container; that carry-forward item is resolved.
 
 ## Plan 3 — task board (details and reports in `docs/tasks/plan-3/Tnn.md`)
 
 | # | Task | Model | State | Owner |
 |---|---|---|---|---|
-| 1 | Locks for setup, secret store and applies | most capable | done (`eb9eed9`, `01cea5e`) | Claude |
-| 2 | VPN provider list, Gluetun control server, unwritable folders | most capable | done (`d813622`) | Claude |
-| 3 | Wiring: removals, single-item tests, proxy message | standard | done (`535a44b`) | Claude |
-| 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | done (`f36c939`) | Claude |
-| 5 | Web foundation and security | most capable | done (`8f1ddce`..`147df8a`) | Claude |
-| 6 | Design system and base layout | standard | done (`655939e`..`73ba9e0`) | Codex + Claude |
-| 7 | Apply jobs with a live checklist | standard | done (`a107a6b`..`43b9fa8`) | Claude |
-| 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | done (`b1fa2ab`) | Claude |
-| 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | done (`fd8f827`..`d441491`) | Codex + Claude |
-| 10 | Settings and Change setup | standard | done (`f2c8cf2`..`2f983ce`) | Claude |
-| 11 | Apps page and Home | standard | done (`ec7ee0e`, `634482f`) | Claude |
-| 12 | Design reviews and browser pass | standard | done (`f9883e8`..`a456b90`) | Claude |
+| 1 | Locks for setup, secret store and applies | most capable | done (`b08410f`, `d41d5bf`) | Claude |
+| 2 | VPN provider list, Gluetun control server, unwritable folders | most capable | done (`8a93cfa`) | Claude |
+| 3 | Wiring: removals, single-item tests, proxy message | standard | done (`a9137be`) | Claude |
+| 4 | Installer/bootstrap: one-time setup link, host name, graphics | most capable | done (`11bde63`) | Claude |
+| 5 | Web foundation and security | most capable | done (`55b5906`..`b9922c9`) | Claude |
+| 6 | Design system and base layout | standard | done (`11228ee`..`4e86482`) | Codex + Claude |
+| 7 | Apply jobs with a live checklist | standard | done (`8a7d6cc`..`e677371`) | Claude |
+| 8 | Wizard: servers, folders, downloads/VPN, playback, subtitles | standard | done (`6d5c17b`) | Claude |
+| 9 | Wizard: indexers, Usenet, review, install, Plex sign-in | most capable | done (`2efed76`..`1f2a83f`) | Codex + Claude |
+| 10 | Settings and Change setup | standard | done (`cd9e804`..`901837d`) | Claude |
+| 11 | Apps page and Home | standard | done (`c8a4eae`, `2a9c73f`) | Claude |
+| 12 | Design reviews and browser pass | standard | done (`f03c7de`..`2ac232a`) | Claude |
 
-**Plan 3 hand-off (Claude, 2026-11-06):** web app code complete. Two gates are left and both are the owner's: (1) Claude Security scan of **Plan 2b** (`/claude-security:claude-security` → Scan changes, base `441c1a8`, High, Yes), (2) Claude Security scan of **Plan 3** (base `6a39133`, High, Yes). Run them right after a usage reset. Decisions to know: the media folder is read-only in the web app (set by the installer; changing it later = re-run the installer with `ORAMA_DATA_ROOT`); sessions are tied to the sign-in address; Home is a placeholder until Plan 4. Details: `docs/superpowers/plans/2026-11-05-orama-r1-plan-3-notes.md`. Next: write Plan 4 (requests) — see the roadmap table.
+**Plan 3 hand-off (Claude, 2026-11-06):** web app code complete. Two gates are left and both are the owner's: (1) Claude Security scan of **Plan 2b** (`/claude-security:claude-security` → Scan changes, base `0997d22`, High, Yes), (2) Claude Security scan of **Plan 3** (base `17e6e07`, High, Yes). Run them right after a usage reset. Decisions to know: the media folder is read-only in the web app (set by the installer; changing it later = re-run the installer with `ORAMA_DATA_ROOT`); sessions are tied to the sign-in address; Home is a placeholder until Plan 4. Details: `docs/superpowers/plans/2026-11-05-orama-r1-plan-3-notes.md`. Next: write Plan 4 (requests) — see the roadmap table.
 
 At every task boundary record the latest tested commit, CI result, open decisions and the first unfinished step here. Before switching tools or approaching a usage limit, push a checkpoint and label any untested work explicitly.
 
@@ -159,27 +161,27 @@ At every task boundary record the latest tested commit, CI result, open decision
 
 | # | Task | State | Commit |
 |---|---|---|---|
-| 1 | Shared network and Gluetun options (compose + Agent pins) | ✅ done | 77088f8, f530272 |
-| 2 | Agent `seed-config` for SABnzbd and qBittorrent | ✅ done | be74c0f, 1c82c35 |
-| 3 | HTTP client and step engine | ✅ done | c657bc2 |
-| 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | ba80dfe |
-| 5 | SABnzbd and qBittorrent wiring | ✅ done | cba82cc |
-| 6 | Sonarr and Radarr wiring | ✅ done | 9455d71 |
-| 7 | Prowlarr wiring | ✅ done | 64b8b4d, 2d6a8c2 |
-| 8 | Step plan; `apply` runs the wiring | ✅ done | 25da23e |
-| 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 065cad7..76f25cf |
-| — | Claude Security scan of the Plan 2a changes | ✅ ran (`2c599c9..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan passed (owner confirmed 2026-11-05) | |
-| — | Final whole-plan review + one fix round | ✅ done — review (opus), fix wave `538750a..90f04d8`, re-review clean, CI green | 90f04d8 |
-| — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | 47e6516, 2fbe547 |
+| 1 | Shared network and Gluetun options (compose + Agent pins) | ✅ done | 7a90d0d, 49902da |
+| 2 | Agent `seed-config` for SABnzbd and qBittorrent | ✅ done | 65236f2, 5f2feb4 |
+| 3 | HTTP client and step engine | ✅ done | 5478685 |
+| 4 | Indexers and Usenet servers in the setup; `set-secret` | ✅ done | 7fd1dd3 |
+| 5 | SABnzbd and qBittorrent wiring | ✅ done | 9f2ccf5 |
+| 6 | Sonarr and Radarr wiring | ✅ done | e8ce290 |
+| 7 | Prowlarr wiring | ✅ done | 3a614dd, 5ffd851 |
+| 8 | Step plan; `apply` runs the wiring | ✅ done | a2c2273 |
+| 9 | Integration test: real apps wired, second run changes nothing | ✅ done | 486f269..76f25cf |
+| — | Claude Security scan of the Plan 2a changes | ✅ ran (`1a77be4..f82dd43`, high): 2 verified findings F3 (medium), F4 (low) — see "Resume here"; research partly cut by usage limit, follow-up scan passed (owner confirmed 2026-11-05) | |
+| — | Final whole-plan review + one fix round | ✅ done — review (opus), fix wave `289b4df..90f04d8`, re-review clean, CI green | b9734f0 |
+| — | Supplemental review fixes (Codex) | ✅ done — source CI: unit, images, integration and publish passed | a0a1ed8, 56a3eb4 |
 
 ### Supplemental review fixes (Codex)
 
 - Done by Codex: duplicate indexer display names are refused before apply; removing SABnzbd or qBittorrent removes only its Orama-managed Sonarr/Radarr clients; changing an existing indexer definition under the same name reports a clear failure and preserves the entry.
 - Indexer type changes are deliberately refused rather than automatically replacing an entry. Restore the original type or use a new name; the old indexer remains and is not silently deleted.
-- Regression cases failed against the original source before implementation. Local setup/wiring/hygiene checks passed (171 tests), plus Ruff and ShellCheck. The full Linux unit suite and real-container integration passed in CI for `2fbe547`: https://github.com/DarkAngelGR/orama-server/actions/runs/41898589745.
+- Regression cases failed against the original source before implementation. Local setup/wiring/hygiene checks passed (171 tests), plus Ruff and ShellCheck. The full Linux unit suite and real-container integration passed in CI for `56a3eb4`: https://github.com/DarkAngelGR/orama-server/actions/runs/41898589745.
 - A separate supplemental review found no actionable issues in the fixes. The required carry-forward section is now in `2026-11-03-orama-r1-plan-1-notes.md`. The Agent, compose pins and secret handling were not changed in this fix round.
 - The status-only follow-up exposed a race in the existing connection-limit test: it opened the recovery request before the closed client's handler released its slot. The test now waits for release with a bounded timeout, while retaining the excess-connection refusal and recovery assertions. Agent behavior is unchanged.
-- (Superseded) The Claude Security scan has since run and its two findings are fixed (`fa5007b`); the final review has run — see Resume here.
+- (Superseded) The Claude Security scan has since run and its two findings are fixed (`c6220b6`); the final review has run — see Resume here.
 
 ### Decisions made while executing Plan 2a
 

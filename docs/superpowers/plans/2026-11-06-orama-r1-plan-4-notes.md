@@ -2,7 +2,7 @@
 
 ## Planning checkpoint (2026-11-06)
 
-- Baseline `56ac787`: Plan 3 implementation and final review complete. CI run
+- Baseline `206a601`: Plan 3 implementation and final review complete. CI run
   42178338615 passed. Working tree was clean before planning.
 - Owner explicitly deferred Claude Security while Claude is unavailable until
   Wednesday 2026-11-11. Plan 2b and Plan 3 scans remain pending, not passed;
@@ -23,7 +23,7 @@
 
 ### Task 1 implementation in progress
 
-- First probe commit: `2f8f03b`. Local checks: 1,906 non-integration tests passed,
+- First probe commit: `e81fa6f`. Local checks: 1,906 non-integration tests passed,
   Ruff and ShellCheck passed. Real-container CI is still pending; no contracts are
   called verified yet.
 - The add APIs fetch Skyhook metadata internally even when callers supply lookup
@@ -42,7 +42,7 @@
 
 ### Test branch CI follow-up (Codex, 2026-11-07)
 
-The owner requested repair of test-branch CI. Startup import fixed in `33ef942`;
+The owner requested repair of test-branch CI. Startup import fixed in `442191b`;
 run 42316906235 passed unit/images but exposed the Express package's effect on the
 CommonJS browser driver. The driver is now explicitly `.cjs`, and all four local
 Chromium scenarios passed.
@@ -66,7 +66,7 @@ Other Gemini review findings remain unresolved.
 Local validation of this follow-up: 1,935 non-integration tests passed, Ruff and
 ShellCheck passed; the four real Chromium scenarios passed after the driver rename.
 
-Run 42317584294 (`d790359`) passed unit, browser and images. Integration passed 36
+Run 42317584294 (`9058a45`) passed unit, browser and images. Integration passed 36
 tests and failed two title probes. Bazarr returned 500 on assigning the language
 profile. Its pinned v1.6.2 subtitle indexer reads `language['audio_only_include']`
 unconditionally; Orama's profile omitted that field. Wiring now supplies `False`
@@ -75,7 +75,7 @@ regressions. Other profiles remain preserved. Radarr still rejects the movie aft
 changing the score floor; the probe now reports only fixed rejection categories to
 identify the remaining rule without exposing raw upstream data or credentials.
 
-Run 42346816151 (`97cc09f`) passed unit/browser/images and 37 container tests. The
+Run 42346816151 (`6d6761b`) passed unit/browser/images and 37 container tests. The
 Sonarr title, generated-file media info, and Greek/English missing-subtitle assertions
 now pass, confirming the Bazarr repair. Only the Radarr synthetic-release acceptance
 check remains. Pinned Radarr v6.4.4.10685 LanguageParser returns Unknown for titles
@@ -84,7 +84,7 @@ neither "language" nor the other original diagnostic categories. The movie fixtu
 explicitly names English and asserts the parsed language before testing score changes;
 production quality and language requirements remain unchanged.
 
-Run 42347591614 (`5b733b1`) reported `reason categories: ['wanted']` on the Radarr
+Run 42347591614 (`1fb5ff9`) reported `reason categories: ['wanted']` on the Radarr
 synthetic release. Orama's default `"mixed"` quality setting compiles Radarr to
 `uhd-bluray-web` (which allows only `Bluray-2160p` and `WEB 2160p`, minimum 34.5 MiB/min
 for `WEBDL-2160p`) while compiling Sonarr to `web-1080p`. Radarr's
@@ -94,7 +94,7 @@ for `WEBDL-2160p`) while compiling Sonarr to `web-1080p`. Radarr's
 matches the default `uhd-bluray-web` quality profile while keeping `DTS` as the sole
 score-based rejection under the strict profile.
 
-Run 42381439992 (`9d5e2e7`) passed `unit`, `browser`, `images`, and all 38 real-container
+Run 42381439992 (`5526480`) passed `unit`, `browser`, `images`, and all 38 real-container
 `integration` tests (including `test_pinned_request_contracts`,
 `test_pinned_authenticated_webhook_contracts`, `test_pinned_title_request_contracts[sonarr]`,
 and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified in CI:
@@ -157,7 +157,7 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
      Wednesday 2026-11-11, plus the separate root-side `self-update` operations plan before
      Release 1 completion.
 
-### Review fix wave and CI proof (`fd5fa71`, `58287fb`, `f32d993`, 2026-11-08)
+### Review fix wave and CI proof (`729e24c`, `853dce0`, `01903ae`, 2026-11-08)
 
 - **Exact episode/season file readiness (`client.py`, `reconcile.py`)**: `MediaClient.snapshot`
   fetches Sonarr `episode?seriesId=<id>` alongside `episodefile?seriesId=<id>`. `reconcile`
@@ -182,8 +182,8 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
   falling back to `files[0]` or `rows[0]`; season and series requests evaluate per-episode
   subtitle availability via `assess_episode_subtitles`.
 - **Traceback secrecy & CI (`tests/integration/test_requests.py`)**: Integration helpers keep
-  credentials inside `__tracebackhide__ = True` frames. CI runs `42472203041` (`58287fb`) and
-  `42511960464` (`f32d993`) passed `unit` (2,014 tests), `demo`, `browser`, `images`, and all
+  credentials inside `__tracebackhide__ = True` frames. CI runs `42472203041` (`853dce0`) and
+  `42511960464` (`01903ae`) passed `unit` (2,014 tests), `demo`, `browser`, `images`, and all
   41 real-container `integration` tests.
 
 ### Node demo server removed (Claude review, 2026-11-11)
@@ -191,7 +191,7 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
 The `test` branch carried a second web server that was never part of the design: a Node/Express
 demo (`server.ts`, `views/*.ejs`, `public/`, `package.json`, `tsconfig.json`, `metadata.json`).
 Nothing in the installer, the images or CI ran it, it had fixed passwords and an always-valid
-session token, and the commit that tightened it (`f32d993`) was reverted (`dee37e1`). All of it is
+session token, and the commit that tightened it (`01903ae`) was reverted (`5604a36`). All of it is
 deleted. Where earlier notes and task reports mention the `demo` CI job, `npm test`, `server.ts`
 or the "Express package", they describe that removed scaffold. Two things stay as they are:
 `tests/web/browser_pass.cjs` keeps its `.cjs` name, and the CI `browser` job still installs
