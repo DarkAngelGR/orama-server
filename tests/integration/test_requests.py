@@ -778,6 +778,8 @@ def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path
     store = _host_secret_store(clean_host, tmp_path)
     http = Http()
     indexer_id = series_id = movie_id = None
+    setup_path = clean_host.state_dir / "setup.json"
+    original_setup = setup_path.read_bytes()
 
     def prowlarr(method, route, body=None):
         response = http.request(
@@ -799,6 +801,13 @@ def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path
         return value
 
     try:
+        # Exercise the supported 1080p choice through Orama. The default Mixed movie
+        # profile selects UHD releases, so it correctly rejects this 1080p fixture.
+        configured = json.loads(original_setup)
+        configured.update(quality="1080p", device="samsung_s95f")
+        setup_path.write_text(json.dumps(configured), encoding="utf-8")
+        status, _ = apply(clean_host, requests_stack["outputs"], "fixture-1080p-profile")
+        assert status in (0, 1), "could not apply the supported 1080p fixture profile"
         until(
             lambda: run([
                 "docker", "exec", name, "python", "-c",
@@ -901,3 +910,6 @@ def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path
         if indexer_id is not None:
             prowlarr("DELETE", f"indexer/{indexer_id}")
         run(["docker", "rm", "-f", name])
+        setup_path.write_bytes(original_setup)
+        status, _ = apply(clean_host, requests_stack["outputs"], "fixture-restore-profile")
+        assert status in (0, 1), "could not restore the original integration profile"
