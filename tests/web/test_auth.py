@@ -698,3 +698,20 @@ def test_expired_session_sends_htmx_polls_to_sign_in(client, password, clock, pa
     # A plain request still goes to the sign-in page and comes back.
     plain = client.get(path)
     assert plain.status_code == 303 and "/signin" in plain.headers["Location"]
+
+
+def test_main_serves_the_app_when_the_request_database_is_damaged(
+    monkeypatch, state_dir: Path, caplog
+):
+    import orama.__main__ as main_module
+
+    (state_dir / "requests.sqlite3").write_bytes(b"garbage" * 100)
+    calls = {}
+    monkeypatch.setenv("ORAMA_STATE_DIR", str(state_dir))
+    monkeypatch.setattr(
+        main_module.waitress, "serve", lambda app, **kw: calls.update(app=app, **kw)
+    )
+    with caplog.at_level("ERROR"):
+        main_module.main()
+    assert calls["app"].extensions["request_worker"] is None
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1

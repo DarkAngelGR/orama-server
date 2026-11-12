@@ -21,7 +21,7 @@ from flask.globals import request_ctx
 from werkzeug.exceptions import HTTPException
 
 from orama.agent_client import AgentClient
-from orama.requests.store import RequestStore
+from orama.requests.store import RequestStore, StoreError
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import auth, hooks, security
@@ -150,6 +150,7 @@ def create_app(
     app.after_request(_finish_response)
     app.register_error_handler(HTTPException, _http_error)
     app.register_error_handler(Exception, _server_error)
+    app.register_error_handler(StoreError, _requests_unavailable)
     app.register_blueprint(_auth_pages())
     register_jobs(app)
     register_wizard(app)
@@ -228,6 +229,17 @@ def _http_error(error: HTTPException):
     return rejected(MESSAGES.get(error.code, GENERIC_MESSAGE), error.code)
 
 
+REQUESTS_UNAVAILABLE = (
+    "Requests are unavailable right now. Orama cannot read its request list. "
+    "The rest of Orama still works."
+)
+
+
+def _requests_unavailable(error: StoreError):
+    logging.getLogger("orama.web").warning("request store unavailable (%s)", type(error).__name__)
+    return rejected(REQUESTS_UNAVAILABLE, 503)
+
+
 def _server_error(error: Exception):
     if isinstance(error, HTTPException):
         return _http_error(error)
@@ -255,7 +267,10 @@ def _auth_pages() -> Blueprint:
         if not (st.state_dir / SETUP_FILE).exists():
             return redirect("/setup/media", 303)
         setup = st.setup.current()
-        recent = [to_request_view(r) for r in st.requests.list_recent(10)]
+        try:
+            recent = [to_request_view(r) for r in st.requests.list_recent(10)]
+        except StoreError:
+            recent = []
         return render_template(
             "home.html",
             summary=running_summary(setup) if setup else None,

@@ -447,3 +447,19 @@ def test_home_disk_warning_below_equal_above_threshold_and_stat_error(tmp_path: 
     assert "Storage space is running low" not in html_err
     assert "0%" not in html_err
 
+
+
+def test_damaged_request_database_shows_plain_unavailable_page(tmp_path: Path):
+    client, _app, _st, _http, _worker, _clock, csrf = _make_env(tmp_path)
+    (tmp_path / "requests.sqlite3").write_bytes(b"not a database" * 100)
+
+    home = client.get("/")
+    assert home.status_code == 200
+
+    posted = client.post(
+        "/requests", data={"kind": "movie", "source_id": "5", "title": "X", "csrf_token": csrf}
+    )
+    assert posted.status_code == 503
+    text = posted.get_data(as_text=True).lower()
+    assert "unavailable" in text
+    assert "503" not in text and "sqlite" not in text

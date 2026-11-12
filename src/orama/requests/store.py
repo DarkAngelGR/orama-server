@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,28 @@ class CorruptStoreError(StoreError):
     """Raised when the database schema or file cannot be safely read."""
 
 
+class StoreBusyError(StoreError):
+    """The database is locked by someone else right now; trying again later is fine."""
+
+
+def _translate(error: sqlite3.Error) -> StoreError:
+    """Turn a raw sqlite error into a StoreError with a plain message (no request data)."""
+    text = str(error).lower()
+    if "locked" in text or "busy" in text:
+        return StoreBusyError("The request database is busy. Try again in a moment.")
+    if (
+        "malformed" in text
+        or "not a database" in text
+        or "encrypted" in text
+        or (isinstance(error, sqlite3.OperationalError) and "no such table" in text)
+        or (isinstance(error, sqlite3.OperationalError) and "no such column" in text)
+    ):
+        return CorruptStoreError("The request database is damaged.")
+    if "full" in text:
+        return StoreError("The request database could not be written because the disk is full.")
+    return StoreError("The request database could not be used.")
+
+
 def _snapshot_policy(created_at: float, setup: Any) -> tuple[str | None, float | None]:
     if setup is None:
         return None, None
@@ -50,25 +74,64 @@ def _snapshot_policy(created_at: float, setup: Any) -> tuple[str | None, float |
 class RequestStore:
     """Manages transactional persistence for media requests."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
+        self._busy_timeout_ms = int(busy_timeout_ms)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
+        conn = sqlite3.connect(
+            self.path, timeout=self._busy_timeout_ms / 1000.0, isolation_level=None
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {self._busy_timeout_ms}")
         return conn
 
-    def _init_db(self) -> None:
-        conn = self._connect()
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        """A connection whose sqlite errors surface as StoreError; always closed."""
+        conn: sqlite3.Connection | None = None
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            conn = self._connect()
+            yield conn
+        except sqlite3.Error as error:
+            raise _translate(error) from None
+        finally:
+            if conn is not None:
+                conn.close()
+
+    @contextmanager
+    def _txn(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction: commit on success, roll back only if one is open."""
+        with self._conn() as conn:
             try:
-                row = conn.execute("SELECT version FROM schema_version").fetchone()
-            except sqlite3.OperationalError:
-                row = None
+                conn.execute("BEGIN IMMEDIATE")
+                yield conn
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                raise
+
+    def _init_db(self) -> None:
+        with self._txn() as conn:
+            tables = {
+                r["name"]
+                for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            }
+            row = (
+                conn.execute("SELECT version FROM schema_version").fetchone()
+                if "schema_version" in tables
+                else None
+            )
+            if row is None and "requests" in tables:
+                raise CorruptStoreError("The request database is not one Orama created.")
+            if row is not None and "requests" not in tables:
+                raise CorruptStoreError("The request database is damaged.")
 
             if row is None:
                 conn.execute(
@@ -162,6 +225,8 @@ class RequestStore:
                 ):
                     if col_name not in existing_cols:
                         conn.execute(f"ALTER TABLE requests ADD COLUMN {col_name} {col_type}")
+                if db_version < SCHEMA_VERSION:
+                    conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS followups (
@@ -187,12 +252,6 @@ class RequestStore:
                     )
                     """
                 )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
         try:
             os.chmod(self.path, 0o600)
@@ -242,9 +301,7 @@ class RequestStore:
         target_key = spec.target_key
         record_id = str(uuid.uuid4())
         wait_mode, fallback_deadline = _snapshot_policy(now, setup)
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             try:
                 conn.execute(
                     """
@@ -270,7 +327,6 @@ class RequestStore:
                         year,
                     ),
                 )
-                conn.execute("COMMIT")
                 rec = RequestRecord(
                     id=record_id,
                     spec=spec,
@@ -298,29 +354,19 @@ class RequestStore:
                     row = conn.execute(
                         "SELECT * FROM requests WHERE target_key = ?", (target_key,)
                     ).fetchone()
-                conn.execute("COMMIT")
                 if row is None:
                     raise StoreError("Integrity error on target key but existing row not found")
                 return self._row_to_record(row), False
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def get(self, request_id: str) -> RequestRecord | None:
         """Fetch request record by UUID."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
             return self._row_to_record(row) if row else None
-        finally:
-            conn.close()
 
     def list_active(self, limit: int = 100) -> list[RequestRecord]:
         """List active requests (unresolved requests plus ongoing series subscriptions)."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM requests
@@ -331,13 +377,10 @@ class RequestStore:
                 (limit,),
             ).fetchall()
             return [self._row_to_record(r) for r in rows]
-        finally:
-            conn.close()
 
     def list_recent(self, limit: int = 20) -> list[RequestRecord]:
         """List recent requests ordered newest first for Home."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM requests
@@ -347,8 +390,6 @@ class RequestStore:
                 (limit,),
             ).fetchall()
             return [self._row_to_record(r) for r in rows]
-        finally:
-            conn.close()
 
     def update(self, request_id: str, expected_revision: int, changes: RequestUpdate) -> bool:
         """Optimistically update request record; returns False if revision is stale."""
@@ -381,21 +422,13 @@ class RequestStore:
         set_clause = ", ".join(fields)
         values.extend([request_id, expected_revision])
 
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             cur = conn.execute(
                 f"UPDATE requests SET {set_clause} WHERE id = ? AND revision = ?",
                 values,
             )
             success = cur.rowcount > 0
-            conn.execute("COMMIT")
             return success
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def enqueue_refresh(self, app: str, remote_id: int, now: float) -> None:
         """Enqueue an authenticated webhook event notification."""
@@ -403,9 +436,7 @@ class RequestStore:
             raise ValueError(f"Unsupported webhook app: {app!r}")
         if type(remote_id) is not int or remote_id <= 0:
             raise ValueError("remote_id must be a positive integer")
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             conn.execute(
                 """
                 INSERT INTO refreshes (app, remote_id, enqueued_at)
@@ -432,34 +463,18 @@ class RequestStore:
                     """,
                     (now, remote_id, remote_id),
                 )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def drain_refreshes(self) -> list[tuple[str, int]]:
         """Retrieve and clear all pending webhook refresh items."""
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             rows = conn.execute("SELECT app, remote_id FROM refreshes").fetchall()
             items = [(r["app"], r["remote_id"]) for r in rows]
             conn.execute("DELETE FROM refreshes")
-            conn.execute("COMMIT")
             return items
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def claim_due(self, owner: str, now: float, lease_seconds: float = 60.0) -> RequestRecord | None:
         """Atomically claim an eligible request for background processing."""
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             row = conn.execute(
                 """
                 SELECT * FROM requests
@@ -482,7 +497,6 @@ class RequestStore:
             ).fetchone()
 
             if row is None:
-                conn.execute("COMMIT")
                 return None
 
             rec_id = row["id"]
@@ -495,20 +509,12 @@ class RequestStore:
                 """,
                 (owner, expires_at, rec_id),
             )
-            conn.execute("COMMIT")
             updated_row = conn.execute("SELECT * FROM requests WHERE id = ?", (rec_id,)).fetchone()
             return self._row_to_record(updated_row) if updated_row else None
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def release(self, request_id: str, owner: str, next_check_at: float) -> None:
         """Release claim on a request and set its next check schedule."""
-        conn = self._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._txn() as conn:
             conn.execute(
                 """
                 UPDATE requests
@@ -517,12 +523,6 @@ class RequestStore:
                 """,
                 (next_check_at, request_id, owner),
             )
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.close()
 
     def record_followup(
         self, request_id: str, kind: str, reason_code: str, now: float
@@ -537,8 +537,7 @@ class RequestStore:
         ):
             raise ValueError(f"Invalid follow-up reason_code: {reason_code!r}")
 
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO followups (request_id, kind, reason_code, created_at)
@@ -547,13 +546,10 @@ class RequestStore:
                 """,
                 (request_id, kind, reason_code, now),
             )
-        finally:
-            conn.close()
 
     def list_followups(self, kind: str | None = None) -> list[dict[str, Any]]:
         """Return recorded typed follow-up entries."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             if kind is not None:
                 rows = conn.execute(
                     "SELECT request_id, kind, reason_code, created_at FROM followups WHERE kind = ? ORDER BY created_at ASC",
@@ -564,8 +560,6 @@ class RequestStore:
                     "SELECT request_id, kind, reason_code, created_at FROM followups ORDER BY created_at ASC"
                 ).fetchall()
             return [dict(r) for r in rows]
-        finally:
-            conn.close()
 
     def upsert_episode_target(
         self,
@@ -578,8 +572,7 @@ class RequestStore:
         has_file: bool = False,
     ) -> None:
         """Record or update a shared episode target for TV requests."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO episode_targets (series_id, season, episode, title, stage, has_file)
@@ -591,15 +584,12 @@ class RequestStore:
                 """,
                 (series_id, season, episode, title, stage, 1 if has_file else 0),
             )
-        finally:
-            conn.close()
 
     def list_episode_targets(
         self, series_id: int, season: int | None = None
     ) -> list[EpisodeTarget]:
         """List recorded episode targets for a TV series or season."""
-        conn = self._connect()
-        try:
+        with self._conn() as conn:
             if season is not None:
                 rows = conn.execute(
                     """
@@ -631,6 +621,4 @@ class RequestStore:
                 )
                 for r in rows
             ]
-        finally:
-            conn.close()
 

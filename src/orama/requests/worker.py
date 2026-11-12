@@ -10,12 +10,12 @@ from typing import Any
 
 from orama import state
 from orama.agent_client import AgentError
-from orama.requests.client import MediaClient, RequestError, _sanitize_title
+from orama.requests.client import MediaClient, _sanitize_title
 from orama.requests.fallback import apply_fallback, fallback_due
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
 from orama.requests.reconcile import reconcile
-from orama.requests.store import RequestStore, StoreError
+from orama.requests.store import RequestStore
 from orama.requests.submit import submit
 from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
 from orama.setup_model import DesiredSetup, enabled_apps
@@ -104,6 +104,7 @@ class RequestWorker:
         self._running = False
         self._thread: threading.Thread | None = None
         self._wake_event = threading.Event()
+        self.poll_interval = 2.0
 
     def start(self) -> None:
         """Start the background reconciliation loop."""
@@ -129,9 +130,10 @@ class RequestWorker:
         while self._running:
             try:
                 self.tick(self.clock())
-            except (RequestError, StoreError, OSError) as e:
-                _LOG.debug("request worker tick error: %s", e)
-            self._wake_event.wait(timeout=2.0)
+            except Exception as e:  # noqa: BLE001 - nothing may end the worker thread
+                # One short line, no request data: only the kind of error.
+                _LOG.warning("request worker tick failed (%s); will try again", type(e).__name__)
+            self._wake_event.wait(timeout=self.poll_interval)
             self._wake_event.clear()
 
     def tick(self, now: float) -> int:
