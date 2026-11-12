@@ -8,6 +8,7 @@ Radarr, Bazarr, Prowlarr, and Fake Newznab containers.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -749,3 +750,141 @@ def test_webhooks_restart_waiting_and_no_secret_leaks(
     # 3. Render browser pages and scan HTML + SQLite DB for any stored secret values
     _verify_pages_no_secret_leaks(clean_host, app, test_client, secret_store, state_dir, rec.id)
 
+
+
+def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path):
+    """Ask the pinned apps to accept, download and subtitle synthetic releases."""
+    __tracebackhide__ = True
+    fixture = Path(__file__).resolve().parents[1] / "e2e"
+    clips = tmp_path / "clips"
+    generated = run(["bash", str(fixture / "make_clips.sh"), str(clips)], timeout=300)
+    assert generated.returncode == 0, "synthetic clip generation failed"
+    key = secrets.token_hex(24)
+    env = {**os.environ, "TORZNAB_KEY": key}
+    name = "orama-e2e-indexer"
+    base = f"http://{name}:8000"
+    started = run(
+        [
+            "docker", "run", "--detach", "--name", name, "--network", SHARED_NETWORK,
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+            "-e", "TORZNAB_KEY", "-v", f"{clips}:/clips:ro",
+            "-v", f"{fixture / 'fake_torznab.py'}:/indexer.py:ro",
+            "python:3.12-slim", "python", "/indexer.py", "/clips",
+        ],
+        env=env, timeout=300,
+    )
+    assert started.returncode == 0, "synthetic Torznab server did not start"
+    setup = requests_stack["setup"]
+    store = _host_secret_store(clean_host, tmp_path)
+    http = Http()
+    indexer_id = series_id = movie_id = None
+
+    def prowlarr(method, route, body=None):
+        response = http.request(
+            method, f"http://127.0.0.1:{setup.ports['prowlarr']}/api/v1/{route}",
+            headers={"X-Api-Key": store.get("apikey:prowlarr")}, json=body,
+        )
+        assert response.status < 300, f"Prowlarr {method} {route}: HTTP {response.status}"
+        return response.json() if response.body else None
+
+    def arr(app, route, **kwargs):
+        return _app_call(setup, store, app, route, **kwargs)
+
+    def until(check, message, seconds=90):
+        deadline = time.monotonic() + seconds
+        while not (value := check()):
+            if time.monotonic() >= deadline:
+                pytest.fail(message)
+            time.sleep(2)
+        return value
+
+    try:
+        until(
+            lambda: run([
+                "docker", "exec", name, "python", "-c",
+                "import socket; socket.create_connection(('127.0.0.1', 8000), 1).close()",
+            ]).returncode == 0,
+            "synthetic Torznab server did not become ready",
+        )
+        schema = next(
+            row for row in prowlarr("GET", "indexer/schema")
+            if row["implementation"] == "Torznab" and row["name"].startswith("Generic ")
+        )
+        schema.update(
+            name="Orama fixture", enable=True, appProfileId=prowlarr("GET", "appprofile")[0]["id"]
+        )
+        values = {"baseUrl": base, "apiPath": "/api", "apiKey": key}
+        for field in schema["fields"]:
+            if field["name"] in values:
+                field["value"] = values[field["name"]]
+        indexer_id = prowlarr("POST", "indexer?forceSave=true", schema)["id"]
+        saved = prowlarr("GET", f"indexer/{indexer_id}")
+        prowlarr("POST", "indexer/test", saved)
+        prowlarr("POST", "command", {"name": "ApplicationIndexerSync"})
+        for app in ("sonarr", "radarr"):
+            until(
+                lambda app=app: any("Orama fixture" in row["name"] for row in arr(app, "indexer")),
+                f"Prowlarr did not sync the fixture to {app}",
+            )
+
+        media = MediaClient(setup, store, http)
+        series_id, _ = media.ensure_series(81189)
+        movie_id, _ = media.ensure_movie(27205)
+        episode_id = media.monitor_episodes(series_id, 1, 1)[0]
+        releases = {}
+        rejected = []
+        for app, query, prefix in (
+            ("sonarr", f"episodeId={episode_id}", "Breaking.Bad.S01E01"),
+            ("radarr", f"movieId={movie_id}", "Inception.2010"),
+        ):
+            found = arr(app, f"release?{query}")
+            release = next(
+                (r for r in found if r["title"].startswith(prefix) and r["title"].endswith("-ORAMA")),
+                None,
+            )
+            assert release is not None, f"{app} did not return the fixture release"
+            releases[app] = release
+            if release.get("rejected"):
+                rejected.append(f"{app}: {release.get('rejections', [])}")
+
+        # Grab through Sonarr only when its acceptance rules pass.
+        assert not rejected, "Generated releases rejected: " + "; ".join(rejected)
+        release = releases["sonarr"]
+        arr(
+            "sonarr", "release", method="POST",
+            body={"guid": release["guid"], "indexerId": release["indexerId"]},
+        )
+        log = until(
+            lambda: (
+                result.stdout if (result := run(["docker", "logs", name])).returncode == 0
+                and "web seed served Breaking.Bad" in result.stdout else None
+            ),
+            "qBittorrent did not fetch the episode bytes from the web seed",
+            seconds=180,
+        )
+        assert key not in log
+        episode = until(
+            lambda: (
+                row if (row := arr("sonarr", f"episode/{episode_id}")).get("hasFile") else None
+            ),
+            "Sonarr did not import the downloaded clip",
+            seconds=240,
+        )
+        media_path = arr("sonarr", f"episodefile/{episode['episodeFileId']}")["path"]
+        _app_sync_bazarr(setup, store, True, series_id, episode_id)
+        arr(
+            "bazarr", "/api/series", method="PATCH",
+            body={"seriesid": series_id, "action": "search-missing"}, expected=204,
+        )
+        relative = Path(media_path).relative_to("/data")
+        subtitle = (clean_host.data_root / relative).with_suffix(".el.srt")
+        until(lambda: subtitle.is_file(), "Bazarr did not write a Greek sidecar subtitle")
+        assert "Δοκιμή Orama" in subtitle.read_text(encoding="utf-8-sig")
+    finally:
+        if series_id is not None:
+            arr("sonarr", f"series/{series_id}?deleteFiles=true", method="DELETE")
+        if movie_id is not None:
+            arr("radarr", f"movie/{movie_id}?deleteFiles=true", method="DELETE")
+        if indexer_id is not None:
+            prowlarr("DELETE", f"indexer/{indexer_id}")
+        run(["docker", "rm", "-f", name])
