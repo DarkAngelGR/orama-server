@@ -15,19 +15,22 @@ Read `AGENTS.md` first.
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`729e24c`, `853dce0`, `01903ae`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
 | 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) is in progress. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
 
-## Current hand-off (Claude, 2026-11-12) — read this first
+## Current hand-off (Claude, 2026-11-13) — read this first
 
-- **Plan 5 Task 3 (end-to-end proof).** Steps 1–2 are complete; Gemini has claimed step 3.
-  Everything needed is in `docs/tasks/plan-5/T03.md` (hand-off rules at its top) and the Plan 5 plan.
-  Clone the repository again first: the history was rewritten on 2026-11-11.
-- **Claude:** review of the Plan 4/5 code and its fixes. A first review of the request store
-  found four real bugs (a full disk or a locked database stops the request worker for good;
-  finished requests are never checked again; "Waiting for …" is never cleared; asking again for a
-  finished item does nothing). They are being fixed on `test` now, test-first. More areas are
-  still to be reviewed (worker and status flow, submission and fallback, the new web routes, the
-  Agent changes, the client, playback and subtitle notes, claims versus evidence).
-- **The repository is public** (seen 2026-11-12). The plan assumed it stays private until
-  release; the owner should confirm this is intended.
+- **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
+  (fake indexer and clips) done and reviewed OK. Step 3 (Ubuntu end-to-end job) runs and passed
+  once on GitHub, but Claude's review found things to fix before it counts as done; they are
+  listed in `docs/tasks/plan-5/T03.md` under "Review of steps 2-3". Steps 4 (Debian 12 VM) and
+  5 (gate and report) are open. Clone the repository again if your copy is older than
+  2026-11-11 (the history was rewritten).
+- **Claude: request-feature review and fixes.** The request-store review found ten problems;
+  rounds 1 and 2 fixed them on `test` (`233cbcf`..`5251760`, then `b7a66bd`..`5c2c98c`), all CI
+  green. Round 3 is running: an independent check of round 2, and moving the Jellyfin library
+  refresh (added in `77210d1`) out of the webhook request into the background worker,
+  rate-limited. Still to review after that: worker and status flow, submission and fallback,
+  the new web routes, the Agent changes, the app client, playback and subtitle notes.
+- **The repository is public** (seen 2026-11-12); the plan assumed private until release. The
+  owner should confirm this is intended.
 - Still the owner's: the Claude Security scans, the NAS checklist, making the GHCR packages public.
 
 ## Review fixes (Claude, 2026-11-11)
