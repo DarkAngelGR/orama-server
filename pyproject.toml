@@ -29,6 +29,7 @@ packages = ["src/orama", "src/orama_agent"]
 testpaths = ["tests"]
 markers = [
     "integration: slow tests that need Docker or a VM (deselect with -m 'not integration')",
+    "e2e: full end-to-end proof against clean Ubuntu or a Debian VM (runs under ORAMA_E2E_TARGET)",
 ]
 
 [tool.ruff]

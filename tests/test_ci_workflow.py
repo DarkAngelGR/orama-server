@@ -4,14 +4,15 @@ from pathlib import Path
 
 import yaml
 
-CI = yaml.safe_load((Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml")
-                    .read_text())
+CI_ROOT = Path(__file__).resolve().parent.parent
+CI = yaml.safe_load((CI_ROOT / ".github/workflows/ci.yml").read_text())
+E2E = yaml.safe_load((CI_ROOT / ".github/workflows/e2e.yml").read_text())
 JOBS = CI["jobs"]
 MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
-def _steps_using(job, action):
-    return [s for s in JOBS[job]["steps"] if str(s.get("uses", "")).startswith(action)]
+def _steps_using(job, action, jobs=JOBS):
+    return [s for s in jobs[job].get("steps", []) if str(s.get("uses", "")).startswith(action)]
 
 
 def test_default_permissions_are_read_only():
@@ -64,3 +65,29 @@ def test_every_push_runs_ci_except_the_scratch_branch():
     triggers = CI[True]  # PyYAML reads the bare key `on` as the boolean True
     assert triggers["push"] == {"branches-ignore": ["e2e-dev"]}
     assert "pull_request" in triggers
+
+
+def test_e2e_workflow_runs_after_unit_and_images_with_least_privilege():
+    e2e_caller = JOBS["e2e"]
+    assert e2e_caller["uses"] == "./.github/workflows/e2e.yml"
+    assert set(e2e_caller["needs"]) >= {"unit", "images"}
+    assert E2E["permissions"] == {"contents": "read"}
+    triggers = E2E[True]
+    assert "workflow_call" in triggers
+    assert triggers["push"] == {"branches": ["e2e-dev"]}
+
+    ubuntu = E2E["jobs"]["e2e-ubuntu"]
+    assert ubuntu["runs-on"] == "ubuntu-24.04"
+    assert ubuntu["timeout-minutes"] == 60
+    assert ubuntu["env"]["PLAYWRIGHT_VERSION"].count(".") == 2
+    for step in _steps_using("e2e-ubuntu", "actions/checkout", jobs=E2E["jobs"]):
+        assert step.get("with", {}).get("persist-credentials") is False
+    script = "\n".join(s.get("run", "") for s in ubuntu["steps"])
+    assert "playwright@$PLAYWRIGHT_VERSION" in script and "install --with-deps chromium" in script
+    assert "ORAMA_E2E_TARGET=ubuntu" in script
+    assert "tests/e2e/test_e2e.py" in script
+    uploads = _steps_using("e2e-ubuntu", "actions/upload-artifact", jobs=E2E["jobs"])
+    assert len(uploads) == 1
+    assert uploads[0]["if"] == "failure()"
+    assert uploads[0]["with"]["name"] == "e2e-logs-ubuntu"
+

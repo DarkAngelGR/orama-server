@@ -1,0 +1,55 @@
+name: End-to-End Proofs
+
+on:
+  workflow_call:
+  push:
+    branches: [e2e-dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-ubuntu:
+    # Full user journey on Ubuntu 24.04: install -> Chromium wizard -> requests -> download ->
+    # hardlink -> Jellyfin -> Bazarr subtitle -> Ready -> second install idempotency -> leak scan.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_VERSION: "1.63.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Playwright and Chromium (pinned)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/playwright-node" --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          "$RUNNER_TEMP/playwright-node/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Test dependencies
+        run: uv sync --frozen
+      - name: Dedicated install user
+        run: |
+          sudo useradd --no-create-home --user-group --shell /usr/sbin/nologin orama-e2e
+          echo "ORAMA_TEST_PUID=$(id -u orama-e2e)" >> "$GITHUB_ENV"
+          echo "ORAMA_TEST_PGID=$(id -g orama-e2e)" >> "$GITHUB_ENV"
+      - name: Runner Docker note
+        run: |
+          echo "Ubuntu 24.04 hosted runner pre-installs Docker Engine; this job proves the 'Docker already present' path."
+          echo "Fresh Docker Engine installation on a clean Debian system is covered separately on Debian 12."
+      - name: Run Ubuntu end-to-end proof
+        run: >-
+          sudo -E env "PATH=$PATH" "NODE_PATH=$RUNNER_TEMP/playwright-node/node_modules"
+          ORAMA_E2E_TARGET=ubuntu
+          ORAMA_E2E_LOG_DIR="$RUNNER_TEMP/e2e-logs-ubuntu"
+          .venv/bin/python -m pytest tests/e2e/test_e2e.py -v -p no:cacheprovider
+      - name: Upload scrubbed logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-ubuntu
+          path: ${{ runner.temp }}/e2e-logs-ubuntu/
+          if-no-files-found: ignore

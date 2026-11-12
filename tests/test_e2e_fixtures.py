@@ -69,3 +69,28 @@ def test_torrent_hash_covers_the_file_and_range_serves_exact_bytes(indexer):
     assert (status, headers["Content-Range"], data) == (206, "bytes 2-5/10", b"2345")
     assert indexer(f"/files/{name}", Range="bytes=20-21")[0] == 416
     assert indexer("/files/../fake_torznab.py")[0] == 404
+
+
+def test_target_scrubs_setup_codes_and_registered_secrets():
+    from e2e.target import LocalTarget
+
+    target = LocalTarget(
+        puid=1000,
+        pgid=1000,
+        data_root="/srv/orama-e2e/data",
+        config_root="/srv/orama-e2e/cfg",
+        repo_dir="/tmp/repo",
+    )
+    target.register_secret("short", "long-secret-token", "longer-secret-token-value")
+    raw = (
+        "Orama is ready. Open http://127.0.0.1:8765/setup?code=AbCdEfGh12345678 in your browser.\n"
+        "short longer-secret-token-value long-secret-token"
+    )
+    scrubbed = target.scrub(raw)
+    assert "AbCdEfGh12345678" not in scrubbed
+    assert "longer-secret-token-value" not in scrubbed
+    assert "long-secret-token" not in scrubbed
+    assert "/setup?code=<hidden>" in scrubbed
+    assert "short" in scrubbed
+    assert target.url(8765) == "http://127.0.0.1:8765"
+

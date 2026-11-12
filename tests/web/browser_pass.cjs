@@ -13,200 +13,198 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
+const NO_BROWSER = 3;
+
 let chromium;
 try {
   ({ chromium } = require("playwright"));
 } catch (e) {
   console.error("playwright is not installed");
-  process.exit(3);
+  process.exit(NO_BROWSER);
 }
-
-const scenario = process.argv[2];
-const base = process.argv[3];
-const code = process.env.ORAMA_TEST_CODE;
-const password = process.env.ORAMA_TEST_PASSWORD;
-const width = Number(process.env.ORAMA_TEST_WIDTH || 1280);
-const scheme = process.env.ORAMA_TEST_SCHEME || "light";
-const shotsDir = process.env.ORAMA_TEST_SHOTS_DIR || "";
-const axePath = process.env.ORAMA_TEST_AXE || "";
-
-// Secrets typed into forms: made here, and checked never to come back in any page.
-const typed = {
-  jellyfinPassword: "jf-" + crypto.randomBytes(12).toString("hex"),
-  vpnKey: crypto.randomBytes(32).toString("base64"),
-  indexerKey: "ix-" + crypto.randomBytes(12).toString("hex"),
-  usenetPassword: "un-" + crypto.randomBytes(12).toString("hex"),
-};
-
-const problems = []; // everything the browser objected to, whatever page it was on
-const allowed = new Set(); // "<status> <path>" answers a step expects on purpose
-const shotNames = new Map();
-let shotCount = 0;
-
-function fail(message) {
-  throw new Error(message);
-}
-
-function watch(page) {
-  page.on("console", (m) => {
-    // Chromium logs every refused form post; a step that expects one allows it by name.
-    const refused = /Failed to load resource: the server responded with a status of (\d+)/.exec(m.text());
-    if (refused && allowed.has(`${refused[1]} ${new URL(m.location().url || base).pathname}`)) return;
-    if (m.type() === "error" || m.type() === "warning") {
-      problems.push(`console ${m.type()} at ${m.location().url || "?"}: ${m.text()}`);
-    }
-  });
-  page.on("pageerror", (e) => problems.push(`script error: ${e.message}`));
-  page.on("requestfailed", (r) => {
-    problems.push(`request failed: ${r.method()} ${new URL(r.url()).pathname} ${r.failure()?.errorText}`);
-  });
-  page.on("response", (r) => {
-    const where = new URL(r.url());
-    if (r.status() >= 400 && !allowed.has(`${r.status()} ${where.pathname}`)) {
-      problems.push(`unexpected answer: ${r.status()} ${r.request().method()} ${where.pathname}`);
-    }
-  });
-}
-
-async function launch() {
-  let browser;
-  try {
-    browser = await chromium.launch();
-  } catch (e) {
-    console.error("chromium cannot start: " + e.message);
-    process.exit(3);
-  }
-  const phone = width <= 480;
-  const context = await browser.newContext({
-    viewport: { width, height: phone ? 740 : 900 },
-    colorScheme: scheme,
-    isMobile: phone,
-    hasTouch: phone,
-    deviceScaleFactor: phone ? 2 : 1,
-  });
-  const page = await context.newPage();
-  page.setDefaultTimeout(15000);
-  watch(page);
-  return { browser, page };
-}
-
-// ------------------------------------------------------------------ checks on every page
 
 const INTERACTIVE = "a[href], button, input:not([type=hidden]), select, textarea, summary";
 
-async function audit(page, label) {
-  await page.waitForLoadState("load");
-  const info = await page.evaluate((selector) => {
-    const visible = (el) => {
-      const r = el.getBoundingClientRect();
-      const s = getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.visibility !== "hidden";
-    };
-    const level = (h) => Number(h.tagName[1]);
-    const headings = [...document.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter(visible).map(level);
-    const unnamed = [...document.querySelectorAll("input:not([type=hidden]),select,textarea")]
-      .filter((el) => visible(el) || el.type === "checkbox" || el.type === "radio")
-      .filter((el) => !(el.labels && el.labels.length) && !el.getAttribute("aria-label")
-        && !el.getAttribute("aria-labelledby"))
-      .map((el) => el.name || el.id);
-    const brokenRefs = [...document.querySelectorAll("[aria-describedby],[aria-labelledby]")]
-      .flatMap((el) => ((el.getAttribute("aria-describedby") || "") + " " +
-        (el.getAttribute("aria-labelledby") || "")).split(/\s+/).filter(Boolean)
-        .filter((id) => !document.getElementById(id)));
-    const ids = {};
-    document.querySelectorAll("[id]").forEach((el) => { ids[el.id] = (ids[el.id] || 0) + 1; });
-    const duplicates = Object.keys(ids).filter((id) => ids[id] > 1);
-    const small = [...document.querySelectorAll(selector)].filter(visible).filter((el) => {
-      const r = el.getBoundingClientRect();
-      return r.height < 44 || r.width < 44;
-    }).map((el) => {
-      const box = el.closest("label.choice, .wizard-step, li") || el;
-      const r = box.getBoundingClientRect();
-      const inline = el.matches("a") && !el.classList.contains("button") && !el.closest("nav")
-        && !el.classList.contains("brand") && !el.classList.contains("skip-link");
-      return { what: (el.textContent || el.name || el.id || el.tagName).trim().slice(0, 40),
-               tag: el.tagName, w: Math.round(r.width), h: Math.round(r.height), inline };
-    }).filter((x) => x.h < 44 || x.w < 44);
-    return {
-      scrollWidth: document.documentElement.scrollWidth,
-      innerWidth: window.innerWidth,
-      headings, unnamed, brokenRefs, duplicates, small,
-      title: document.title, lang: document.documentElement.lang,
-      html: document.documentElement.outerHTML,
-      main: !!document.querySelector("main#content"),
-    };
-  }, INTERACTIVE);
-  const where = `${label} (${new URL(page.url()).pathname})`;
-  const errors = [];
-  if (info.scrollWidth > width) errors.push(`sideways scrolling: page is ${info.scrollWidth}px wide in ${width}px`);
-  if (info.headings.filter((h) => h === 1).length !== 1) errors.push(`needs exactly one h1, has ${info.headings.filter((h) => h === 1).length}`);
-  if (info.headings.length && info.headings[0] !== 1) errors.push("the first heading is not the h1");
-  info.headings.forEach((h, i) => {
-    if (i && h > info.headings[i - 1] + 1) errors.push(`heading levels jump from h${info.headings[i - 1]} to h${h}`);
-  });
-  if (!info.title.trim() || !info.title.includes("Orama")) errors.push(`odd page title "${info.title}"`);
-  if (info.lang !== "en") errors.push("html lang is not set");
-  if (!info.main) errors.push("no main landmark");
-  if (info.unnamed.length) errors.push(`controls without a label: ${info.unnamed.join(", ")}`);
-  if (info.brokenRefs.length) errors.push(`aria references to missing ids: ${info.brokenRefs.join(", ")}`);
-  if (info.duplicates.length) errors.push(`duplicate ids: ${info.duplicates.join(", ")}`);
-  for (const [name, secret] of Object.entries(typed)) {
-    if (info.html.includes(secret)) errors.push(`${name} came back in the page`);
-  }
-  if (info.html.includes(password || "\u0000")) errors.push("the Orama password came back in the page");
-  // Buttons, form controls and nav links must be 44 px; inline links are only reported.
-  const tooSmall = info.small.filter((x) => !x.inline && x.tag !== "INPUT");
-  const smallInputs = info.small.filter((x) => x.tag === "INPUT" && x.h < 44);
-  if (tooSmall.length || smallInputs.length) {
-    errors.push("touch targets under 44px: " + [...tooSmall, ...smallInputs]
-      .map((x) => `${x.what} ${x.w}x${x.h}`).join("; "));
-  }
-  if (axePath) {
-    const axe = fs.readFileSync(axePath, "utf8");
-    await page.evaluate(axe);
-    const result = await page.evaluate(() => axe.run(document, {
-      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
-    }));
-    console.log(`note axe: ${result.passes.length} rules passed, ${result.violations.length} failed, ${result.incomplete.length} unsure on ${where}`);
-    for (const v of result.incomplete) {
-      console.log(`note axe unsure ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
-    }
-    for (const v of result.violations) {
-      errors.push(`axe ${v.id} (${v.impact}): ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
-    }
-  }
-  if (shotsDir) {
-    fs.mkdirSync(shotsDir, { recursive: true });
-    shotCount += 1;
-    const name = `${scheme}-${width}-${String(shotCount).padStart(2, "0")}-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`;
-    shotNames.set(label, name);
-    await page.screenshot({ path: path.join(shotsDir, name), fullPage: true });
-  }
-  if (errors.length) problems.push(`${where}: ${errors.join("; ")}`);
-  const hints = info.small.filter((x) => x.inline).map((x) => `${x.what} ${x.w}x${x.h}`);
-  if (hints.length) console.log(`note ${where}: small inline links: ${hints.join("; ")}`);
-}
-
-async function goto(page, urlPath, label) {
-  await page.goto(base + urlPath);
-  await audit(page, label);
-}
-
-async function click(page, locator, label) {
-  // Click something that loads a new page, then check that page.
-  const before = page.url();
-  await Promise.all([page.waitForNavigation({ waitUntil: "load" }), locator.click()]);
-  await audit(page, label);
-  return before;
+function fail(message) {
+  throw new Error(message);
 }
 
 function pathOf(page) {
   return new URL(page.url()).pathname;
 }
 
-async function expectPath(page, expected) {
-  if (pathOf(page) !== expected) fail(`expected ${expected} but the browser is on ${pathOf(page)}`);
+function createSession(opts = {}) {
+  const base = opts.baseUrl || "";
+  const password = opts.password || "";
+  const extraSecrets = opts.extraSecrets || {};
+  const width = Number(opts.width || 1280);
+  const scheme = opts.scheme || "light";
+  const shotsDir = opts.shotsDir || "";
+  const axePath = opts.axePath || "";
+  const defaultTimeout = Number(opts.defaultTimeout || 15000);
+
+  const problems = []; // everything the browser objected to, whatever page it was on
+  const allowed = new Set(); // "<status> <path>" answers a step expects on purpose
+  const shotNames = new Map();
+  let shotCount = 0;
+
+  function watch(page) {
+    page.on("console", (m) => {
+      // Chromium logs every refused form post; a step that expects one allows it by name.
+      const refused = /Failed to load resource: the server responded with a status of (\d+)/.exec(m.text());
+      if (refused && allowed.has(`${refused[1]} ${new URL(m.location().url || base).pathname}`)) return;
+      if (m.type() === "error" || m.type() === "warning") {
+        problems.push(`console ${m.type()} at ${m.location().url || "?"}: ${m.text()}`);
+      }
+    });
+    page.on("pageerror", (e) => problems.push(`script error: ${e.message}`));
+    page.on("requestfailed", (r) => {
+      problems.push(`request failed: ${r.method()} ${new URL(r.url()).pathname} ${r.failure()?.errorText}`);
+    });
+    page.on("response", (r) => {
+      const where = new URL(r.url());
+      if (r.status() >= 400 && !allowed.has(`${r.status()} ${where.pathname}`)) {
+        problems.push(`unexpected answer: ${r.status()} ${r.request().method()} ${where.pathname}`);
+      }
+    });
+  }
+
+  async function launch() {
+    let browser;
+    try {
+      browser = await chromium.launch();
+    } catch (e) {
+      console.error("chromium cannot start: " + e.message);
+      process.exit(NO_BROWSER);
+    }
+    const phone = width <= 480;
+    const context = await browser.newContext({
+      viewport: { width, height: phone ? 740 : 900 },
+      colorScheme: scheme,
+      isMobile: phone,
+      hasTouch: phone,
+      deviceScaleFactor: phone ? 2 : 1,
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(defaultTimeout);
+    watch(page);
+    return { browser, page };
+  }
+
+  async function audit(page, label) {
+    await page.waitForLoadState("load");
+    const info = await page.evaluate((selector) => {
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.visibility !== "hidden";
+      };
+      const level = (h) => Number(h.tagName[1]);
+      const headings = [...document.querySelectorAll("h1,h2,h3,h4,h5,h6")].filter(visible).map(level);
+      const unnamed = [...document.querySelectorAll("input:not([type=hidden]),select,textarea")]
+        .filter((el) => visible(el) || el.type === "checkbox" || el.type === "radio")
+        .filter((el) => !(el.labels && el.labels.length) && !el.getAttribute("aria-label")
+          && !el.getAttribute("aria-labelledby"))
+        .map((el) => el.name || el.id);
+      const brokenRefs = [...document.querySelectorAll("[aria-describedby],[aria-labelledby]")]
+        .flatMap((el) => ((el.getAttribute("aria-describedby") || "") + " " +
+          (el.getAttribute("aria-labelledby") || "")).split(/\s+/).filter(Boolean)
+          .filter((id) => !document.getElementById(id)));
+      const ids = {};
+      document.querySelectorAll("[id]").forEach((el) => { ids[el.id] = (ids[el.id] || 0) + 1; });
+      const duplicates = Object.keys(ids).filter((id) => ids[id] > 1);
+      const small = [...document.querySelectorAll(selector)].filter(visible).filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.height < 44 || r.width < 44;
+      }).map((el) => {
+        const box = el.closest("label.choice, .wizard-step, li") || el;
+        const r = box.getBoundingClientRect();
+        const inline = el.matches("a") && !el.classList.contains("button") && !el.closest("nav")
+          && !el.classList.contains("brand") && !el.classList.contains("skip-link");
+        return { what: (el.textContent || el.name || el.id || el.tagName).trim().slice(0, 40),
+                 tag: el.tagName, w: Math.round(r.width), h: Math.round(r.height), inline };
+      }).filter((x) => x.h < 44 || x.w < 44);
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+        headings, unnamed, brokenRefs, duplicates, small,
+        title: document.title, lang: document.documentElement.lang,
+        html: document.documentElement.outerHTML,
+        main: !!document.querySelector("main#content"),
+      };
+    }, INTERACTIVE);
+    const where = `${label} (${new URL(page.url()).pathname})`;
+    const errors = [];
+    if (info.scrollWidth > width) errors.push(`sideways scrolling: page is ${info.scrollWidth}px wide in ${width}px`);
+    if (info.headings.filter((h) => h === 1).length !== 1) errors.push(`needs exactly one h1, has ${info.headings.filter((h) => h === 1).length}`);
+    if (info.headings.length && info.headings[0] !== 1) errors.push("the first heading is not the h1");
+    info.headings.forEach((h, i) => {
+      if (i && h > info.headings[i - 1] + 1) errors.push(`heading levels jump from h${info.headings[i - 1]} to h${h}`);
+    });
+    if (!info.title.trim() || !info.title.includes("Orama")) errors.push(`odd page title "${info.title}"`);
+    if (info.lang !== "en") errors.push("html lang is not set");
+    if (!info.main) errors.push("no main landmark");
+    if (info.unnamed.length) errors.push(`controls without a label: ${info.unnamed.join(", ")}`);
+    if (info.brokenRefs.length) errors.push(`aria references to missing ids: ${info.brokenRefs.join(", ")}`);
+    if (info.duplicates.length) errors.push(`duplicate ids: ${info.duplicates.join(", ")}`);
+    for (const [name, secret] of Object.entries(extraSecrets)) {
+      if (secret && info.html.includes(secret)) errors.push(`${name} came back in the page`);
+    }
+    if (password && info.html.includes(password)) errors.push("the Orama password came back in the page");
+    // Buttons, form controls and nav links must be 44 px; inline links are only reported.
+    const tooSmall = info.small.filter((x) => !x.inline && x.tag !== "INPUT");
+    const smallInputs = info.small.filter((x) => x.tag === "INPUT" && x.h < 44);
+    if (tooSmall.length || smallInputs.length) {
+      errors.push("touch targets under 44px: " + [...tooSmall, ...smallInputs]
+        .map((x) => `${x.what} ${x.w}x${x.h}`).join("; "));
+    }
+    if (axePath) {
+      const axe = fs.readFileSync(axePath, "utf8");
+      await page.evaluate(axe);
+      const result = await page.evaluate(() => axe.run(document, {
+        runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
+      }));
+      console.log(`note axe: ${result.passes.length} rules passed, ${result.violations.length} failed, ${result.incomplete.length} unsure on ${where}`);
+      for (const v of result.incomplete) {
+        console.log(`note axe unsure ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
+      }
+      for (const v of result.violations) {
+        errors.push(`axe ${v.id} (${v.impact}): ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
+      }
+    }
+    if (shotsDir) {
+      fs.mkdirSync(shotsDir, { recursive: true });
+      shotCount += 1;
+      const name = `${scheme}-${width}-${String(shotCount).padStart(2, "0")}-${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`;
+      shotNames.set(label, name);
+      await page.screenshot({ path: path.join(shotsDir, name), fullPage: true });
+    }
+    if (errors.length) problems.push(`${where}: ${errors.join("; ")}`);
+    const hints = info.small.filter((x) => x.inline).map((x) => `${x.what} ${x.w}x${x.h}`);
+    if (hints.length) console.log(`note ${where}: small inline links: ${hints.join("; ")}`);
+  }
+
+  async function goto(page, urlPath, label) {
+    await page.goto(base + urlPath);
+    await audit(page, label);
+  }
+
+  async function click(page, locator, label) {
+    // Click something that loads a new page, then check that page.
+    const before = page.url();
+    await Promise.all([page.waitForNavigation({ waitUntil: "load" }), locator.click()]);
+    await audit(page, label);
+    return before;
+  }
+
+  async function expectPath(page, expected) {
+    if (pathOf(page) !== expected) fail(`expected ${expected} but the browser is on ${pathOf(page)}`);
+  }
+
+  return { launch, audit, goto, click, expectPath, allowed, problems, watch, extraSecrets };
 }
+
+let scenario, base, code, password, typed, launch, audit, goto, click, expectPath, allowed, problems;
 
 // ------------------------------------------------------------------ the whole wizard
 
@@ -642,6 +640,29 @@ async function main() {
   console.log("ok");
 }
 
-main();
+if (require.main === module) {
+  scenario = process.argv[2];
+  base = process.argv[3];
+  code = process.env.ORAMA_TEST_CODE;
+  password = process.env.ORAMA_TEST_PASSWORD;
+  typed = {
+    jellyfinPassword: "jf-" + crypto.randomBytes(12).toString("hex"),
+    vpnKey: crypto.randomBytes(32).toString("base64"),
+    indexerKey: "ix-" + crypto.randomBytes(12).toString("hex"),
+    usenetPassword: "un-" + crypto.randomBytes(12).toString("hex"),
+  };
+  ({ launch, audit, goto, click, expectPath, allowed, problems } = createSession({
+    baseUrl: base,
+    password,
+    extraSecrets: typed,
+    width: process.env.ORAMA_TEST_WIDTH,
+    scheme: process.env.ORAMA_TEST_SCHEME,
+    shotsDir: process.env.ORAMA_TEST_SHOTS_DIR,
+    axePath: process.env.ORAMA_TEST_AXE,
+  }));
+  main();
+} else {
+  module.exports = { createSession, pathOf, fail, NO_BROWSER };
+}
 
 
