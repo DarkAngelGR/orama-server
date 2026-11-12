@@ -56,3 +56,11 @@ def test_browser_job_is_separate_pinned_and_gates_publish():
     assert browser["env"]["PLAYWRIGHT_VERSION"].count(".") == 2  # an exact version
     assert "pytest tests/web/test_browser.py -m integration" in script
     assert _steps_using("browser", "actions/setup-node")
+
+
+def test_every_push_runs_ci_except_the_scratch_branch():
+    # `e2e-dev` is the throw-away branch the end-to-end jobs are tried on (Plan 5 Task 3);
+    # pushes to any other branch, `main` and `test` included, must still run all of CI.
+    triggers = CI[True]  # PyYAML reads the bare key `on` as the boolean True
+    assert triggers["push"] == {"branches-ignore": ["e2e-dev"]}
+    assert "pull_request" in triggers

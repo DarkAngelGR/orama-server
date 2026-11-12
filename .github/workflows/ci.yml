@@ -2,6 +2,9 @@ name: CI
 
 on:
   push:
+    # e2e-dev is the throw-away branch the end-to-end jobs are tried on (Plan 5 Task 3).
+    # Every other branch, main and test included, runs all of CI on every push.
+    branches-ignore: [e2e-dev]
   pull_request:
 
 # Least privilege: jobs that need more say so themselves.

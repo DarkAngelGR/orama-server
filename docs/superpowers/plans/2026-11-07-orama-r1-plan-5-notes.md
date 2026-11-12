@@ -112,3 +112,96 @@ Docker or user-namespace remapping, which Orama does not support anywhere.
   restart and requires that it changes nothing (true in CI and on the review machine). If a
   host with a much older compose ever disagrees, the visible effect is one extra restart of
   Orama on the next installer run, not a failure. The owner checklist has a step that shows it.
+
+## Task 3: end-to-end proof
+
+### Step 1 — what the hosted runners really provide (Claude, measured 2026-11-12)
+
+The plan guessed what a GitHub-hosted `ubuntu-24.04` machine offers. A temporary job measured
+it twice (one run started by a push, one started by hand; the same numbers both times, about
+20 seconds per run). The job is gone again and never existed on `test` or `main`: it ran only
+on the throw-away branch `e2e-dev` (see "How the end-to-end jobs are tried" below).
+
+**The answer that mattered: the standard runner can run a virtual machine.** No larger or
+self-hosted runner is needed, so there is nothing to ask the owner and nothing extra to pay.
+
+| What | The plan expected | Measured (runner image `ubuntu24`, version 20261101.360.1) |
+|---|---|---|
+| CPUs | 4 (2 while the repository is private) | **4** (AMD EPYC, CPU flag `svm`) |
+| Memory | 16 GB (7 GB while private) | **15,983 MB**, about 15,100 MB of it free when a job starts; plus a 3 GB swap file |
+| Free disk on `/` | about 14 GB | **86 GB** free of 145 GB |
+| `/mnt` | a second disk with free space | an empty folder on the same disk; there is no second disk |
+| `/dev/kvm` | there, but the runner user needs a udev rule | there; owner `root`, group `kvm`, mode `660`. The runner user is not in the group `kvm`, so opening it fails with "Permission denied". After the rule below: mode `666`, it opens and answers (KVM API version 12) |
+| Virtual machines inside the runner | not stated | the module `kvm_amd` is loaded with `nested = 1` |
+| A guest under KVM | not stated | the runner's own kernel, started as a guest by the runner user with `-enable-kvm -cpu host`, 4 CPUs, 2 GB and the two port forwards of *Fixed values*, printed "Hypervisor detected: KVM" and ended cleanly within 2 seconds |
+| Docker | preinstalled | Docker 28.0.4 (client and server), Compose v2.38.2, buildx v0.38.1; storage `overlay2` under `/var/lib/docker` on `/`; cgroup v2; 6 images (2.5 GB) are already on the machine |
+| QEMU packages | not preinstalled | not preinstalled. `qemu-system-x86`, `qemu-utils` and `cloud-image-utils` all install from the runner's own package archive: QEMU 8.2.2 and cloud-image-utils 0.33-1 (this brings `cloud-localds` and `genisoimage`). `apt-get update` took 5 s and the install 8–9 s; 19 MB downloaded, about 240 MB of disk |
+| Node | not stated | v22 is preinstalled |
+| Docker Hub | "anonymous pull limit" | the limit does apply to the runner: 100 pulls per hour for its address, 96 and 98 left when the two runs asked |
+
+What this means for the next steps:
+
+- **These are the numbers of a public repository.** GitHub's API reported this repository as
+  `public` when the probe ran, which is why the machine has 4 CPUs and 16 GB. The smaller
+  machine of a private repository (the plan says 2 CPUs and 7 GB) was **not** measured. Task 5
+  of the plan still describes the repository as private; the owner should check which of the
+  two is intended.
+- **Size of the Debian machine.** With 16 GB there is room for a virtual machine with 4 CPUs
+  and 8 to 10 GB of memory next to the browser. The 24 GB copy-on-write disk and the image
+  cache fit on `/`; `/mnt` is of no use.
+- **The udev rule** (GitHub's documented one, tried as written):
+  `KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"` in
+  `/etc/udev/rules.d/99-kvm4all.rules`, then `sudo udevadm control --reload-rules`,
+  `sudo udevadm trigger --name-match=kvm` and `sudo udevadm settle`. It opens `/dev/kvm` to
+  every user of a machine that is thrown away after the job and on which the runner user is
+  already allowed to use `sudo` for everything, so it gives away nothing.
+- **The packages:** `sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils
+  cloud-image-utils` after `sudo apt-get update`. Without the recommended extras QEMU still has
+  user-mode networking with port forwards and the `virtio-net-pci` device (the probe used them).
+- **No software emulation by accident.** `-enable-kvm` has no fallback: QEMU refuses to start
+  when KVM cannot be used. `vm/boot.sh` should still test `/dev/kvm` itself, to fail with a
+  plain sentence instead of QEMU's.
+- **Docker Hub.** Only `jellyfin/jellyfin`, `recyclarr/recyclarr` and the `python` base image
+  of the two Orama images come from Docker Hub in the proof; the other apps come from GHCR. A
+  run needs a handful of the 100 pulls per hour, but the address is shared with other users of
+  hosted runners, so a "too many requests" failure stays possible and is a reason to re-run.
+- **The numbers belong to one runner image version.** GitHub changes these machines without
+  notice. The `e2e-debian` job should print CPUs, memory and free disk at its start, so a later
+  change is visible in its log.
+
+How the end-to-end jobs are tried (decided with this step, used by steps 3 and 4):
+
+- New jobs are tried on a throw-away branch, **`e2e-dev`**, in their own workflow file
+  `.github/workflows/e2e.yml` (started by a push to that branch, by hand, or called from
+  `ci.yml`). `ci.yml` now ignores pushes to `e2e-dev` (a test in `tests/test_ci_workflow.py`
+  holds it to exactly that one branch), so a red attempt there neither runs the whole of CI nor
+  marks `test` as broken. Only green jobs are wired into `ci.yml` on `test`.
+- Both ways of starting were tried with the probe: `git push -f origin HEAD:e2e-dev`, and
+  "run workflow" through GitHub's API on the branch `e2e-dev` (this works although the file is
+  not on `main`).
+- Between steps the branch holds nothing of its own, and it should be deleted when it is not
+  needed. The session that did step 1 was not allowed to delete a branch (the connection it
+  works through refused the delete, HTTP 403), so `e2e-dev` still exists: it was set to the
+  same commit as `test`, without the probe. The owner can delete it on GitHub's *Branches* page
+  at any time; the next step simply overwrites it.
+
+How to repeat the probe: a job on `ubuntu-24.04` that runs `nproc`, `free -m`, `df -h / /mnt`,
+`ls -l /dev/kvm`, `id`, `docker version`, `docker compose version`, the install command and the
+udev rule above, and then
+
+```bash
+sudo install -m 0644 "/boot/vmlinuz-$(uname -r)" "$RUNNER_TEMP/vmlinuz"
+timeout 120 qemu-system-x86_64 -enable-kvm -cpu host -smp "$(nproc)" -m 2048 \
+  -display none -serial "file:$RUNNER_TEMP/guest.log" -no-reboot \
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:8765-:8765 \
+  -device virtio-net-pci,netdev=net0 \
+  -kernel "$RUNNER_TEMP/vmlinuz" -append 'console=ttyS0 panic=-1'
+grep 'Hypervisor detected: KVM' "$RUNNER_TEMP/guest.log"
+```
+
+(the guest has no disk: it prints its start-up lines, finds nothing to start from and resets,
+which `-no-reboot` turns into a clean exit).
+
+Not covered by the probe: a full Debian start with cloud-init and SSH, pulling the app images
+through user-mode networking, and how long the six apps take inside the machine. Those are
+step 4.
