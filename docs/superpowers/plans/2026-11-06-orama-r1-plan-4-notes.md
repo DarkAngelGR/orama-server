@@ -226,14 +226,21 @@ fails if the demo files come back.
   `StoreError` (`CorruptStoreError` for a damaged file or wrong tables, `StoreBusyError` when
   the database is locked). The worker loop survives any tick error and logs one warning line
   without request data. If the request database is damaged at start, Orama still serves the web
-  app and request pages answer with a plain "requests are unavailable" page.
+  app and request pages answer with a plain "requests are unavailable" page. The request worker
+  always exists and starts; it opens the store on demand, so it picks the database up again
+  once it is repaired or removed, without a restart. A Ready item whose file is gone becomes
+  "unavailable", is looked at only every 6 hours, and never falls back by itself: it waits for
+  the owner to ask again. Failed worker ticks are logged once per kind of error (and at most
+  once a minute) with back-off; a stored row above the input limits is still readable.
 - Ready requests are claimed whenever `next_check_at` is due, whatever their notes say. The
   worker picks the interval: 5 minutes while playback or subtitles are unknown or partial,
   6 hours once both are final.
 - The worker clears its own "Waiting for Radarr/Sonarr/VPN" note on the next tick where the app
   answers. Asking again for a Ready or unavailable item (not a series) restarts the same record
-  and keeps its remote id. A webhook or Retry hint that arrives during a lease is kept
-  (`refresh_hint_at`). `RequestSpec` and `RequestUpdate` validate and bound their values;
+  and keeps its remote id. A webhook hint, a Retry click or asking again that arrives
+  while the worker holds the record is always stored as `refresh_hint_at` (Retry and the
+  re-activation in `create()` record it unconditionally); `release()` keeps the earlier of the
+  hint and the worker's own time, so a "check now" is never pushed back. `RequestSpec` and `RequestUpdate` validate and bound their values;
   `updated_at` changes on every update.
 - Executor election lock: the plan's `<state_dir>/requests.lock` was not built and is not
   needed in the shipped setup. The Orama container runs one `python -m orama` process
