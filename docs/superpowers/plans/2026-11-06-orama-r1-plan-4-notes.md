@@ -119,7 +119,8 @@ and `test_pinned_title_request_contracts[radarr]`). Observed contracts verified 
 ### Tasks 2–11 implementation and owner-only checks (Gemini, 2026-11-07)
 
 - **Durable request store & domain (`src/orama/requests/models.py`, `store.py`)**:
-  SQLite store (`<state_dir>/requests.sqlite3`, mode `0600`, `PRAGMA user_version = 1`,
+  SQLite store (`<state_dir>/requests.sqlite3`, mode `0600`, schema version in a one-row `schema_version` table (not `PRAGMA user_version`),
+  rollback journal (not WAL),
   `PRAGMA foreign_keys = ON`, 5 s busy timeout) persists `requests`, `refreshes`,
   `episode_targets`, and `followups`. Unique `target_key` makes concurrent or repeated
   submissions idempotent; `claim_due` and `release` coordinate worker leases across restarts.
@@ -218,3 +219,25 @@ fails if the demo files come back.
   New helper: `MediaClient.find(kind, source_id)`. Files: `src/orama/requests/client.py`,
   `src/orama/web/posters.py`; tests in `tests/requests/test_client.py`,
   `tests/requests/test_submit.py`, `tests/web/test_posters.py`.
+
+### Review fixes to the request store and worker (2026-11-12)
+
+- Store errors: every store method goes through one helper that turns `sqlite3.Error` into
+  `StoreError` (`CorruptStoreError` for a damaged file or wrong tables, `StoreBusyError` when
+  the database is locked). The worker loop survives any tick error and logs one warning line
+  without request data. If the request database is damaged at start, Orama still serves the web
+  app and request pages answer with a plain "requests are unavailable" page.
+- Ready requests are claimed whenever `next_check_at` is due, whatever their notes say. The
+  worker picks the interval: 5 minutes while playback or subtitles are unknown or partial,
+  6 hours once both are final.
+- The worker clears its own "Waiting for Radarr/Sonarr/VPN" note on the next tick where the app
+  answers. Asking again for a Ready or unavailable item (not a series) restarts the same record
+  and keeps its remote id. A webhook or Retry hint that arrives during a lease is kept
+  (`refresh_hint_at`). `RequestSpec` and `RequestUpdate` validate and bound their values;
+  `updated_at` changes on every update.
+- Executor election lock: the plan's `<state_dir>/requests.lock` was not built and is not
+  needed in the shipped setup. The Orama container runs one `python -m orama` process
+  (one waitress process, one worker thread; `docker/orama.Dockerfile` CMD) and nothing else
+  creates a `RequestWorker`, so every worker id `worker-1` is the only worker on the database.
+  Revisit (add the lock with `state.locked(..., blocking=False)`) if a second process or
+  replica is ever allowed to share the state folder.
