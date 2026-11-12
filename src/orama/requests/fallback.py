@@ -27,7 +27,8 @@ def compute_fallback_deadline(created_at: float, setup: Any) -> tuple[str, float
 
 def fallback_due(record: RequestRecord, setup: Any, now: float) -> bool:
     """Return True if a request has waited long enough to fall back to broader releases."""
-    if record.stage == "ready" or record.fallback_applied:
+    # A finished item, or one whose file is gone, waits for the owner to ask again.
+    if record.stage in ("ready", "unavailable") or record.fallback_applied:
         return False
 
     # Use snapshotted policy from creation/retry when present

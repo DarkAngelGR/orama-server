@@ -157,6 +157,10 @@ def _matches_tv_event(
 
 
 
+# An item whose file is gone is looked at again this rarely; it waits for the owner.
+UNAVAILABLE_RECHECK_SECONDS = 6 * 3600.0
+
+
 def reconcile(
     record: RequestRecord,
     snapshot: AppSnapshot,
@@ -164,6 +168,16 @@ def reconcile(
     remote_id: int | None = None,
 ) -> RequestUpdate:
     """Derive next status stage and progress from snapshot data."""
+    return reconcile_with_evidence(record, snapshot, now, remote_id)[0]
+
+
+def reconcile_with_evidence(
+    record: RequestRecord,
+    snapshot: AppSnapshot,
+    now: float,
+    remote_id: int | None = None,
+) -> tuple[RequestUpdate, bool]:
+    """Like reconcile, and also say whether the app showed the file in this snapshot."""
     item = None
     if remote_id is not None and remote_id in snapshot.items:
         item = snapshot.items[remote_id]
@@ -243,10 +257,9 @@ def reconcile(
 
     if has_file:
         next_ready_check = now + (300.0 if record.spec.kind == "series" else 3600.0)
-        return RequestUpdate(
-            stage="ready",
-            progress=100,
-            next_check_at=next_ready_check,
+        return (
+            RequestUpdate(stage="ready", progress=100, next_check_at=next_ready_check),
+            True,
         )
 
     # Check active download / import queue
@@ -256,11 +269,11 @@ def reconcile(
             if q_id == remote_id and _matches_tv_event(q, record, target_ep_ids, ep_coords):
                 status = str(q.get("status", "")).lower()
                 if status in ("importpending", "importing"):
-                    return RequestUpdate(
+                    return (RequestUpdate(
                         stage="importing",
                         progress=100,
                         next_check_at=now + 5.0,
-                    )
+                    ), False)
                 size = q.get("size", 0)
                 sizeleft = q.get("sizeleft", 0)
                 progress = None
@@ -271,11 +284,11 @@ def reconcile(
                 ):
                     progress = max(0, min(100, int((size - sizeleft) / size * 100)))
 
-                return RequestUpdate(
+                return (RequestUpdate(
                     stage="downloading",
                     progress=progress,
                     next_check_at=now + 5.0,
-                )
+                ), False)
 
     # Check history for failures or imports
     if remote_id is not None:
@@ -284,31 +297,50 @@ def reconcile(
             if h_id == remote_id and _matches_tv_event(h, record, target_ep_ids, ep_coords):
                 event_type = str(h.get("eventType", "")).lower()
                 if "failed" in event_type or "failure" in event_type:
-                    return RequestUpdate(
+                    return (RequestUpdate(
                         stage="downloading",
                         waiting_reason="Download failed; searching for release",
                         next_check_at=now + 30.0,
-                    )
+                    ), False)
 
     if record.stage == "ready":
+        if snapshot.complete and item is None:
+            return (
+                RequestUpdate(
+                    stage="unavailable",
+                    progress=None,
+                    waiting_reason="Media file is no longer in library",
+                    next_check_at=now + UNAVAILABLE_RECHECK_SECONDS,
+                ),
+                False,
+            )
         if record.spec.kind == "series":
-            return RequestUpdate(
+            return (RequestUpdate(
                 stage="downloading",
                 progress=None,
                 waiting_reason=None,
                 next_check_at=now + 30.0,
-            )
+            ), False)
         if snapshot.complete and item is not None:
-            return RequestUpdate(
+            return (RequestUpdate(
                 stage="unavailable",
                 progress=None,
                 waiting_reason="Media file is no longer in library",
-                next_check_at=now + 300.0,
-            )
+                next_check_at=now + UNAVAILABLE_RECHECK_SECONDS,
+            ), False)
+
+    if record.stage == "unavailable" and record.remote_id is not None:
+        # Waits for the owner to ask again; only a file that comes back changes it.
+        return (
+            RequestUpdate(
+                stage="unavailable", next_check_at=now + UNAVAILABLE_RECHECK_SECONDS
+            ),
+            False,
+        )
 
     # Standard poll backoff
-    return RequestUpdate(
+    return (RequestUpdate(
         stage=record.stage,
         next_check_at=now + 30.0,
-    )
+    ), False)
 

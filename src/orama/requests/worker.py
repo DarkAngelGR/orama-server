@@ -14,7 +14,7 @@ from orama.requests.client import MediaClient, _sanitize_title
 from orama.requests.fallback import apply_fallback, fallback_due
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
-from orama.requests.reconcile import reconcile
+from orama.requests.reconcile import reconcile_with_evidence
 from orama.requests.store import RequestStore
 from orama.requests.submit import submit
 from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
@@ -281,7 +281,9 @@ class RequestWorker:
                         has_file=ep_has_file,
                     )
 
-            update = reconcile(record, snapshot, now, remote_id=resolved_remote_id)
+            update, file_seen = reconcile_with_evidence(
+                record, snapshot, now, remote_id=resolved_remote_id
+            )
 
             if (
                 update.stage != "ready"
@@ -296,7 +298,12 @@ class RequestWorker:
                 self.store.release(record.id, self.worker_id, next_fb)
                 return 1
 
-            if update.stage == "ready" and hasattr(client, "store") and resolved_remote_id is not None:
+            if (
+                update.stage == "ready"
+                and file_seen
+                and hasattr(client, "store")
+                and resolved_remote_id is not None
+            ):
                 media_info = client.file_media_info(
                     app_name,
                     resolved_remote_id,
@@ -305,6 +312,7 @@ class RequestWorker:
                 )
                 device = getattr(setup_obj, "device", "safest") or "safest"
                 pb = assess_playback(media_info, device=device)
+                keep_playback = media_info is None and bool(record.playback_note)
                 if pb.needs_conversion:
                     for code in pb.reason_codes:
                         self.store.record_followup(record.id, "conversion", code, now)
@@ -319,6 +327,7 @@ class RequestWorker:
                         resolved_remote_id,
                         season=record.spec.season if record.spec.kind == "season" else None,
                     )
+                    keep_subtitles = not ep_rows and bool(record.subtitle_note)
                     sb = (
                         assess_episode_subtitles(ep_rows, wanted_langs)
                         if ep_rows
@@ -331,6 +340,7 @@ class RequestWorker:
                         season=record.spec.season,
                         episode=record.spec.episode,
                     )
+                    keep_subtitles = avail_subs is None and bool(record.subtitle_note)
                     sb = assess_subtitles(avail_subs, wanted_langs)
 
                 if sb.needs_translation:
@@ -361,14 +371,19 @@ class RequestWorker:
                     else now + READY_FINAL_RECHECK_SECONDS
                 )
 
+                # A failed media-info or Bazarr call keeps the notes stored earlier.
+                notes: dict[str, Any] = {}
+                if not keep_playback:
+                    notes["playback_note"] = pb.note
+                if not keep_subtitles:
+                    notes["subtitle_note"] = sb.note
                 update = RequestUpdate(
                     stage="ready",
                     progress=100,
                     remote_id=resolved_remote_id,
                     waiting_reason=None,
-                    playback_note=pb.note,
-                    subtitle_note=sb.note,
                     next_check_at=next_ready_check,
+                    **notes,
                 )
 
             became_ready = record.stage != "ready" and update.stage == "ready"
