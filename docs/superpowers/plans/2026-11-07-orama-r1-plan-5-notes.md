@@ -205,3 +205,24 @@ which `-no-reboot` turns into a clean exit).
 Not covered by the probe: a full Debian start with cloud-init and SSH, pulling the app images
 through user-mode networking, and how long the six apps take inside the machine. Those are
 step 4.
+
+### Step 2 — Torznab and generated clips (ChatGPT/Codex)
+
+The pinned Prowlarr accepted the keyed generic Torznab feed and synced it to Sonarr and Radarr.
+Both releases were accepted with Orama's 1080p quality setting and the Samsung S95F device.
+The default Mixed movie profile rejected the 1080p film as intended. Use 1080p in the wizard
+harness for these fixtures. The probe applies the supported choice through Orama and restores
+the original setup afterward.
+
+The indexer reports the exact generated file sizes. The clips use H.264 filler to meet the
+size limits based on catalogue runtime and run 610 seconds to clear the 600-second sample
+cutoff in the pinned importers. qBittorrent downloaded the episode from a trackerless HTTP
+web seed, and Sonarr imported it. Bazarr extracted the embedded Greek ASS text to an SRT
+sidecar. Orama's existing ASS scan setting keeps the embedded track from counting as a
+sidecar before extraction. No second seeder or tracker was needed.
+
+CI passed at `8d46eff` ([run 43286020192](https://github.com/DarkAngelGR/orama-server/actions/runs/43286020192))
+and `238c8aa` ([run 43287636683](https://github.com/DarkAngelGR/orama-server/actions/runs/43287636683)).
+See the [task report](../../tasks/plan-5/T03.md) for the intermediate failures and test counts.
+The probe covers the episode download and extraction. The movie download, same-inode
+links, real wizard and full-machine proof remain for the next steps.

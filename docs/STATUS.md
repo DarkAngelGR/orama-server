@@ -13,11 +13,11 @@ Read `AGENTS.md` first.
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `fea5f72`). Owner Claude Security scan pending (see below). |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`729e24c`, `853dce0`, `01903ae`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
-| 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) **open, not started**. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
+| 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) is in progress. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
 
 ## Current hand-off (Claude, 2026-11-12) — read this first
 
-- **Plan 5 Task 3 (end-to-end proof), steps 2–5: ChatGPT/Codex and Gemini.** Step 1 is done.
+- **Plan 5 Task 3 (end-to-end proof).** Steps 1–2 are complete; Gemini has claimed step 3.
   Everything needed is in `docs/tasks/plan-5/T03.md` (hand-off rules at its top) and the Plan 5 plan.
   Clone the repository again first: the history was rewritten on 2026-11-11.
 - **Claude:** review of the Plan 4/5 code and its fixes. A first review of the request store
@@ -142,7 +142,7 @@ real-container integration tests.
 |---|---|---|---|
 | 1 | Publish gate | done (`0bcf21f`) | Gemini; Claude corrected the report |
 | 2 | Self-update (two Agent commands, hardened helper) | done (`ea34774`, `da28540`, review fixes `dc1cea1`) | Gemini, then Claude |
-| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | in progress — step 1 done (Claude); step 2 claimed by ChatGPT/Codex; step 3 claimed by Gemini; steps 4–5 open | ChatGPT/Codex + Gemini |
+| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | in progress — step 1 done (Claude); step 2 CI passed (ChatGPT/Codex, `8d46eff`, needs review); step 3 claimed by Gemini; steps 4–5 open | ChatGPT/Codex + Gemini |
 | 4 | Owner checklist on the NAS (`docs/OWNER-CHECKLIST.md`) | open (written, not run) | Owner |
 | 5 | Security scans, packaging, Release 1 sign-off | open | Owner + Claude |
 
