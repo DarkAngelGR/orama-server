@@ -827,7 +827,20 @@ def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path
                 f"Prowlarr did not sync the fixture to {app}",
             )
 
-        media = MediaClient(setup, store, http)
+        class CatalogueHttp(Http):
+            def request(self, method, url, **kwargs):
+                # A runner saw Sonarr's upstream metadata connection reset. Retry only
+                # read-only catalogue lookups returning service unavailable.
+                for attempt in range(3):
+                    response = super().request(method, url, **kwargs)
+                    if (
+                        response.status != 503 or method != "GET"
+                        or "/lookup?" not in url or attempt == 2
+                    ):
+                        return response
+                    time.sleep(5)
+
+        media = MediaClient(setup, store, CatalogueHttp())
         series_id, _ = media.ensure_series(81189)
         movie_id, _ = media.ensure_movie(27205)
         episode_id = media.monitor_episodes(series_id, 1, 1)[0]
