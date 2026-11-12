@@ -16,15 +16,18 @@ docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
     subtitle=$(mktemp)
     trap '\''rm -f -- "$subtitle"'\'' EXIT
     printf "1\n00:00:01,000 --> 00:00:04,000\nΔοκιμή Orama\n" > "$subtitle"
+    # The Arrs compare the published byte count with the full catalogue runtime.
+    # Use real H.264 filler so the feed and torrent can report the same byte count.
     clip() {
         /usr/lib/jellyfin-ffmpeg/ffmpeg -nostdin -hide_banner -loglevel error -y \
             -f lavfi -i "color=black:size=1920x1080:rate=24" \
             -f lavfi -i "anullsrc=channel_layout=5.1:sample_rate=48000" \
             -f srt -i "$subtitle" -map 0:v -map 1:a -map 2:s -t "$1" \
             -c:v libx264 -threads:v 2 -preset ultrafast -pix_fmt yuv420p \
+            -b:v 45M -minrate 45M -maxrate 45M -bufsize 45M -x264-params nal-hrd=cbr \
             -c:a eac3 -b:a 448k -metadata:s:a:0 language=eng \
-            -c:s srt -metadata:s:s:0 language=gre -disposition:s:0 0 "/clips/$2"
+            -c:s ass -metadata:s:s:0 language=gre -disposition:s:0 0 "/clips/$2"
     }
-    clip 120 Breaking.Bad.S01E01.1080p.WEB-DL.English.DDP5.1.H.264-ORAMA.mkv
-    clip 180 Inception.2010.1080p.WEB-DL.English.DDP5.1.H.264-ORAMA.mkv
+    clip 210 Breaking.Bad.S01E01.1080p.WEB-DL.English.DDP5.1.H.264-ORAMA.mkv
+    clip 480 Inception.2010.1080p.WEB-DL.English.DDP5.1.H.264-ORAMA.mkv
 '

@@ -56,6 +56,14 @@ def test_torrent_hash_covers_the_file_and_range_serves_exact_bytes(indexer):
         + b"12:piece lengthi262144e6:pieces20:" + piece + b"e"
     )
     assert torrent.startswith(b"d4:info" + info)
+    status, _, body = indexer("/api?t=tvsearch&q=Breaking+Bad&cat=5040&apikey=fixture-key")
+    assert status == 200
+    attrs = ElementTree.fromstring(body).findall(
+        "./channel/item/{http://torznab.com/schemas/2015/feed}attr"
+    )
+    advertised = {attr.get("name"): attr.get("value") for attr in attrs}
+    assert advertised["infohash"] == sha1(info).hexdigest()
+    assert advertised["size"] == "10"
     assert b"http://indexer:8000/files/" + encoded_name in torrent
     status, headers, data = indexer(f"/files/{name}", Range="bytes=2-5")
     assert (status, headers["Content-Range"], data) == (206, "bytes 2-5/10", b"2345")
