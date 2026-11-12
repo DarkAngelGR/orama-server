@@ -480,14 +480,6 @@ class RequestStore:
                 SELECT * FROM requests
                 WHERE next_check_at <= ?
                   AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
-                  AND (
-                      stage != 'ready'
-                      OR kind = 'series'
-                      OR playback_note IS NULL
-                      OR playback_note LIKE '%not checked%'
-                      OR subtitle_note IS NULL
-                      OR subtitle_note LIKE '%not checked%'
-                  )
                 ORDER BY
                   CASE WHEN stage != 'ready' THEN 0 ELSE 1 END ASC,
                   next_check_at ASC

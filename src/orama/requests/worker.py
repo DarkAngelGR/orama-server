@@ -22,6 +22,11 @@ from orama.setup_model import DesiredSetup, enabled_apps
 
 _LOG = logging.getLogger(__name__)
 SETUP_FILE = "setup.json"
+# A Ready request whose playback and subtitles are both final is looked at again this
+# rarely; a deleted or upgraded file is noticed then (or sooner, by a webhook hint).
+READY_FINAL_RECHECK_SECONDS = 6 * 3600.0
+# While playback or subtitles are still unknown or partial, look again this often.
+READY_PENDING_RECHECK_SECONDS = 300.0
 
 
 def schedule_startup_check(
@@ -331,9 +336,9 @@ class RequestWorker:
                     or sb.status in ("unknown", "partial", "missing")
                 )
                 next_ready_check = (
-                    now + 300.0
+                    now + READY_PENDING_RECHECK_SECONDS
                     if needs_recheck
-                    else (update.next_check_at if update.next_check_at is not None else now + 3600.0)
+                    else now + READY_FINAL_RECHECK_SECONDS
                 )
 
                 update = RequestUpdate(
