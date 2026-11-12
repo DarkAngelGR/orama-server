@@ -488,3 +488,35 @@ def test_oversized_ids_are_a_400_not_a_500(tmp_path: Path):
     ):
         response = client.post("/requests", data={**data, "title": "x", "csrf_token": csrf})
         assert response.status_code == 400
+
+
+def test_retry_clicked_during_a_worker_lease_is_not_lost(tmp_path: Path):
+    client, _app, st, _http, _worker, clock, csrf = _make_env(tmp_path)
+    form = {"kind": "movie", "source_id": "101", "title": "Arrival", "csrf_token": csrf}
+    client.post("/requests", data=form)
+    rec = st.requests.list_recent()[0]
+    claimed = st.requests.claim_due("w", clock())
+    assert claimed is not None
+    clock.now += 10.0
+    retry = client.post(f"/requests/{rec.id}/retry", data={"csrf_token": csrf})
+    assert retry.status_code == 303
+    clock.now += 1.0
+    # The worker's own write is refused (stale revision); its release names a late time.
+    st.requests.release(rec.id, "w", clock() + 3600.0)
+    assert st.requests.get(rec.id).next_check_at <= clock.now - 1.0
+
+
+def test_asking_again_during_a_worker_lease_is_not_lost(tmp_path: Path):
+    client, _app, st, _http, _worker, clock, csrf = _make_env(tmp_path)
+    form = {"kind": "movie", "source_id": "101", "title": "Arrival", "csrf_token": csrf}
+    client.post("/requests", data=form)
+    rec = st.requests.list_recent()[0]
+    st.requests.update(rec.id, rec.revision, RequestUpdate(stage="ready", remote_id=9))
+    assert st.requests.claim_due("w", clock()) is not None  # the 6-hour re-check
+    clock.now += 10.0
+    assert client.post("/requests", data=form).status_code == 303
+    clock.now += 1.0
+    st.requests.release(rec.id, "w", clock() + 6 * 3600.0)
+    after = st.requests.get(rec.id)
+    assert after.stage == "requested"
+    assert after.next_check_at <= clock.now - 1.0

@@ -367,11 +367,12 @@ class RequestStore:
                         UPDATE requests
                         SET stage = 'requested', waiting_reason = NULL, progress = NULL,
                             playback_note = NULL, subtitle_note = NULL,
-                            next_check_at = ?, wait_mode = ?, fallback_deadline = ?,
+                            next_check_at = ?, refresh_hint_at = ?,
+                            wait_mode = ?, fallback_deadline = ?,
                             fallback_applied = 0, revision = revision + 1, updated_at = ?
                         WHERE id = ?
                         """,
-                        (now, wait_mode, fallback_deadline, now, row["id"]),
+                        (now, now, wait_mode, fallback_deadline, now, row["id"]),
                     )
                     row = conn.execute(
                         "SELECT * FROM requests WHERE id = ?", (row["id"],)

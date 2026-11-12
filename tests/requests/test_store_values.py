@@ -97,3 +97,15 @@ def test_updated_at_changes_on_every_update(tmp_path):
     assert store.update(rec.id, 2, RequestUpdate(stage="ready"), now=9000.0)
     got = store.get(rec.id)
     assert got.updated_at == 9000.0 and got.created_at == 1000.0 and got.revision == 3
+
+
+def test_asking_again_for_a_finished_item_during_a_lease_is_not_lost(tmp_path):
+    store = RequestStore(tmp_path / "requests.db")
+    rec, _ = store.create(RequestSpec(kind="movie", source_id=7), 1000.0)
+    store.update(rec.id, rec.revision, RequestUpdate(stage="ready", remote_id=7))
+    assert store.claim_due("w", 2000.0) is not None
+    store.create(RequestSpec(kind="movie", source_id=7), 2001.0)  # asked again, mid-check
+    store.release(rec.id, "w", 2000.0 + 6 * 3600.0)
+    after = store.get(rec.id)
+    assert after.stage == "requested"
+    assert after.next_check_at <= 2001.0

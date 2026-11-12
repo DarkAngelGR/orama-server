@@ -286,7 +286,7 @@ def register_requests(app: Flask) -> None:
         setup = st.setup.current()
         wait_mode, fallback_deadline = _snapshot_policy(rec.created_at, setup)
         next_stage = "requested" if rec.stage == "requested" else "searching"
-        changed = st.requests.update(
+        st.requests.update(
             rec.id,
             rec.revision,
             RequestUpdate(
@@ -298,9 +298,9 @@ def register_requests(app: Flask) -> None:
             ),
             now=now,
         )
-        if not changed:
-            # A worker changed the record meanwhile: keep the wish to look again soon.
-            st.requests.request_recheck(rec.id, now)
+        # Always keep the wish to look again now: a worker that holds the record would
+        # otherwise release it with its own, later time.
+        st.requests.request_recheck(rec.id, now)
         _wake_worker()
         return redirect(url_for("requests.detail", request_id=rec.id), 303)
 
