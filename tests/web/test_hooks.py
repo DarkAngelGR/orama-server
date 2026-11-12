@@ -282,3 +282,50 @@ def test_host_exception_only_for_exact_webhook_routes(app, client):
             },
         )
         assert rejected.status_code == 400, (method, path)
+
+
+def test_import_webhooks_refresh_jellyfin_best_effort(state_dir, clock):
+    from orama.secrets import JELLYFIN_KEY_NAME
+    from orama.wiring.http import FakeHttp, Response
+
+    fake_http = FakeHttp()
+    fake_http.route("POST", "/Library/Refresh", lambda c: Response(204, {}, b""))
+    app = create_app(state_dir, http=fake_http, clock=clock)
+    client = app.test_client()
+    sonarr_tok, radarr_tok = _make_tokens(app)
+    write_setup(state_dir, media_servers={"jellyfin"})
+    jf_key = secrets.token_hex(16)
+    app.extensions["orama"].store.set(JELLYFIN_KEY_NAME, jf_key)
+
+    # Grab does not trigger a Jellyfin library refresh
+    r_grab = client.post(
+        "/hooks/sonarr",
+        data=json.dumps({"eventType": "Grab", "series": {"id": 10, "tvdbId": 81189}}),
+        headers={"Authorization": f"Bearer {sonarr_tok}", "Content-Type": "application/json"},
+    )
+    assert r_grab.status_code == 200
+    assert fake_http.calls == []
+
+    # Download / Upgrade / Rename trigger POST /Library/Refresh with Authorization header
+    r_dl = client.post(
+        "/hooks/radarr",
+        data=json.dumps({"eventType": "Download", "movie": {"id": 7, "tmdbId": 27205}}),
+        headers={"Authorization": f"Bearer {radarr_tok}", "Content-Type": "application/json"},
+    )
+    assert r_dl.status_code == 200
+    assert len(fake_http.calls) == 1
+    call = fake_http.calls[0]
+    assert call.method == "POST"
+    assert call.url == "http://jellyfin:8096/Library/Refresh"
+    assert jf_key not in call.url
+    assert call.headers["Authorization"].endswith(f'Token="{jf_key}"')
+
+    # Unreachable Jellyfin must still return 200 ok for the webhook
+    fake_http.unreachable = True
+    r_up = client.post(
+        "/hooks/sonarr",
+        data=json.dumps({"eventType": "Upgrade", "series": {"id": 10, "tvdbId": 81189}}),
+        headers={"Authorization": f"Bearer {sonarr_tok}", "Content-Type": "application/json"},
+    )
+    assert r_up.status_code == 200
+

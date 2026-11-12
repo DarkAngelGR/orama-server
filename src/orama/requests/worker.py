@@ -19,6 +19,7 @@ from orama.requests.store import RequestStore
 from orama.requests.submit import submit
 from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
 from orama.setup_model import DesiredSetup, enabled_apps
+from orama.wiring.jellyfin import refresh_library as refresh_jellyfin_library
 
 _LOG = logging.getLogger(__name__)
 SETUP_FILE = "setup.json"
@@ -370,8 +371,11 @@ class RequestWorker:
                     next_check_at=next_ready_check,
                 )
 
+            became_ready = record.stage != "ready" and update.stage == "ready"
             update = _clear_own_waiting_note(record, update)
             self.store.update(record.id, record.revision, update, now=now)
+            if became_ready and hasattr(client, "store") and hasattr(client, "http"):
+                refresh_jellyfin_library(setup_obj, client.store, client.http)
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
             return 1

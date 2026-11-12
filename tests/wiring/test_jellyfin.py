@@ -12,7 +12,7 @@ from orama.secrets import (
 )
 from orama.wiring.engine import StepError, run_steps
 from orama.wiring.http import FakeHttp, Response
-from orama.wiring.jellyfin import ADMIN_USER, WRONG_PASSWORD, jellyfin_steps
+from orama.wiring.jellyfin import ADMIN_USER, WRONG_PASSWORD, jellyfin_steps, refresh_library
 
 BASE = "http://jellyfin:8096"
 
@@ -319,3 +319,45 @@ def test_wait_keeps_waiting_while_the_server_does_not_yet_know_its_setup_state(s
     finally:
         engine.time.sleep = original
     assert len(fake.http.calls) == 2
+
+
+def test_libraries_turn_on_realtime_monitor(store, password):
+    fake = FakeJellyfin(password)
+    run(fake, store)
+    posts = [c for c in fake.http.calls if c.method == "POST" and c.path == "/Library/VirtualFolders"]
+    assert len(posts) == 2
+    assert all(p.json["LibraryOptions"]["EnableRealtimeMonitor"] is True for p in posts)
+
+
+def test_refresh_library_checks_setup_key_and_errors(store, password):
+    fake = FakeJellyfin(password)
+    fake.http.route("POST", "/Library/Refresh", lambda c: Response(204, {}, b""))
+    jf_setup = make_setup(media_servers={"jellyfin"})
+    plex_setup = make_setup(media_servers={"plex"})
+
+    # No key yet -> no request
+    assert refresh_library(jf_setup, store, fake.http) is False
+    assert fake.http.calls == []
+
+    # Jellyfin not enabled -> no request even with key
+    jf_key = random_secret("jfkey")
+    store.set(JELLYFIN_KEY_NAME, jf_key)
+    assert refresh_library(plex_setup, store, fake.http) is False
+    assert refresh_library(None, store, fake.http) is False
+    assert fake.http.calls == []
+
+    # Enabled + key -> sends POST /Library/Refresh with header auth (never in URL)
+    assert refresh_library(jf_setup, store, fake.http) is True
+    assert len(fake.http.calls) == 1
+    call = fake.http.calls[0]
+    assert call.method == "POST" and call.url == f"{BASE}/Library/Refresh"
+    assert jf_key not in call.url
+    assert call.headers["Authorization"].endswith(f'Token="{jf_key}"')
+
+    # Unreachable or 500 -> returns False cleanly without raising
+    fake.http.unreachable = True
+    assert refresh_library(jf_setup, store, fake.http) is False
+    fake.http.unreachable = False
+    fake.http.route("POST", "/Library/Refresh", lambda c: Response(500, {}, b""))
+    assert refresh_library(jf_setup, store, fake.http) is False
+

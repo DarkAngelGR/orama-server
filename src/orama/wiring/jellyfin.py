@@ -180,8 +180,17 @@ def jellyfin_steps(
                 {"name": name, "collectionType": kind, "refreshLibrary": "false"},
                 quote_via=urllib.parse.quote,
             )
-            signed("POST", "/Library/VirtualFolders", query=f"?{query}",
-                   json={"LibraryOptions": {"PathInfos": [{"Path": folder}]}})
+            signed(
+                "POST",
+                "/Library/VirtualFolders",
+                query=f"?{query}",
+                json={
+                    "LibraryOptions": {
+                        "EnableRealtimeMonitor": True,
+                        "PathInfos": [{"Path": folder}],
+                    }
+                },
+            )
             added.append(name)
         if not added:
             return None
@@ -218,3 +227,34 @@ def jellyfin_steps(
         Step("jellyfin:libraries", "jellyfin", libraries, needs=signed_in),
         Step("jellyfin:hardware", "jellyfin", hardware, needs=signed_in),
     ]
+
+
+def refresh_library(
+    setup: Any,
+    store: Any,
+    http: Any,
+    *,
+    timeout: float = 5.0,
+) -> bool:
+    """Trigger a Jellyfin library scan when Jellyfin is enabled and wired.
+
+    Best-effort: Jellyfin skips empty library folders on initial setup, so
+    Sonarr/Radarr's per-path ``/Library/Media/Updated`` notifications are
+    ignored until a library scan registers the top-level folders. Returning
+    ``False`` on connection or HTTP errors keeps webhook/worker paths resilient.
+    """
+    if setup is None or "jellyfin" not in getattr(setup, "media_servers", ()):
+        return False
+    key = store.get(JELLYFIN_KEY_NAME) if store is not None else None
+    if not key or http is None:
+        return False
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f'MediaBrowser {_CLIENT}, Token="{key}"',
+    }
+    try:
+        resp = http.request("POST", f"{BASE}/Library/Refresh", headers=headers, timeout=timeout)
+    except Unreachable:
+        return False
+    return 200 <= resp.status < 300
+
