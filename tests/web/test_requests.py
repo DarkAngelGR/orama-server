@@ -477,3 +477,14 @@ def test_requesting_a_ready_movie_again_makes_it_active_again(tmp_path: Path):
     after = st.requests.get(rec.id)
     assert after.stage == "requested" and after.remote_id == 9
     assert worker.wakes == 2
+
+
+def test_oversized_ids_are_a_400_not_a_500(tmp_path: Path):
+    client, _app, _st, _http, _worker, _clock, csrf = _make_env(tmp_path)
+    for data in (
+        {"kind": "movie", "source_id": "9223372036854775808"},
+        {"kind": "movie", "source_id": "999999999"},
+        {"kind": "episode", "source_id": "5", "season": "1", "episode": "9" * 30},
+    ):
+        response = client.post("/requests", data={**data, "title": "x", "csrf_token": csrf})
+        assert response.status_code == 400

@@ -371,7 +371,7 @@ class RequestWorker:
                 )
 
             update = _clear_own_waiting_note(record, update)
-            self.store.update(record.id, record.revision, update)
+            self.store.update(record.id, record.revision, update, now=now)
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
             return 1

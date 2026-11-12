@@ -1,6 +1,7 @@
 """Data models and validation for media requests."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -11,6 +12,48 @@ VALID_STAGES: frozenset[str] = frozenset(
 )
 
 _UNSET: Any = object()
+
+MAX_SOURCE_ID = 100_000_000
+MAX_SEASON = 10_000
+MAX_EPISODE = 100_000
+MAX_REMOTE_ID = 2**31 - 1
+MAX_TEXT = 2000
+VALID_WAIT_MODES: frozenset[str] = frozenset({"always", "never", "timed"})
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _check_update(name: str, value: Any) -> None:
+    """Raise ValidationError unless ``value`` is acceptable for the update field ``name``."""
+    ok: bool
+    if name == "stage":
+        ok = isinstance(value, str) and value in VALID_STAGES
+    elif name == "progress":
+        ok = value is None or (_is_int(value) and 0 <= value <= 100)
+    elif name == "next_check_at":
+        ok = _is_number(value)
+    elif name == "fallback_deadline":
+        ok = value is None or _is_number(value)
+    elif name == "remote_id":
+        ok = value is None or (_is_int(value) and 0 < value <= MAX_REMOTE_ID)
+    elif name == "fallback_applied":
+        ok = isinstance(value, bool)
+    elif name == "wait_mode":
+        ok = value is None or (isinstance(value, str) and value in VALID_WAIT_MODES)
+    else:  # waiting_reason, playback_note, subtitle_note
+        ok = value is None or (isinstance(value, str) and len(value) <= MAX_TEXT)
+    if not ok:
+        raise ValidationError(f"Invalid value for {name}")
 
 
 class ValidationError(ValueError):
@@ -31,6 +74,12 @@ class RequestSpec:
             raise ValidationError(f"Invalid request kind: {self.kind!r}")
         if not isinstance(self.source_id, int) or isinstance(self.source_id, bool) or self.source_id <= 0:
             raise ValidationError(f"source_id must be a positive integer, got {self.source_id!r}")
+        if self.source_id > MAX_SOURCE_ID:
+            raise ValidationError("source_id is too large")
+        if isinstance(self.season, int) and self.season > MAX_SEASON:
+            raise ValidationError("season is too large")
+        if isinstance(self.episode, int) and self.episode > MAX_EPISODE:
+            raise ValidationError("episode is too large")
 
         if self.kind == "movie":
             if self.season is not None or self.episode is not None:
@@ -146,6 +195,7 @@ class RequestUpdate:
             if val is _UNSET:
                 object.__setattr__(self, name, None)
             else:
+                _check_update(name, val)
                 provided.add(name)
                 object.__setattr__(self, name, val)
         object.__setattr__(self, "provided_fields", frozenset(provided))

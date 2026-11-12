@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -165,7 +166,8 @@ class RequestStore:
                         fallback_deadline REAL,
                         fallback_applied INTEGER NOT NULL DEFAULT 0,
                         title TEXT,
-                        year INTEGER
+                        year INTEGER,
+                        refresh_hint_at REAL
                     )
                     """
                 )
@@ -222,6 +224,7 @@ class RequestStore:
                     ("fallback_applied", "INTEGER NOT NULL DEFAULT 0"),
                     ("title", "TEXT"),
                     ("year", "INTEGER"),
+                    ("refresh_hint_at", "REAL"),
                 ):
                     if col_name not in existing_cols:
                         conn.execute(f"ALTER TABLE requests ADD COLUMN {col_name} {col_type}")
@@ -348,8 +351,8 @@ class RequestStore:
                 ).fetchone()
                 if row is not None and title and not row["title"]:
                     conn.execute(
-                        "UPDATE requests SET title = ?, year = COALESCE(year, ?) WHERE id = ?",
-                        (title, year, row["id"]),
+                        "UPDATE requests SET title = ?, year = COALESCE(year, ?), updated_at = ? WHERE id = ?",
+                        (title, year, now, row["id"]),
                     )
                     row = conn.execute(
                         "SELECT * FROM requests WHERE target_key = ?", (target_key,)
@@ -365,10 +368,10 @@ class RequestStore:
                         SET stage = 'requested', waiting_reason = NULL, progress = NULL,
                             playback_note = NULL, subtitle_note = NULL,
                             next_check_at = ?, wait_mode = ?, fallback_deadline = ?,
-                            fallback_applied = 0, revision = revision + 1
+                            fallback_applied = 0, revision = revision + 1, updated_at = ?
                         WHERE id = ?
                         """,
-                        (now, wait_mode, fallback_deadline, row["id"]),
+                        (now, wait_mode, fallback_deadline, now, row["id"]),
                     )
                     row = conn.execute(
                         "SELECT * FROM requests WHERE id = ?", (row["id"],)
@@ -408,7 +411,14 @@ class RequestStore:
             ).fetchall()
             return [self._row_to_record(r) for r in rows]
 
-    def update(self, request_id: str, expected_revision: int, changes: RequestUpdate) -> bool:
+    def update(
+        self,
+        request_id: str,
+        expected_revision: int,
+        changes: RequestUpdate,
+        *,
+        now: float | None = None,
+    ) -> bool:
         """Optimistically update request record; returns False if revision is stale."""
         fields: list[str] = []
         values: list[Any] = []
@@ -436,6 +446,8 @@ class RequestStore:
             return True
 
         fields.append("revision = revision + 1")
+        fields.append("updated_at = ?")
+        values.append(time.time() if now is None else float(now))
         set_clause = ", ".join(fields)
         values.extend([request_id, expected_revision])
 
@@ -466,20 +478,32 @@ class RequestStore:
                 conn.execute(
                     """
                     UPDATE requests
-                    SET next_check_at = MIN(next_check_at, ?)
+                    SET next_check_at = MIN(next_check_at, ?), refresh_hint_at = ?
                     WHERE kind = 'movie' AND (remote_id = ? OR source_id = ?)
                     """,
-                    (now, remote_id, remote_id),
+                    (now, now, remote_id, remote_id),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE requests
-                    SET next_check_at = MIN(next_check_at, ?)
+                    SET next_check_at = MIN(next_check_at, ?), refresh_hint_at = ?
                     WHERE kind != 'movie' AND (remote_id = ? OR source_id = ?)
                     """,
-                    (now, remote_id, remote_id),
+                    (now, now, remote_id, remote_id),
                 )
+
+    def request_recheck(self, request_id: str, now: float) -> None:
+        """Ask for an early check (Retry button); kept even if a worker holds the record."""
+        with self._txn() as conn:
+            conn.execute(
+                """
+                UPDATE requests
+                SET next_check_at = MIN(next_check_at, ?), refresh_hint_at = ?
+                WHERE id = ?
+                """,
+                (now, now, request_id),
+            )
 
     def drain_refreshes(self) -> list[tuple[str, int]]:
         """Retrieve and clear all pending webhook refresh items."""
@@ -513,7 +537,7 @@ class RequestStore:
             conn.execute(
                 """
                 UPDATE requests
-                SET claim_owner = ?, claim_expires_at = ?
+                SET claim_owner = ?, claim_expires_at = ?, refresh_hint_at = NULL
                 WHERE id = ?
                 """,
                 (owner, expires_at, rec_id),
@@ -527,10 +551,14 @@ class RequestStore:
             conn.execute(
                 """
                 UPDATE requests
-                SET claim_owner = NULL, claim_expires_at = NULL, next_check_at = ?
+                SET claim_owner = NULL, claim_expires_at = NULL,
+                    next_check_at = CASE
+                        WHEN refresh_hint_at IS NOT NULL THEN MIN(?, refresh_hint_at)
+                        ELSE ? END,
+                    refresh_hint_at = NULL
                 WHERE id = ? AND (claim_owner = ? OR claim_owner IS NULL)
                 """,
-                (next_check_at, request_id, owner),
+                (next_check_at, next_check_at, request_id, owner),
             )
 
     def record_followup(
