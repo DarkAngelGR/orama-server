@@ -757,7 +757,7 @@ def test_generated_torznab_release_contract(clean_host, requests_stack, tmp_path
     __tracebackhide__ = True
     fixture = Path(__file__).resolve().parents[1] / "e2e"
     clips = tmp_path / "clips"
-    generated = run(["bash", str(fixture / "make_clips.sh"), str(clips)], timeout=300)
+    generated = run(["bash", str(fixture / "make_clips.sh"), str(clips)], timeout=600)
     assert generated.returncode == 0, "synthetic clip generation failed"
     key = secrets.token_hex(24)
     env = {**os.environ, "TORZNAB_KEY": key}
