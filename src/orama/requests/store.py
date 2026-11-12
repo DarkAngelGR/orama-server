@@ -356,6 +356,23 @@ class RequestStore:
                     ).fetchone()
                 if row is None:
                     raise StoreError("Integrity error on target key but existing row not found")
+                if row["stage"] in ("ready", "unavailable") and row["kind"] != "series":
+                    # Asking again for a finished item starts the same record again. The
+                    # remote id is kept, so nothing is added twice to Radarr or Sonarr.
+                    conn.execute(
+                        """
+                        UPDATE requests
+                        SET stage = 'requested', waiting_reason = NULL, progress = NULL,
+                            playback_note = NULL, subtitle_note = NULL,
+                            next_check_at = ?, wait_mode = ?, fallback_deadline = ?,
+                            fallback_applied = 0, revision = revision + 1
+                        WHERE id = ?
+                        """,
+                        (now, wait_mode, fallback_deadline, row["id"]),
+                    )
+                    row = conn.execute(
+                        "SELECT * FROM requests WHERE id = ?", (row["id"],)
+                    ).fetchone()
                 return self._row_to_record(row), False
 
     def get(self, request_id: str) -> RequestRecord | None:

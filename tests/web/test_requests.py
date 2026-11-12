@@ -463,3 +463,17 @@ def test_damaged_request_database_shows_plain_unavailable_page(tmp_path: Path):
     text = posted.get_data(as_text=True).lower()
     assert "unavailable" in text
     assert "503" not in text and "sqlite" not in text
+
+
+def test_requesting_a_ready_movie_again_makes_it_active_again(tmp_path: Path):
+    client, _app, st, _http, worker, _clock, csrf = _make_env(tmp_path)
+    form = {"kind": "movie", "source_id": "101", "title": "Arrival", "csrf_token": csrf}
+    location = client.post("/requests", data=form).headers["Location"]
+    rec = st.requests.list_recent()[0]
+    st.requests.update(rec.id, rec.revision, RequestUpdate(stage="ready", remote_id=9))
+
+    again = client.post("/requests", data=form)
+    assert again.headers["Location"] == location
+    after = st.requests.get(rec.id)
+    assert after.stage == "requested" and after.remote_id == 9
+    assert worker.wakes == 2
