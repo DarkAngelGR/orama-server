@@ -15,7 +15,7 @@ import waitress
 
 from orama.agent_client import AgentClient
 from orama.requests.client import MediaClient
-from orama.requests.store import RequestStore, StoreError
+from orama.requests.store import RequestStore
 from orama.requests.worker import RequestWorker, schedule_startup_check
 from orama.secrets import SecretStore, install_redaction
 from orama.web import MAX_REQUEST_BYTES, REQUESTS_FILE, SECRETS_FILE, SetupReader, create_app
@@ -45,35 +45,24 @@ def main() -> None:
     agent = AgentClient()
     db_path = state_dir / REQUESTS_FILE
     setup_reader = SetupReader(state_dir)
-    worker: RequestWorker | None = None
-    try:
-        request_store = RequestStore(db_path)
-    except StoreError as error:
-        # A damaged request database must not stop the whole app: serve every other page
-        # and show a plain "requests are unavailable" state on the request pages.
-        logging.getLogger("orama").error(
-            "The request database cannot be used (%s). Requests are unavailable until it "
-            "is repaired or removed.",
-            type(error).__name__,
-        )
-    else:
-        worker = RequestWorker(
-            store=request_store,
-            client_factory=lambda: MediaClient(
-                setup_reader.current(), secret_store, Http(), use_service_hosts=True
-            ),
-            agent=agent,
-        )
+    # The worker always exists. It opens the request database on demand, so a damaged,
+    # locked or full database at start is picked up again once it is repaired or removed.
+    worker = RequestWorker(
+        store=None,
+        store_factory=lambda: RequestStore(db_path),
+        client_factory=lambda: MediaClient(
+            setup_reader.current(), secret_store, Http(), use_service_hosts=True
+        ),
+        agent=agent,
+    )
     app = create_app(state_dir, agent=agent, request_worker=worker)
     st = app.extensions["orama"]
     schedule_startup_check(state_dir, st.agent, st.jobs, st.apply_gate)
-    if worker is not None:
-        worker.start()
+    worker.start()
     try:
         waitress.serve(app, **SERVE_OPTIONS)
     finally:
-        if worker is not None:
-            worker.stop()
+        worker.stop()
 
 
 if __name__ == "__main__":

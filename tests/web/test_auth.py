@@ -700,18 +700,55 @@ def test_expired_session_sends_htmx_polls_to_sign_in(client, password, clock, pa
     assert plain.status_code == 303 and "/signin" in plain.headers["Location"]
 
 
-def test_main_serves_the_app_when_the_request_database_is_damaged(
-    monkeypatch, state_dir: Path, caplog
+def test_worker_recovers_when_the_damaged_request_database_is_removed(
+    monkeypatch, state_dir: Path
 ):
-    import orama.__main__ as main_module
+    import time
 
-    (state_dir / "requests.sqlite3").write_bytes(b"garbage" * 100)
-    calls = {}
+    import orama.__main__ as main_module
+    from orama.requests.client import AppSnapshot
+    from orama.requests.models import RequestSpec
+    from orama.requests.store import StoreError
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def snapshot(self, app_name, remote_ids):
+            return AppSnapshot(
+                complete=True,
+                items={9: {"id": 9, "tmdbId": 5, "hasFile": True}},
+                queue=[],
+                history=[],
+                files=[],
+            )
+
+    db = state_dir / "requests.sqlite3"
+    db.write_bytes(b"garbage" * 100)
+    outcome: dict = {}
+
+    def serve(app, **kw):
+        worker = app.extensions["request_worker"]
+        assert worker is not None
+        worker.poll_interval = 0.05
+        worker.wake()
+        st = app.extensions["orama"]
+        # The damaged file does not stop the app: request pages say so in plain words.
+        with pytest.raises(StoreError):
+            st.requests  # noqa: B018
+        time.sleep(0.2)  # the worker has failed a few ticks by now and is still alive
+        db.unlink()
+        rec, _ = st.requests.create(RequestSpec(kind="movie", source_id=5), time.time())
+        worker.wake()
+        for _ in range(100):
+            got = st.requests.get(rec.id)
+            if got.stage == "ready":
+                break
+            time.sleep(0.05)
+        outcome["stage"] = got.stage
+
     monkeypatch.setenv("ORAMA_STATE_DIR", str(state_dir))
-    monkeypatch.setattr(
-        main_module.waitress, "serve", lambda app, **kw: calls.update(app=app, **kw)
-    )
-    with caplog.at_level("ERROR"):
-        main_module.main()
-    assert calls["app"].extensions["request_worker"] is None
-    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1
+    monkeypatch.setattr(main_module.waitress, "serve", serve)
+    monkeypatch.setattr(main_module, "MediaClient", FakeClient)
+    main_module.main()
+    assert outcome["stage"] == "ready"

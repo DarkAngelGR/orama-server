@@ -15,7 +15,7 @@ from orama.requests.fallback import apply_fallback, fallback_due
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
 from orama.requests.reconcile import reconcile_with_evidence
-from orama.requests.store import RequestStore
+from orama.requests.store import RequestStore, StoreError
 from orama.requests.submit import submit
 from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
 from orama.setup_model import DesiredSetup, enabled_apps
@@ -115,13 +115,21 @@ class RequestWorker:
 
     def __init__(
         self,
-        store: RequestStore,
+        store: RequestStore | None,
         client_factory: Callable[[], MediaClient],
         clock: Callable[[], float] = time.time,
         worker_id: str = "worker-1",
         agent: Any = None,
+        store_factory: Callable[[], RequestStore] | None = None,
     ) -> None:
-        self.store = store
+        """Give a ready ``store``, or a ``store_factory`` that opens it on demand.
+
+        With a factory the database is opened (and opened again after a failure) by the
+        tick itself, so a damaged, locked or full database is picked up again by itself
+        once it is repaired or removed.
+        """
+        self._store = store
+        self._store_factory = store_factory
         self.client_factory = client_factory
         self.clock = clock
         self.worker_id = worker_id
@@ -130,6 +138,18 @@ class RequestWorker:
         self._thread: threading.Thread | None = None
         self._wake_event = threading.Event()
         self.poll_interval = 2.0
+
+    @property
+    def store(self) -> RequestStore:
+        if self._store is None:
+            if self._store_factory is None:
+                raise StoreError("The request database could not be used.")
+            self._store = self._store_factory()  # StoreError here: the next tick tries again
+        return self._store
+
+    @store.setter
+    def store(self, value: RequestStore) -> None:
+        self._store = value
 
     def start(self) -> None:
         """Start the background reconciliation loop."""
