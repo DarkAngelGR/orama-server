@@ -24,12 +24,16 @@ def test_refresh_hint_during_a_lease_is_not_lost(tmp_path):
     assert store.get(rec.id).next_check_at == 2100.0
 
 
-def test_retry_hint_during_a_lease_is_not_lost(tmp_path):
+def test_recheck_request_during_a_lease_is_not_lost_when_the_update_wins(tmp_path):
+    # The Retry button's own update succeeds (the worker's is then refused as stale); the
+    # hint it records must still beat the worker's later release time.
     store = RequestStore(tmp_path / "requests.db")
     rec, _ = store.create(RequestSpec(kind="movie", source_id=7), 1000.0)
     claimed = store.claim_due("w", 2000.0)
     assert claimed is not None
+    assert store.update(rec.id, rec.revision, RequestUpdate(next_check_at=2001.0), now=2001.0)
     store.request_recheck(rec.id, 2001.0)
+    assert not store.update(claimed.id, claimed.revision, RequestUpdate(stage="searching"))
     store.release(rec.id, "w", 2030.0)
     assert store.get(rec.id).next_check_at <= 2001.0
 
@@ -109,3 +113,20 @@ def test_asking_again_for_a_finished_item_during_a_lease_is_not_lost(tmp_path):
     after = store.get(rec.id)
     assert after.stage == "requested"
     assert after.next_check_at <= 2001.0
+
+
+def test_stored_rows_above_the_new_limits_do_not_break_reads(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "requests.db"
+    store = RequestStore(path)
+    old, _ = store.create(RequestSpec(kind="movie", source_id=7), 1000.0)
+    other, _ = store.create(RequestSpec(kind="movie", source_id=8), 1000.0)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE requests SET source_id = 999999999 WHERE id = ?", (old.id,))
+    conn.commit()
+    conn.close()
+    assert {r.id for r in store.list_recent()} == {old.id, other.id}
+    assert {r.id for r in store.list_active()} == {old.id, other.id}
+    claimed = {store.claim_due("w", 2000.0).id, store.claim_due("w", 2000.0).id}
+    assert claimed == {old.id, other.id}

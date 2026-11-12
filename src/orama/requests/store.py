@@ -262,11 +262,8 @@ class RequestStore:
             pass
 
     def _row_to_record(self, row: sqlite3.Row) -> RequestRecord:
-        spec = RequestSpec(
-            kind=row["kind"],  # type: ignore[arg-type]
-            source_id=row["source_id"],
-            season=row["season"],
-            episode=row["episode"],
+        spec = RequestSpec.from_stored(
+            row["kind"], row["source_id"], row["season"], row["episode"]
         )
         keys = row.keys()
         return RequestRecord(

@@ -15,8 +15,6 @@ def test_overlapping_requests_share_one_episode_target(tmp_path):
     store.upsert_episode_target(9, 2, 4, title="Four", stage="downloading")
     store.upsert_episode_target(9, 2, 4, stage="ready", has_file=True)
     seen_by_season = store.list_episode_targets(9, 2)
-    seen_by_episode = store.list_episode_targets(9, 2)
-    assert seen_by_season == seen_by_episode
     assert len(seen_by_season) == 1
     assert (seen_by_season[0].title, seen_by_season[0].stage, seen_by_season[0].has_file) == (
         "Four",

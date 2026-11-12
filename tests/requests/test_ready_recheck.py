@@ -1,4 +1,6 @@
 """Finished (Ready) requests are looked at again; eligibility never reads the notes."""
+from types import SimpleNamespace
+
 from orama.requests.client import AppSnapshot, MediaClient
 from orama.requests.models import RequestSpec, RequestUpdate
 from orama.requests.store import RequestStore
@@ -83,6 +85,12 @@ def test_deleted_file_is_noticed_after_the_app_confirms_it(tmp_path):
     rec = _ready_movie(store, 1000.0)
 
     class Client(MediaClient):
+        store = object()
+        setup = SimpleNamespace(
+            request_wait_mode="never", request_wait_hours=24, device="safest",
+            subtitle_languages=("el", "en"), download_methods=("usenet",), vpn=None,
+        )
+
         def __init__(self):
             pass
 

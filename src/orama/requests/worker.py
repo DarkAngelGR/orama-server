@@ -10,7 +10,7 @@ from typing import Any
 
 from orama import state
 from orama.agent_client import AgentError
-from orama.requests.client import MediaClient, _sanitize_title
+from orama.requests.client import MediaClient, RequestError, _sanitize_title
 from orama.requests.fallback import apply_fallback, fallback_due
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
@@ -138,6 +138,10 @@ class RequestWorker:
         self._thread: threading.Thread | None = None
         self._wake_event = threading.Event()
         self.poll_interval = 2.0
+        self._mono: Callable[[], float] = time.monotonic
+        self._failures = 0
+        self._last_kind: str | None = None
+        self._last_logged = 0.0
 
     @property
     def store(self) -> RequestStore:
@@ -175,11 +179,39 @@ class RequestWorker:
         while self._running:
             try:
                 self.tick(self.clock())
+                wait = self._note_tick(None)
             except Exception as e:  # noqa: BLE001 - nothing may end the worker thread
-                # One short line, no request data: only the kind of error.
-                _LOG.warning("request worker tick failed (%s); will try again", type(e).__name__)
-            self._wake_event.wait(timeout=self.poll_interval)
+                wait = self._note_tick(e)
+            self._wake_event.wait(timeout=wait)
             self._wake_event.clear()
+
+    def _note_tick(self, error: BaseException | None) -> float:
+        """Log the outcome of a tick quietly; return how long to wait before the next one.
+
+        A failure is logged when its kind changes and otherwise at most once a minute; a
+        recovery is logged once. Only fixed texts are logged (the class name, or the store's
+        own message), never request data. The traceback is at DEBUG.
+        """
+        if error is None:
+            if self._failures:
+                _LOG.info("request worker is working again")
+            self._failures = 0
+            self._last_kind = None
+            return self.poll_interval
+        self._failures += 1
+        if isinstance(error, StoreError):
+            kind = f"{type(error).__name__}: {error}"
+        else:
+            kind = getattr(error, "sqlite_errorname", None) or type(error).__name__
+        now = self._mono()
+        if kind != self._last_kind or now - self._last_logged >= 60.0:
+            # An app that cannot be reached is ordinary while it restarts.
+            level = logging.INFO if isinstance(error, RequestError) else logging.WARNING
+            _LOG.log(level, "request worker tick failed (%s); will try again", kind)
+            self._last_kind = kind
+            self._last_logged = now
+        _LOG.debug("request worker tick failure", exc_info=error)
+        return min(self.poll_interval * 2 ** min(self._failures - 1, 6), 60.0)
 
     def tick(self, now: float) -> int:
         """Process one due media request; returns number of processed records."""

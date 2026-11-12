@@ -98,6 +98,30 @@ class RequestSpec:
             if self.episode is None or not isinstance(self.episode, int) or isinstance(self.episode, bool) or self.episode < 1:
                 raise ValidationError(f"Episode requests require an episode integer >= 1, got {self.episode!r}")
 
+    @classmethod
+    def from_stored(
+        cls, kind: str, source_id: int, season: int | None, episode: int | None
+    ) -> RequestSpec:
+        """Rebuild a spec read from the database.
+
+        The upper limits are for new input only: a row stored before they existed must
+        still be read, or one old row would break every list and stop the worker.
+        """
+        try:
+            return cls(kind, source_id, season, episode)  # type: ignore[arg-type]
+        except ValidationError:
+            if kind not in VALID_KINDS or not _is_int(source_id) or source_id <= 0:
+                raise
+            spec = object.__new__(cls)
+            for name, value in (
+                ("kind", kind),
+                ("source_id", source_id),
+                ("season", season),
+                ("episode", episode),
+            ):
+                object.__setattr__(spec, name, value)
+            return spec
+
     @property
     def target_key(self) -> str:
         """Deterministic target key for deduplication."""

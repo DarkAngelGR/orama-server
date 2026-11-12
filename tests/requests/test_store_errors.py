@@ -26,9 +26,10 @@ def test_truncated_database_is_a_corrupt_store(tmp_path):
         store.create(RequestSpec(kind="movie", source_id=i), 1000.0, title="x" * 200)
     data = path.read_bytes()
     path.write_bytes(data[: len(data) // 2])
-    with pytest.raises(StoreError) as info:
+    before = path.read_bytes()
+    with pytest.raises(CorruptStoreError):
         RequestStore(path)
-    assert not isinstance(info.value, sqlite3.Error)
+    assert path.read_bytes() == before
 
 
 def test_version_table_without_requests_table_is_corrupt(tmp_path):
