@@ -84,6 +84,25 @@ def schedule_startup_check(
         gate.release()
 
 
+_WORKER_WAITING_NOTES = frozenset(
+    {"Waiting for Radarr", "Waiting for Sonarr", "Waiting for VPN"}
+)
+
+
+def _clear_own_waiting_note(record: Any, update: RequestUpdate) -> RequestUpdate:
+    """The app answered: drop the "Waiting for ..." note this worker set earlier.
+
+    A reason the tick itself decided on (a failed download, say) is left as it is.
+    """
+    if (
+        record.waiting_reason not in _WORKER_WAITING_NOTES
+        or "waiting_reason" in update.provided_fields
+    ):
+        return update
+    values = {name: getattr(update, name) for name in update.provided_fields}
+    return RequestUpdate(waiting_reason=None, **values)
+
+
 def _unwrap_setup(raw_setup: Any) -> Any:
     if raw_setup is not None and hasattr(raw_setup, "current") and callable(raw_setup.current):
         return raw_setup.current()
@@ -351,6 +370,7 @@ class RequestWorker:
                     next_check_at=next_ready_check,
                 )
 
+            update = _clear_own_waiting_note(record, update)
             self.store.update(record.id, record.revision, update)
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
