@@ -189,3 +189,10 @@ document.querySelectorAll('nav[aria-label="Main navigation"] a').forEach((link) 
   }
 })();
 
+
+// An app logo that cannot be fetched is removed, so the shipped icon or letter under it shows.
+// Capture phase: "error" on an <img> does not bubble.
+document.addEventListener("error", function (event) {
+  var img = event.target;
+  if (img && img.classList && img.classList.contains("app-logo")) img.remove();
+}, true);

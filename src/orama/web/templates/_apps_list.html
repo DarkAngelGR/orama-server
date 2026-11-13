@@ -5,7 +5,7 @@
 <ul class="app-list">
   {% for row in rows %}
   <li class="app-row" id="app-row-{{ row.key }}">
-    <span class="app-mark{% if row.key in app_icons %} app-mark-icon{% endif %}" aria-hidden="true">{% if row.key in app_icons %}{% include "icons/" ~ row.key ~ ".svg" %}{% else %}{{ row.name[:1] }}{% endif %}</span>
+    <span class="app-mark{% if row.key in app_icons %} app-mark-icon{% endif %}" aria-hidden="true">{% if row.key in app_icons %}{% include "icons/" ~ row.key ~ ".svg" %}{% else %}{{ row.name[:1] }}{% endif %}{% if row.key in logos %}<img class="app-logo" src="/apps/icon/{{ row.key }}" alt="" width="42" height="42" decoding="async">{% endif %}</span>
     <span class="app-text">
       <span class="app-name">{{ row.name }}</span>
       {% if row.state %}<span class="app-state app-state-{{ row.state|lower|replace(' ', '-') }}">{{ row.state }}</span>{% endif %}

@@ -13,6 +13,7 @@ from flask import Blueprint, Flask, render_template, request
 from orama.agent_client import AgentError
 from orama.setup_model import DesiredSetup, enabled_apps
 from orama.web import auth, security
+from orama.web.app_icons import logos_for
 from orama.wiring.engine import display_name
 
 NOT_FOUND = "Not found"
@@ -113,9 +114,10 @@ def _pages() -> Blueprint:
     def context():
         setup = auth.web_state().setup.current()
         if setup is None:
-            return {"rows": [], "down": False}
+            return {"rows": [], "down": False, "logos": frozenset()}
         states = agent_states()
-        return {"rows": app_rows(setup, states), "down": states is None}
+        rows = app_rows(setup, states)
+        return {"rows": rows, "down": states is None, "logos": logos_for(r.key for r in rows)}
 
     @pages.get("/apps")
     @auth.requires("apps")

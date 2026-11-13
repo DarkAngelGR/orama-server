@@ -495,3 +495,7 @@ a.app-name:hover, a.app-name:focus-visible { text-decoration: underline; }
 @media (max-width: 760px) {
   .media-header-compact { grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr); }
 }
+
+/* The app's own logo, when Orama could fetch it, sits over the shipped icon or letter. */
+.app-mark { position: relative; overflow: hidden; }
+.app-logo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--glass-solid); }

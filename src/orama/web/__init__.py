@@ -25,6 +25,7 @@ from orama.requests.store import RequestStore, StoreError
 from orama.secrets import SecretStore
 from orama.setup_model import DesiredSetup
 from orama.web import auth, hooks, security
+from orama.web.app_icons import register_app_icons
 from orama.web.apps import disk_warning, register_apps, running_summary
 from orama.web.assets import configure_assets
 from orama.web.hooks import register_hooks
@@ -159,6 +160,7 @@ def create_app(
     register_plex(app)
     register_settings(app)
     register_apps(app)
+    register_app_icons(app)
     register_hooks(app)
     register_posters(app)
     register_requests(app)

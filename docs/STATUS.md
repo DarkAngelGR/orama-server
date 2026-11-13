@@ -51,11 +51,14 @@ Read `AGENTS.md` first.
   Bazarr and SABnzbd keep a letter). The title, request and Home pages show the title's poster,
   blurred and veiled, behind the glass (`backdrop` macro; Home uses the newest request), and
   recent requests carry a small poster. `RequestView` gained `poster_kind` and `source_id`.
-- **Next UI task (owner agreed, do with the code review):** fetch each app's own logo from the
-  app (internal Docker network, fixed per-app path, PNG/ICO only, size cap, cached) and serve it
-  from an Orama route such as `/apps/icon/<app>`, the same way posters are served. Keep the
-  bundled icons and letters as the fallback. Not from Docker Hub or GitHub: no internet fetch.
-  Check each app's real logo path against the running images before relying on it.
+- **App logos from the apps (done, 2026-11-13).** `orama/web/app_icons.py`: Plex, Sonarr,
+  Radarr, Prowlarr, Bazarr and SABnzbd logos are fetched from `http://<app>:<port><path>` on
+  orama-net (paths checked against the pinned images), PNG only, at most 256 KiB, kept in
+  memory, failures retried after 5 min, served at `/apps/icon/<app>` (signed-in owners only).
+  The Apps page adds a logo only once Orama has it, so the browser never asks for a missing
+  one. Jellyfin (file names change per release) and qBittorrent (sign-in even for images) keep
+  the bundled Simple Icons mark. If an app update moves its logo, its tile falls back quietly;
+  update `ICON_PATHS` then.
 - **After Release 1 (owner decision, 2026-11-13): import indexers and Usenet servers from the
   owner's current setup.** On the indexers step, "Import from my current setup": (1) connect
   to an existing Prowlarr and SABnzbd by address and API key and list what they have; (2) to
