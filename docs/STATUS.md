@@ -31,8 +31,15 @@ Read `AGENTS.md` first.
   still kept). (2) "Update Orama" downloads inside the web request (up to ~25 min of
   spinner); a background job would be kinder. (3) `MediaClient._request` decides its
   service-host fallback by the class name `Http`; replace with an explicit flag.
-  Still to review: worker/status flow, submission and fallback, playback and subtitle notes,
-  claims vs evidence.
+  Second pass (same day): submission, fallback, worker Ready step, playback notes. Fixed
+  test-first: `4884b99` a whole-show request now makes Sonarr follow a show it already had
+  (series search finds only followed episodes); `ea578ff` a finished fallback request puts
+  the strict profile back (fallback is per request); this commit: device profiles no longer
+  promise AV1/VP9 direct play where the device cannot decode them.
+  Follow-ups (not fixed): new episodes of a followed show stay on the strict profile and do
+  not get their own 24 h fallback (the whole-show request is already Ready); an existing but
+  unfollowed movie in Radarr is searched (manual search) but not set to followed; the
+  `_has_route`/class-name test hooks in `MediaClient` should become explicit flags.
 - **New look (owner's choice, design D).** The web app now uses frosted glass panels over a dark
   room lit by soft glows, with a light variant; spacing and type follow the golden ratio. People
   who ask for less transparency, and browsers without blur, get solid panels. Home has a main
