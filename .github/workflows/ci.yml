@@ -132,14 +132,13 @@ jobs:
           if-no-files-found: ignore
 
   e2e:
-    # Step 3 of Plan 5 Task 3: clean-machine end-to-end proofs (.github/workflows/e2e.yml).
-    # `publish` adds `e2e` in Step 5 once Debian 12 is also wired.
+    # Both the Ubuntu runner and the Debian guest must pass the shared proof.
     needs: [unit, images]
     uses: ./.github/workflows/e2e.yml
 
   publish:
     # A red commit must never publish: <version> is the tag users install.
-    needs: [unit, images, browser, integration]
+    needs: [unit, images, browser, integration, e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

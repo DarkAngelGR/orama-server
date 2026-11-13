@@ -36,9 +36,13 @@ def test_images_job_pushes_only_the_sha_tag():
         assert "outputs.sha" in tags and "version" not in tags
 
 
-def test_version_tag_published_only_after_integration_on_main():
+def test_version_tag_published_only_after_integration_and_both_platform_proofs_on_main():
     publish = JOBS["publish"]
-    assert set(publish["needs"]) == {"unit", "images", "browser", "integration"}
+    assert set(publish["needs"]) == {"unit", "images", "browser", "integration", "e2e"}
+    assert set(E2E["jobs"]) == {"e2e-ubuntu", "e2e-debian"}
+    for proof in E2E["jobs"].values():
+        assert not proof.get("continue-on-error")
+        assert "if" not in proof
     assert publish["if"] == MAIN_PUSH
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     script = "\n".join(s.get("run", "") for s in publish["steps"])
