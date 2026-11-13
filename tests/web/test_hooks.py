@@ -284,48 +284,67 @@ def test_host_exception_only_for_exact_webhook_routes(app, client):
         assert rejected.status_code == 400, (method, path)
 
 
-def test_import_webhooks_refresh_jellyfin_best_effort(state_dir, clock):
+def _jellyfin_app(state_dir, clock):
     from orama.secrets import JELLYFIN_KEY_NAME
     from orama.wiring.http import FakeHttp, Response
 
     fake_http = FakeHttp()
     fake_http.route("POST", "/Library/Refresh", lambda c: Response(204, {}, b""))
     app = create_app(state_dir, http=fake_http, clock=clock)
-    client = app.test_client()
-    sonarr_tok, radarr_tok = _make_tokens(app)
+    tokens = _make_tokens(app)
     write_setup(state_dir, media_servers={"jellyfin"})
-    jf_key = secrets.token_hex(16)
-    app.extensions["orama"].store.set(JELLYFIN_KEY_NAME, jf_key)
+    app.extensions["orama"].store.set(JELLYFIN_KEY_NAME, secrets.token_hex(16))
+    return app, fake_http, tokens
 
-    # Grab does not trigger a Jellyfin library refresh
-    r_grab = client.post(
-        "/hooks/sonarr",
-        data=json.dumps({"eventType": "Grab", "series": {"id": 10, "tvdbId": 81189}}),
-        headers={"Authorization": f"Bearer {sonarr_tok}", "Content-Type": "application/json"},
+
+def _post(client, path, token, event, key="series", remote_id=10):
+    return client.post(
+        path,
+        data=json.dumps({"eventType": event, key: {"id": remote_id}}),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
-    assert r_grab.status_code == 200
+
+
+def test_webhooks_never_call_jellyfin_they_only_record_the_change(state_dir, clock):
+    app, fake_http, (sonarr_tok, radarr_tok) = _jellyfin_app(state_dir, clock)
+    client = app.test_client()
+    requests = app.extensions["orama"].requests
+
+    for _ in range(5):
+        assert _post(client, "/hooks/sonarr", sonarr_tok, "Download").status_code == 200
+    assert _post(client, "/hooks/radarr", radarr_tok, "Rename", "movie", 7).status_code == 200
+    assert _post(client, "/hooks/sonarr", sonarr_tok, "Upgrade").status_code == 200
+    assert fake_http.calls == []
+    assert requests.take_media_changed() is True
+    assert requests.take_media_changed() is False  # taking clears it
+
+
+def test_grab_does_not_mark_media_changed(state_dir, clock):
+    app, fake_http, (sonarr_tok, _) = _jellyfin_app(state_dir, clock)
+    assert _post(app.test_client(), "/hooks/sonarr", sonarr_tok, "Grab").status_code == 200
+    assert app.extensions["orama"].requests.take_media_changed() is False
     assert fake_http.calls == []
 
-    # Download / Upgrade / Rename trigger POST /Library/Refresh with Authorization header
-    r_dl = client.post(
-        "/hooks/radarr",
-        data=json.dumps({"eventType": "Download", "movie": {"id": 7, "tmdbId": 27205}}),
-        headers={"Authorization": f"Bearer {radarr_tok}", "Content-Type": "application/json"},
-    )
-    assert r_dl.status_code == 200
-    assert len(fake_http.calls) == 1
-    call = fake_http.calls[0]
-    assert call.method == "POST"
-    assert call.url == "http://jellyfin:8096/Library/Refresh"
-    assert jf_key not in call.url
-    assert call.headers["Authorization"].endswith(f'Token="{jf_key}"')
 
-    # Unreachable Jellyfin must still return 200 ok for the webhook
-    fake_http.unreachable = True
-    r_up = client.post(
+def test_unauthenticated_or_invalid_webhooks_make_no_change_and_no_call(state_dir, clock):
+    app, fake_http, (sonarr_tok, _) = _jellyfin_app(state_dir, clock)
+    client = app.test_client()
+    requests = app.extensions["orama"].requests
+    body = json.dumps({"eventType": "Download", "series": {"id": 10}})
+
+    assert client.post("/hooks/sonarr", data=body, content_type="application/json").status_code == 403
+    bad = client.post(
         "/hooks/sonarr",
-        data=json.dumps({"eventType": "Upgrade", "series": {"id": 10, "tvdbId": 81189}}),
-        headers={"Authorization": f"Bearer {sonarr_tok}", "Content-Type": "application/json"},
+        data=body,
+        headers={"Authorization": "Bearer wrong", "Content-Type": "application/json"},
     )
-    assert r_up.status_code == 200
-
+    assert bad.status_code == 403
+    for payload in ('{"eventType": "Download", "series": {"id": "x"}}', "[]", "nope"):
+        r = client.post(
+            "/hooks/sonarr",
+            data=payload,
+            headers={"Authorization": f"Bearer {sonarr_tok}", "Content-Type": "application/json"},
+        )
+        assert r.status_code == 400
+    assert fake_http.calls == []
+    assert requests.take_media_changed() is False

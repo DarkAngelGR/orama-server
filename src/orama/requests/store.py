@@ -30,6 +30,10 @@ _UPDATABLE_COLUMNS = frozenset(
 )
 
 
+# A row in ``refreshes`` under this name is the "media changed" note, not a webhook item.
+_MEDIA_CHANGED_APP = "media"
+
+
 class StoreError(Exception):
     """Base error for request store operations."""
 
@@ -506,10 +510,29 @@ class RequestStore:
     def drain_refreshes(self) -> list[tuple[str, int]]:
         """Retrieve and clear all pending webhook refresh items."""
         with self._txn() as conn:
-            rows = conn.execute("SELECT app, remote_id FROM refreshes").fetchall()
+            rows = conn.execute(
+                "SELECT app, remote_id FROM refreshes WHERE app != ?", (_MEDIA_CHANGED_APP,)
+            ).fetchall()
             items = [(r["app"], r["remote_id"]) for r in rows]
-            conn.execute("DELETE FROM refreshes")
+            conn.execute("DELETE FROM refreshes WHERE app != ?", (_MEDIA_CHANGED_APP,))
             return items
+
+    def mark_media_changed(self, now: float) -> None:
+        """Note that Sonarr or Radarr changed a media file (one row, however many events)."""
+        with self._txn() as conn:
+            conn.execute(
+                """
+                INSERT INTO refreshes (app, remote_id, enqueued_at) VALUES (?, 0, ?)
+                ON CONFLICT(app, remote_id) DO UPDATE SET enqueued_at = excluded.enqueued_at
+                """,
+                (_MEDIA_CHANGED_APP, now),
+            )
+
+    def take_media_changed(self) -> bool:
+        """Return whether media changed since the last call, and clear the note."""
+        with self._txn() as conn:
+            cur = conn.execute("DELETE FROM refreshes WHERE app = ?", (_MEDIA_CHANGED_APP,))
+            return cur.rowcount > 0
 
     def claim_due(self, owner: str, now: float, lease_seconds: float = 60.0) -> RequestRecord | None:
         """Atomically claim an eligible request for background processing."""

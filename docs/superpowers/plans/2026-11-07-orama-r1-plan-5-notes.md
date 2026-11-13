@@ -226,3 +226,23 @@ and `238c8aa` ([run 43287636683](https://github.com/DarkAngelGR/orama-server/act
 See the [task report](../../tasks/plan-5/T03.md) for the intermediate failures and test counts.
 The probe covers the episode download and extraction. The movie download, same-inode
 links, real wizard and full-machine proof remain for the next steps.
+
+### Jellyfin library refresh (observation and open question)
+
+Observed: in the Ubuntu end-to-end run (run 43330046261, Jellyfin as pinned there) the
+imported episode and film show up in Jellyfin's item list without the test asking for a scan,
+once Orama asks Jellyfin to refresh its libraries (`POST /Library/Refresh`) after an item
+became Ready or Sonarr/Radarr reported a Download, Upgrade or Rename.
+
+Not settled: whether Sonarr's and Radarr's own per-path Jellyfin notification alone would have
+done it, and how much `EnableRealtimeMonitor` adds. No run has been made with the refresh
+switched off, so nothing here says the notification is ignored; it is only known that the
+refresh is enough. Real-time monitoring is also unreliable on NFS/SMB mounts, so the refresh
+stays as the guaranteed path.
+
+Design: a webhook never calls Jellyfin. It records "media changed" in the request store and
+wakes the worker. The worker asks the client to refresh the media server after it has released
+the request lease, at most once per 60 s (many events become one call), when an item became
+Ready or the note is set. A failing or slow Jellyfin is logged as one line (no key) and never
+stops a tick. Open question for a later run: switch the refresh off in the end-to-end test once
+to see whether the notification alone is enough.

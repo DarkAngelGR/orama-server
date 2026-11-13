@@ -35,7 +35,8 @@ class FakeJellyfin:
                        "PreferredMetadataLanguage": "en"}
         self.session_tokens = set()
         self.keys = []  # {"AccessToken", "AppName"}
-        self.folders = []  # {"Name", "CollectionType", "Locations"}
+        self.folders = []  # {"Name", "ItemId", "CollectionType", "Locations", "LibraryOptions"}
+        self.option_posts = []
         self.encoding = {"HardwareAccelerationType": "none", "VaapiDevice": "",
                          "EnableHardwareEncoding": True, "EncoderPreset": "auto"}
         self.encoding_posts = []
@@ -52,6 +53,7 @@ class FakeJellyfin:
         r("POST", "/Auth/Keys", self.authed(self.new_key))
         r("GET", "/Library/VirtualFolders", self.authed(lambda c: ok(self.folders)))
         r("POST", "/Library/VirtualFolders", self.authed(self.new_folder))
+        r("POST", "/Library/VirtualFolders/LibraryOptions", self.authed(self.post_options))
         r("GET", "/System/Configuration/encoding", self.authed(lambda c: ok(self.encoding)))
         r("POST", "/System/Configuration/encoding", self.authed(self.post_encoding))
 
@@ -110,7 +112,15 @@ class FakeJellyfin:
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(call.url).query)
         paths = [p["Path"] for p in call.json["LibraryOptions"]["PathInfos"]]
         self.folders.append({"Name": query["name"][0], "CollectionType": query["collectionType"][0],
-                             "Locations": paths})
+                             "Locations": paths, "ItemId": f"id{len(self.folders)}",
+                             "LibraryOptions": dict(call.json["LibraryOptions"])})
+        return Response(204, {}, b"")
+
+    def post_options(self, call):
+        self.option_posts.append(call.json)
+        for folder in self.folders:
+            if folder["ItemId"] == call.json["Id"]:
+                folder["LibraryOptions"] = call.json["LibraryOptions"]
         return Response(204, {}, b"")
 
     def post_encoding(self, call):
@@ -329,35 +339,69 @@ def test_libraries_turn_on_realtime_monitor(store, password):
     assert all(p.json["LibraryOptions"]["EnableRealtimeMonitor"] is True for p in posts)
 
 
-def test_refresh_library_checks_setup_key_and_errors(store, password):
+def test_refresh_library_checks_setup_and_key(store, password):
     fake = FakeJellyfin(password)
     fake.http.route("POST", "/Library/Refresh", lambda c: Response(204, {}, b""))
     jf_setup = make_setup(media_servers={"jellyfin"})
-    plex_setup = make_setup(media_servers={"plex"})
-
-    # No key yet -> no request
-    assert refresh_library(jf_setup, store, fake.http) is False
-    assert fake.http.calls == []
-
-    # Jellyfin not enabled -> no request even with key
+    assert refresh_library(jf_setup, store, fake.http) is False  # no key yet
     jf_key = random_secret("jfkey")
     store.set(JELLYFIN_KEY_NAME, jf_key)
-    assert refresh_library(plex_setup, store, fake.http) is False
+    assert refresh_library(make_setup(media_servers={"plex"}), store, fake.http) is False
     assert refresh_library(None, store, fake.http) is False
     assert fake.http.calls == []
-
-    # Enabled + key -> sends POST /Library/Refresh with header auth (never in URL)
     assert refresh_library(jf_setup, store, fake.http) is True
-    assert len(fake.http.calls) == 1
     call = fake.http.calls[0]
     assert call.method == "POST" and call.url == f"{BASE}/Library/Refresh"
     assert jf_key not in call.url
     assert call.headers["Authorization"].endswith(f'Token="{jf_key}"')
 
-    # Unreachable or 500 -> returns False cleanly without raising
+
+def test_refresh_library_catches_every_request_error_and_logs_no_key(store, password, caplog):
+    import logging
+
+    fake = FakeJellyfin(password)
+    jf_setup = make_setup(media_servers={"jellyfin"})
+    jf_key = random_secret("jfkey")
+    store.set(JELLYFIN_KEY_NAME, jf_key)
     fake.http.unreachable = True
-    assert refresh_library(jf_setup, store, fake.http) is False
+    with caplog.at_level(logging.DEBUG):
+        assert refresh_library(jf_setup, store, fake.http) is False
+    assert len(caplog.records) == 1  # one plain line per failure
     fake.http.unreachable = False
     fake.http.route("POST", "/Library/Refresh", lambda c: Response(500, {}, b""))
     assert refresh_library(jf_setup, store, fake.http) is False
 
+    def boom(call):
+        raise ValueError(call.headers["Authorization"])
+
+    fake.http.route("POST", "/Library/Refresh", boom)
+    with caplog.at_level(logging.DEBUG):
+        assert refresh_library(jf_setup, store, fake.http) is False
+    assert jf_key not in caplog.text
+    assert len(caplog.records) == 3
+
+
+def test_existing_libraries_get_realtime_monitor_once(store, password):
+    fake = FakeJellyfin(password)
+    run(fake, store)
+    for folder in fake.folders:  # libraries made by an earlier install: monitor off
+        folder["LibraryOptions"]["EnableRealtimeMonitor"] = False
+    fake.http.calls.clear()
+    first = run(fake, store)
+    assert first["jellyfin:libraries"].status == "changed"
+    assert all(f["LibraryOptions"]["EnableRealtimeMonitor"] is True for f in fake.folders)
+    assert len(fake.option_posts) == 2
+    fake.http.calls.clear()
+    second = run(fake, store)
+    assert second["jellyfin:libraries"].status == "unchanged"
+    assert len(fake.option_posts) == 2  # a second apply changes nothing
+
+
+def test_a_library_the_owner_set_up_outside_orama_is_not_touched(store, password):
+    fake = FakeJellyfin(password)
+    run(fake, store)
+    fake.folders.append({"Name": "Mine", "ItemId": "x", "Locations": ["/elsewhere"],
+                         "LibraryOptions": {"EnableRealtimeMonitor": False}})
+    fake.option_posts.clear()
+    run(fake, store)
+    assert fake.option_posts == []

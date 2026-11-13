@@ -19,7 +19,6 @@ from orama.requests.store import RequestStore, StoreError
 from orama.requests.submit import submit
 from orama.requests.subtitles import assess_episode_subtitles, assess_subtitles
 from orama.setup_model import DesiredSetup, enabled_apps
-from orama.wiring.jellyfin import refresh_library as refresh_jellyfin_library
 
 _LOG = logging.getLogger(__name__)
 SETUP_FILE = "setup.json"
@@ -28,6 +27,8 @@ SETUP_FILE = "setup.json"
 READY_FINAL_RECHECK_SECONDS = 6 * 3600.0
 # While playback or subtitles are still unknown or partial, look again this often.
 READY_PENDING_RECHECK_SECONDS = 300.0
+# The media server is asked to scan at most this often, however many events arrive.
+MEDIA_REFRESH_MIN_INTERVAL = 60.0
 
 
 def schedule_startup_check(
@@ -142,6 +143,8 @@ class RequestWorker:
         self._failures = 0
         self._last_kind: str | None = None
         self._last_logged = 0.0
+        self._media_refresh_pending = False
+        self._last_media_refresh: float | None = None
 
     @property
     def store(self) -> RequestStore:
@@ -217,7 +220,29 @@ class RequestWorker:
         """Process one due media request; returns number of processed records."""
         refreshes = self.store.drain_refreshes()
         _ = refreshes
+        if self.store.take_media_changed():
+            self._media_refresh_pending = True
+        try:
+            return self._process_one(now)
+        finally:
+            # After the lease is released, and whatever happened to the request.
+            self._refresh_media_server(now)
 
+    def _refresh_media_server(self, now: float) -> None:
+        """Scan the media server if something changed, at most once a minute."""
+        if not self._media_refresh_pending:
+            return
+        last = self._last_media_refresh
+        if last is not None and 0 <= now - last < MEDIA_REFRESH_MIN_INTERVAL:
+            return
+        self._media_refresh_pending = False
+        self._last_media_refresh = now
+        try:
+            self.client_factory().refresh_media_server()
+        except Exception as error:  # noqa: BLE001 - a slow or broken media server never stops a tick
+            _LOG.warning("media server refresh failed (%s)", type(error).__name__)
+
+    def _process_one(self, now: float) -> int:
         record = self.store.claim_due(owner=self.worker_id, now=now, lease_seconds=60.0)
         if record is None:
             return 0
@@ -441,8 +466,8 @@ class RequestWorker:
             became_ready = record.stage != "ready" and update.stage == "ready"
             update = _clear_own_waiting_note(record, update)
             self.store.update(record.id, record.revision, update, now=now)
-            if became_ready and hasattr(client, "store") and hasattr(client, "http"):
-                refresh_jellyfin_library(setup_obj, client.store, client.http)
+            if became_ready:
+                self._media_refresh_pending = True
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
             return 1

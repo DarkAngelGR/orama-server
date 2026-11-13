@@ -13,6 +13,7 @@ is kept in memory for the length of one apply.
 
 from __future__ import annotations
 
+import logging
 import urllib.parse
 from typing import Any
 
@@ -20,6 +21,8 @@ from orama.secrets import JELLYFIN_KEY_NAME, JELLYFIN_PASSWORD_NAME, JELLYFIN_US
 from orama.setup_model import DesiredSetup
 from orama.wiring.engine import Step, StepError, wait_until
 from orama.wiring.http import Http, Response, Unreachable
+
+_LOG = logging.getLogger(__name__)
 
 BASE = "http://jellyfin:8096"
 START_TIMEOUT = 300.0
@@ -168,10 +171,21 @@ def jellyfin_steps(
         if not isinstance(data, list):
             raise StepError(UNREADABLE)
         have = set()
+        monitored = []  # Orama's own libraries whose live monitoring is off
+        orama_folders = {folder for _, _, folder in LIBRARIES}
         for folder in data:
-            for location in (folder.get("Locations") if isinstance(folder, dict) else None) or []:
+            locations = (folder.get("Locations") if isinstance(folder, dict) else None) or []
+            for location in locations:
                 if isinstance(location, str):
                     have.add(location.rstrip("/"))
+            options = folder.get("LibraryOptions") if isinstance(folder, dict) else None
+            if (
+                isinstance(options, dict)
+                and options.get("EnableRealtimeMonitor") is False
+                and folder.get("ItemId")
+                and any(isinstance(x, str) and x.rstrip("/") in orama_folders for x in locations)
+            ):
+                monitored.append((folder["ItemId"], options, folder.get("Name") or "library"))
         added = []
         for name, kind, folder in LIBRARIES:
             if folder in have:  # found by folder: an owner's own name for it is kept
@@ -192,11 +206,22 @@ def jellyfin_steps(
                 },
             )
             added.append(name)
-        if not added:
+        for item_id, options, _name in monitored:
+            signed(
+                "POST",
+                "/Library/VirtualFolders/LibraryOptions",
+                json={"Id": item_id, "LibraryOptions": {**options, "EnableRealtimeMonitor": True}},
+            )
+        if not added and not monitored:
             return None
+        parts = []
         if len(added) == 1:
-            return f"added the {added[0]} library"
-        return f"added the {' and '.join(added)} libraries"
+            parts.append(f"added the {added[0]} library")
+        elif added:
+            parts.append(f"added the {' and '.join(added)} libraries")
+        if monitored:
+            parts.append("turned on live updates for " + " and ".join(n for _, _, n in monitored))
+        return ", ".join(parts)
 
     def hardware() -> str | None:
         if setup.nvidia:
@@ -236,12 +261,14 @@ def refresh_library(
     *,
     timeout: float = 5.0,
 ) -> bool:
-    """Trigger a Jellyfin library scan when Jellyfin is enabled and wired.
+    """Ask Jellyfin to scan its libraries, when Jellyfin is enabled and wired.
 
-    Best-effort: Jellyfin skips empty library folders on initial setup, so
-    Sonarr/Radarr's per-path ``/Library/Media/Updated`` notifications are
-    ignored until a library scan registers the top-level folders. Returning
-    ``False`` on connection or HTTP errors keeps webhook/worker paths resilient.
+    Best-effort: it never raises. Any request error is logged as one plain line (never
+    the key) and gives ``False``. Why a scan is needed is only partly known: in the
+    Ubuntu end-to-end run Jellyfin lists a freshly imported title once this refresh has
+    run; whether the per-path ``/Library/Media/Updated`` notice from Sonarr and Radarr
+    alone would do (and what EnableRealtimeMonitor adds) is not settled, see the Plan 5
+    notes.
     """
     if setup is None or "jellyfin" not in getattr(setup, "media_servers", ()):
         return False
@@ -254,7 +281,10 @@ def refresh_library(
     }
     try:
         resp = http.request("POST", f"{BASE}/Library/Refresh", headers=headers, timeout=timeout)
-    except Unreachable:
+    except Exception as error:  # noqa: BLE001 - nothing here may stop the caller
+        _LOG.warning("Jellyfin library refresh failed (%s)", type(error).__name__)
         return False
-    return 200 <= resp.status < 300
-
+    if not 200 <= resp.status < 300:
+        _LOG.warning("Jellyfin library refresh was refused (HTTP %s)", resp.status)
+        return False
+    return True

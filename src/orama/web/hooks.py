@@ -10,7 +10,6 @@ from flask import Blueprint, Flask, Request, current_app, g, request
 
 from orama.secrets import SecretStore, webhook_token_name
 from orama.web import auth, security
-from orama.wiring.jellyfin import refresh_library as refresh_jellyfin_library
 
 WEBHOOK_PATHS: dict[str, Literal["sonarr", "radarr"]] = {
     "/hooks/sonarr": "sonarr",
@@ -99,12 +98,13 @@ def _handle_webhook(app_name: Literal["sonarr", "radarr"]):
         return rejected(MESSAGES[400], 400)
 
     st = auth.web_state()
-    st.requests.enqueue_refresh(app_name, remote_id, st.clock())
+    now = st.clock()
+    st.requests.enqueue_refresh(app_name, remote_id, now)
+    if event_type in MEDIA_CHANGED_EVENTS:
+        st.requests.mark_media_changed(now)  # the worker refreshes the media server
     worker = current_app.extensions.get("request_worker")
     if worker is not None and hasattr(worker, "wake"):
         worker.wake()
-    if event_type in MEDIA_CHANGED_EVENTS:
-        refresh_jellyfin_library(st.setup.current(), st.store, st.http)
 
     return "ok", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
