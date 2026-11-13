@@ -93,6 +93,11 @@ def test_target_scrubs_setup_codes_and_registered_secrets():
     assert "/setup?code=<hidden>" in scrubbed
     assert "short" in scrubbed
     assert target.url(8765) == "http://127.0.0.1:8765"
+    with pytest.raises(AssertionError, match=r"^Secret leaked in wizard stderr$"):
+        target.check_for_leaks({"wizard stderr": "unexpected long-secret-token"})
+    with pytest.raises(AssertionError, match=r"^Secret leaked in install output$"):
+        target.check_for_leaks({"install output": raw.splitlines()[0]})
+    target.check_for_leaks({"scrubbed artifact": scrubbed})
 
 
 
