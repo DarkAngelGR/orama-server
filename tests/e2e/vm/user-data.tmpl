@@ -1,0 +1,11 @@
+#cloud-config
+users:
+  - name: proof
+    lock_passwd: true
+    groups: [sudo]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - @PUBLIC_KEY@
+ssh_pwauth: false
+disable_root: true

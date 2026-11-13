@@ -349,6 +349,8 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     if target.expect_docker_installed:
         apt_file = _read_remote_bytes(target, "/etc/apt/sources.list.d/docker.list").decode()
         assert "download.docker.com/linux/debian" in apt_file and "bookworm" in apt_file
+        mirrors = target.run(["docker", "info", "--format", "{{json .RegistryConfig.Mirrors}}"])
+        assert mirrors.returncode == 0 and "https://mirror.gcr.io" in mirrors.stdout
 
     for name in ("orama-server", "orama-server-agent"):
         assert _docker_inspect(target, name)["State"]["Status"] == "running", name

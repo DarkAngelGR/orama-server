@@ -59,3 +59,65 @@ jobs:
           name: e2e-logs-ubuntu
           path: ${{ runner.temp }}/e2e-logs-ubuntu/
           if-no-files-found: ignore
+
+  e2e-debian:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PLAYWRIGHT_VERSION: "1.63.0"
+      ORAMA_E2E_TARGET: debian
+      ORAMA_E2E_VM_STATE: ${{ runner.temp }}/orama-debian
+      ORAMA_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs-debian
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.13.7"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Playwright and Chromium (pinned)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/playwright-node" --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          "$RUNNER_TEMP/playwright-node/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Test dependencies
+        run: uv sync --frozen
+      - name: Install QEMU and enable KVM
+        run: |
+          nproc
+          free -m
+          df -h /
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/orama-debian-cache/bookworm.qcow2
+          key: orama-debian-12-${{ hashFiles('tests/e2e/debian-12.image') }}
+      - name: Boot clean Debian 12 guest
+        run: bash tests/e2e/vm/boot.sh "$ORAMA_E2E_VM_STATE" "$RUNNER_TEMP/orama-debian-cache/bookworm.qcow2"
+      - name: Run Debian end-to-end proof
+        id: proof
+        env:
+          NODE_PATH: ${{ runner.temp }}/playwright-node/node_modules
+        run: bash tests/e2e/run-proof.sh
+      - name: Upload scrubbed logs
+        if: failure() && steps.proof.outputs.artifact_safe == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-logs-debian
+          path: ${{ runner.temp }}/e2e-logs-debian/
+          if-no-files-found: ignore
+      - name: Stop Debian guest
+        if: always()
+        run: |
+          if [[ -s "$ORAMA_E2E_VM_STATE/qemu.pid" ]]; then
+            kill "$(cat "$ORAMA_E2E_VM_STATE/qemu.pid")"
+          fi
+          rm -f -- "$ORAMA_E2E_VM_STATE/id_ed25519"

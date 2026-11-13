@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from e2e.target import LocalTarget, Target
+from e2e.target import LocalTarget, SshTarget, Target
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECTS = ("orama-apps", "orama-core")
@@ -99,6 +99,25 @@ def e2e_target() -> Target:
             pytest.fail("e2e proof: CI must set ORAMA_E2E_TARGET")
         pytest.skip("e2e proof: set ORAMA_E2E_TARGET=ubuntu|debian (modifies target machine)")
     _check_node_playwright()
+    if mode == "debian":
+        state = os.environ.get("ORAMA_E2E_VM_STATE")
+        if not state:
+            pytest.fail("e2e proof: ORAMA_E2E_VM_STATE is required for Debian")
+        guest = SshTarget(Path(state))
+        guest.put_checkout(REPO_ROOT)
+        # Configure the mirror before the installer starts Docker for the first time.
+        assert guest.run(["install", "-d", "/etc/docker"]).returncode == 0
+        mirror = guest.run(
+            ["tee", "/etc/docker/daemon.json"],
+            input='{"registry-mirrors":["https://mirror.gcr.io"]}\n',
+        )
+        assert mirror.returncode == 0, "Could not configure the Debian Docker mirror"
+        try:
+            yield guest
+        finally:
+            _save_failed_run_logs(guest)
+        return
+
     ids = _install_ids()
     if ids is None:
         pytest.fail("e2e proof: set ORAMA_TEST_PUID/ORAMA_TEST_PGID to a non-root user")

@@ -41,5 +41,9 @@ if sys.argv[2] == "0" and not re.search(r"^=+ 1 passed in ", output, re.MULTILIN
     raise SystemExit("Expected exactly one passing end-to-end test")
 print(output, end="")
 PY
+# The Ubuntu proof runs as root; only scanned files become readable by the uploader.
+if [[ -d "$ORAMA_E2E_LOG_DIR" ]]; then
+    chmod -R a+rX -- "$ORAMA_E2E_LOG_DIR"
+fi
 printf 'artifact_safe=true\n' >> "$GITHUB_OUTPUT"
 exit "$status"

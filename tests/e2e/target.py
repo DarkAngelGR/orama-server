@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -186,3 +187,99 @@ class LocalTarget(Target):
 
     def url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}"
+
+
+class SshTarget(Target):
+    """Use the pinned host key of the disposable Debian guest."""
+
+    def __init__(self, state: Path) -> None:
+        self._ssh = [
+            "ssh", "-T", "-i", str(state / "id_ed25519"), "-p", "2222",
+            "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={state / 'known_hosts'}",
+            "-o", "GlobalKnownHostsFile=/dev/null", "proof@127.0.0.1",
+        ]
+        result = self.run(["id", "-u", "proof"], timeout=30)
+        group = self.run(["id", "-g", "proof"], timeout=30)
+        if result.returncode or group.returncode:
+            raise RuntimeError("Could not read the Debian install user's IDs")
+        puid, pgid = int(result.stdout.strip()), int(group.stdout.strip())
+        if not puid or not pgid:
+            raise RuntimeError("The Debian install user must be non-root")
+        super().__init__(
+            name="debian", puid=puid, pgid=pgid, data_root="/srv/orama-e2e/data",
+            config_root="/srv/orama-e2e/cfg", repo_dir="/srv/orama-e2e/source",
+            expect_docker_installed=True,
+        )
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        input: str | None = None,
+        timeout: float = 120,
+        env: Mapping[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        __tracebackhide__ = True
+        command = ["sudo", "-n", "--", *argv]
+        if env:
+            # Pass values through SSH stdin. They must not appear in host command arguments.
+            prelude = "".join(f"export {key}={shlex.quote(value)}\n" for key, value in env.items())
+            if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in env):
+                raise ValueError("Invalid guest environment name")
+            if input is not None:
+                raise ValueError("Guest commands with environment overrides reserve stdin")
+            input = prelude + "exec " + shlex.join(argv) + "\n"
+            command = ["sudo", "-n", "--", "sh", "-s"]
+        try:
+            return subprocess.run(
+                [*self._ssh, shlex.join(command)], input=input, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
+                timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Debian guest command timed out") from None
+
+    def put(self, local: Path, remote: str) -> None:
+        if local.is_dir():
+            archive = ["tar", "-C", str(local), "-cf", "-", "."]
+            dest = remote
+            extract = ["tar", "-xf", "-", "-C", dest]
+        else:
+            archive = ["tar", "-C", str(local.parent), "-cf", "-", local.name]
+            dest = str(Path(remote).parent)
+            if local.name != Path(remote).name:
+                raise ValueError("Debian guest file copies must keep the basename")
+            extract = ["tar", "-xf", "-", "-C", dest]
+        self._transfer(archive, dest, extract)
+
+    def put_checkout(self, local: Path) -> None:
+        self._transfer(
+            ["git", "-C", str(local), "archive", "HEAD"],
+            self.repo_dir, ["tar", "-xf", "-", "-C", self.repo_dir],
+        )
+
+    def _transfer(self, archive: list[str], dest: str, extract: list[str]) -> None:
+        if self.run(["mkdir", "-p", dest]).returncode:
+            raise RuntimeError("Could not create checkout directory on the Debian guest")
+        with subprocess.Popen(archive, stdout=subprocess.PIPE) as source:
+            try:
+                result = subprocess.run(
+                    [*self._ssh, shlex.join(["sudo", "-n", "--", *extract])],
+                    stdin=source.stdout, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    timeout=180, check=False,
+                )
+            finally:
+                source.stdout.close()
+                if source.poll() is None:
+                    try:
+                        source.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        source.kill()
+            if result.returncode or source.wait():
+                raise RuntimeError("Could not transfer files into the Debian guest")
+
+    def url(self, port: int) -> str:
+        if port != 8765:
+            raise ValueError("The Debian guest must use the forwarded Orama port 8765")
+        return "http://localhost:8765"
