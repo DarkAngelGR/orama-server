@@ -17,6 +17,15 @@ Read `AGENTS.md` first.
 
 ## Current hand-off (Claude, 2026-11-13) — read this first
 
+- **New look (owner's choice, design D).** The web app now uses frosted glass panels over a dark
+  room lit by soft glows, with a light variant; spacing and type follow the golden ratio. People
+  who ask for less transparency, and browsers without blur, get solid panels. Home has a main
+  column and a "Your server" column (1.618 : 1). A plain `.button` is now the main-action style,
+  which fixes the grey Search buttons. Only `orama.css`, `base.html` (CSS v8) and `home.html`
+  changed; every label is the same. All browser tests pass in light and dark with axe on.
+  Mock-ups: the owner's Claude design canvas "Orama — golden ratio redesigns".
+- **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
+  still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
   (fake indexer and clips) done and reviewed OK. Step 3 (Ubuntu end-to-end job) runs and passed
   once on GitHub, but Claude's review found things to fix before it counts as done; they are
