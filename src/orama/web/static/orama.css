@@ -6,14 +6,16 @@
 :root {
   color-scheme: dark;
   --room: #101426;
-  --glow-a: rgba(58, 79, 208, .55);
-  --glow-b: rgba(176, 104, 58, .45);
-  --glow-c: rgba(46, 125, 104, .42);
-  --glass: rgba(22, 27, 46, .58);
-  --glass-strong: rgba(26, 31, 52, .78);
+  --glow-a: rgba(72, 96, 235, .72);
+  --glow-b: rgba(196, 112, 58, .58);
+  --glow-c: rgba(40, 150, 120, .55);
+  /* Glass: a light sheen over a little of the room's own dark, so the glow shows through
+     while text keeps its contrast. */
+  --glass: linear-gradient(150deg, rgba(255, 255, 255, .15), rgba(255, 255, 255, .05) 60%, rgba(255, 255, 255, .08)), rgba(16, 20, 38, .34);
+  --glass-strong: rgba(30, 36, 60, .86);
   --glass-solid: #1b2036;
-  --glass-edge: rgba(255, 255, 255, .16);
-  --glass-shine: rgba(255, 255, 255, .14);
+  --glass-edge: rgba(255, 255, 255, .22);
+  --glass-shine: rgba(255, 255, 255, .3);
   --well: rgba(6, 8, 18, .42);
   --ink: #f2f3f7;
   --muted: #c4c9d8;
@@ -57,10 +59,10 @@
   :root {
     color-scheme: light;
     --room: #e6e9f3;
-    --glow-a: rgba(120, 140, 240, .45);
-    --glow-b: rgba(240, 170, 120, .42);
-    --glow-c: rgba(110, 200, 170, .38);
-    --glass: rgba(255, 255, 255, .6);
+    --glow-a: rgba(110, 130, 245, .6);
+    --glow-b: rgba(245, 160, 105, .55);
+    --glow-c: rgba(90, 200, 165, .5);
+    --glass: linear-gradient(150deg, rgba(255, 255, 255, .78), rgba(255, 255, 255, .44) 60%, rgba(255, 255, 255, .6));
     --glass-strong: rgba(255, 255, 255, .8);
     --glass-solid: #ffffff;
     --glass-edge: rgba(255, 255, 255, .85);
@@ -93,8 +95,13 @@
    sits in the way of a click. */
 html {
   background:
-    radial-gradient(42rem 42rem at 8% 0, var(--glow-a), transparent 70%),
-    radial-gradient(38rem 38rem at 100% 14rem, var(--glow-b), transparent 70%),
+    radial-gradient(40rem 34rem at 12% 4rem, var(--glow-a), transparent 70%),
+    radial-gradient(34rem 30rem at 92% 16rem, var(--glow-b), transparent 70%),
+    radial-gradient(30rem 26rem at 48% 34rem, var(--glow-c), transparent 70%),
+    radial-gradient(34rem 30rem at 6% 62rem, var(--glow-b), transparent 70%),
+    radial-gradient(36rem 30rem at 88% 88rem, var(--glow-a), transparent 70%),
+    radial-gradient(32rem 28rem at 20% 122rem, var(--glow-c), transparent 70%),
+    radial-gradient(36rem 30rem at 80% 160rem, var(--glow-b), transparent 70%),
     radial-gradient(40rem 34rem at 50% 100%, var(--glow-c), transparent 70%),
     var(--room);
   min-height: 100%;

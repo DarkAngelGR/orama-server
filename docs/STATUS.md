@@ -29,6 +29,8 @@ Read `AGENTS.md` first.
   title page with a poster hero; request page with a four-stage progress track; Apps as
   tiles; status pills; empty states. Also fixed: the glows never showed in v8 (`:root`
   background outranked `html`).
+  CSS v10: the glass is now visible: panels are a light sheen over a little dark, and the
+  glows are stronger and repeat down the page so they pass behind the panels.
 - **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
   still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
