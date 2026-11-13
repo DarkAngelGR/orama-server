@@ -66,6 +66,22 @@ Read `AGENTS.md` first.
   one. Jellyfin (file names change per release) and qBittorrent (sign-in even for images) keep
   the bundled Simple Icons mark. If an app update moves its logo, its tile falls back quietly;
   update `ICON_PATHS` then.
+- **After Release 1 (owner request, 2026-11-13): "For you" recommendations with a local AI.**
+  Owner watches mostly through Plex and has a mini PC (Minisforum UN1250, Intel i5-1250P,
+  32 GB RAM, no separate GPU) running Ubuntu and Ollama. Design: nightly job reads Plex watch
+  history (Orama already holds the Plex sign-in token), gets real candidates from a film
+  database (TMDB similar/recommended; owner's free API key), drops what is in the library,
+  and asks Ollama (suggested `qwen2.5:14b`, or `llama3.1:8b` for speed) only to rank the
+  candidates and write one "because you watched ..." line each: the model never invents
+  titles. Shown as "For you" on Home with the existing Request button. Ollama has no auth:
+  the owner binds it to the LAN (`OLLAMA_HOST=0.0.0.0:11434`) and allows only the NAS through
+  ufw; Orama takes the Ollama address in Settings and treats its answers as untrusted text
+  (escape, match back to candidate ids, cap length). Needs a plan, tests and a Claude Security
+  scan (new outbound connection and model output in pages).
+- **After Release 1 (discussed 2026-11-13): music.** Lidarr for albums, played through Plexamp;
+  optional TIDAL official API for instant search and short previews only (its playback for
+  outside apps is previews; full playback would need TIDAL to open it). Never the private
+  TIDAL API or YouTube/stream rippers. Owner has not yet confirmed scope.
 - **After Release 1 (owner decision, 2026-11-13): import indexers and Usenet servers from the
   owner's current setup.** On the indexers step, "Import from my current setup": (1) connect
   to an existing Prowlarr and SABnzbd by address and API key and list what they have; (2) to
