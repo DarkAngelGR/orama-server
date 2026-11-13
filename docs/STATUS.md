@@ -73,9 +73,10 @@ Read `AGENTS.md` first.
   database (TMDB similar/recommended; owner's free API key), drops what is in the library,
   and asks Ollama (suggested `qwen2.5:14b`, or `llama3.1:8b` for speed) only to rank the
   candidates and write one "because you watched ..." line each: the model never invents
-  titles. Shown as "For you" on Home with the existing Request button. Ollama has no auth:
-  the owner binds it to the LAN (`OLLAMA_HOST=0.0.0.0:11434`) and allows only the NAS through
-  ufw; Orama takes the Ollama address in Settings and treats its answers as untrusted text
+  titles. Shown as "For you" on Home with the existing Request button. Ollama has no auth
+  and runs in Docker on the mini PC: ufw does not filter Docker-published ports, so access is
+  limited to the NAS with a `DOCKER-USER` iptables rule (`-p tcp --dport 11434 ! -s <NAS> -j
+  DROP`, saved with iptables-persistent); models live in a volume at `/root/.ollama`. Orama takes the Ollama address in Settings and treats its answers as untrusted text
   (escape, match back to candidate ids, cap length). Needs a plan, tests and a Claude Security
   scan (new outbound connection and model output in pages).
 - **After Release 1 (discussed 2026-11-13): music.** Lidarr for albums, played through Plexamp;
