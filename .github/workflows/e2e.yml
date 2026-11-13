@@ -66,8 +66,6 @@ jobs:
     env:
       PLAYWRIGHT_VERSION: "1.63.0"
       ORAMA_E2E_TARGET: debian
-      ORAMA_E2E_VM_STATE: ${{ runner.temp }}/orama-debian
-      ORAMA_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs-debian
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -101,7 +99,11 @@ jobs:
           path: ${{ runner.temp }}/orama-debian-cache/bookworm.qcow2
           key: orama-debian-12-${{ hashFiles('tests/e2e/debian-12.image') }}
       - name: Boot clean Debian 12 guest
-        run: bash tests/e2e/vm/boot.sh "$ORAMA_E2E_VM_STATE" "$RUNNER_TEMP/orama-debian-cache/bookworm.qcow2"
+        run: |
+          state="$RUNNER_TEMP/orama-debian"
+          echo "ORAMA_E2E_VM_STATE=$state" >> "$GITHUB_ENV"
+          echo "ORAMA_E2E_LOG_DIR=$RUNNER_TEMP/e2e-logs-debian" >> "$GITHUB_ENV"
+          bash tests/e2e/vm/boot.sh "$state" "$RUNNER_TEMP/orama-debian-cache/bookworm.qcow2"
       - name: Run Debian end-to-end proof
         id: proof
         env:
@@ -117,7 +119,8 @@ jobs:
       - name: Stop Debian guest
         if: always()
         run: |
-          if [[ -s "$ORAMA_E2E_VM_STATE/qemu.pid" ]]; then
-            kill "$(cat "$ORAMA_E2E_VM_STATE/qemu.pid")"
+          state="$RUNNER_TEMP/orama-debian"
+          if [[ -s "$state/qemu.pid" ]]; then
+            kill "$(cat "$state/qemu.pid")"
           fi
-          rm -f -- "$ORAMA_E2E_VM_STATE/id_ed25519"
+          rm -f -- "$state/id_ed25519"
