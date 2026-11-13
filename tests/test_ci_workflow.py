@@ -91,3 +91,14 @@ def test_e2e_workflow_runs_after_unit_and_images_with_least_privilege():
     assert uploads[0]["if"] == "failure()"
     assert uploads[0]["with"]["name"] == "e2e-logs-ubuntu"
 
+
+
+def test_integration_pulls_docker_hub_images_through_a_mirror():
+    """Docker Hub's anonymous pull limit made the real-app job fail at random (twice)."""
+    steps = JOBS["integration"]["steps"]
+    names = [s.get("name", "") for s in steps]
+    mirror = names.index("Docker Hub images through a mirror")
+    assert mirror < names.index("Integration test")
+    assert steps[mirror]["run"] == ".github/scripts/docker-hub-mirror.sh"
+    script = (Path(__file__).resolve().parents[1] / ".github/scripts/docker-hub-mirror.sh").read_text()
+    assert 'MIRROR="https://mirror.gcr.io"' in script and "registry-mirrors" in script

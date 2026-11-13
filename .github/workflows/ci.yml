@@ -114,6 +114,9 @@ jobs:
           sudo useradd --no-create-home --user-group --shell /usr/sbin/nologin orama-it
           echo "ORAMA_TEST_PUID=$(id -u orama-it)" >> "$GITHUB_ENV"
           echo "ORAMA_TEST_PGID=$(id -g orama-it)" >> "$GITHUB_ENV"
+      - name: Docker Hub images through a mirror
+        # Docker Hub's anonymous pull limit made this job fail at random; see the script.
+        run: .github/scripts/docker-hub-mirror.sh
       - name: Integration test
         # As root; the venv's python keeps uv's cache out of root's hands.
         run: >-
