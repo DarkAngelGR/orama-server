@@ -85,10 +85,10 @@ def test_e2e_workflow_runs_after_unit_and_images_with_least_privilege():
     script = "\n".join(s.get("run", "") for s in ubuntu["steps"])
     assert "playwright@$PLAYWRIGHT_VERSION" in script and "install --with-deps chromium" in script
     assert "ORAMA_E2E_TARGET=ubuntu" in script
-    assert "tests/e2e/test_e2e.py" in script
+    assert "tests/e2e/run-proof.sh" in script
     uploads = _steps_using("e2e-ubuntu", "actions/upload-artifact", jobs=E2E["jobs"])
     assert len(uploads) == 1
-    assert uploads[0]["if"] == "failure()"
+    assert uploads[0]["if"].startswith("failure() && ")
     assert uploads[0]["with"]["name"] == "e2e-logs-ubuntu"
 
 
@@ -102,3 +102,17 @@ def test_integration_pulls_docker_hub_images_through_a_mirror():
     assert steps[mirror]["run"] == ".github/scripts/docker-hub-mirror.sh"
     script = (Path(__file__).resolve().parents[1] / ".github/scripts/docker-hub-mirror.sh").read_text()
     assert 'MIRROR="https://mirror.gcr.io"' in script and "registry-mirrors" in script
+
+
+def test_e2e_actions_use_immutable_pins_and_upload_only_after_validation():
+    import re
+
+    for job in E2E["jobs"].values():
+        steps = job["steps"]
+        for step in steps:
+            if "uses" in step:
+                assert re.search(r"@[a-f0-9]{40}$", step["uses"])
+        guard = next(i for i, step in enumerate(steps) if step.get("id") == "proof")
+        upload = next(i for i, step in enumerate(steps) if "upload-artifact" in step.get("uses", ""))
+        assert guard < upload
+        assert "steps.proof.outputs.artifact_safe == 'true'" in steps[upload]["if"]

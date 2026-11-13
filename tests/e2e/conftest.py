@@ -95,6 +95,8 @@ def _cleanup_local(target: LocalTarget) -> None:
 def e2e_target() -> Target:
     mode = os.environ.get("ORAMA_E2E_TARGET", "").strip().lower()
     if not mode:
+        if os.environ.get("ORAMA_E2E_REQUIRED") == "1":
+            pytest.fail("e2e proof: CI must set ORAMA_E2E_TARGET")
         pytest.skip("e2e proof: set ORAMA_E2E_TARGET=ubuntu|debian (modifies target machine)")
     _check_node_playwright()
     ids = _install_ids()
@@ -114,14 +116,27 @@ def e2e_target() -> Target:
             repo_dir=str(REPO_ROOT),
         )
         _cleanup_local(target)
-        log_dir = Path(os.environ.get("ORAMA_E2E_LOG_DIR") or REPO_ROOT / "e2e-logs-ubuntu")
         try:
             yield target
         finally:
             try:
-                target.save_logs(log_dir)
+                _save_failed_run_logs(target)
             finally:
                 _cleanup_local(target)
         return
 
     pytest.fail(f"e2e proof: unsupported ORAMA_E2E_TARGET={mode!r}")
+
+
+def _save_failed_run_logs(target: Target) -> None:
+    scan_path = os.environ.get("ORAMA_E2E_SCAN_VALUES")
+    log_path = os.environ.get("ORAMA_E2E_LOG_DIR")
+    if not (scan_path and log_path) or Path(scan_path).exists():
+        return
+    # Abort artifact collection if setup failed too early to read the secrets.
+    try:
+        target.collect_stored_secrets()
+        target.save_logs(Path(log_path))
+        target.write_scan_values(Path(scan_path))
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+        pass

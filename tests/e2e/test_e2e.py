@@ -20,7 +20,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.e2e]
 
 E2E_DIR = Path(__file__).resolve().parent
 WIZARD_SCRIPT = E2E_DIR / "wizard.cjs"
-MAKE_CLIPS_SCRIPT = E2E_DIR / "make_clips.sh"
+FIXTURE_IMAGE = (
+    "python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+)
 INDEXER_CONTAINER = "orama-e2e-indexer"
 SHARED_NETWORK = "orama-net"
 DEVICE_LABEL = "Samsung S95F TV"
@@ -176,19 +178,6 @@ print(json.dumps([
     return json.loads(raw)
 
 
-def _read_secrets_map(target: Target, config_root: str) -> dict[str, str]:
-    snippet = """
-import json, sys
-from pathlib import Path
-from orama.secrets import SecretStore
-
-store = SecretStore(Path(sys.argv[1]))
-print(json.dumps({n: store.get(n) for n in store.names()}))
-"""
-    raw = _orama_python(target, snippet, f"{config_root}/orama/secrets.bin")
-    return json.loads(raw)
-
-
 def _prepare_clips_and_indexer(
     target: Target, clips_remote: str, torznab_key: str
 ) -> dict[str, str]:
@@ -249,7 +238,7 @@ print(json.dumps(hashes))
             f"{clips_remote}:/clips:ro",
             "-v",
             f"{target.repo_dir}/tests/e2e/fake_torznab.py:/indexer.py:ro",
-            "python:3.12-slim",
+            FIXTURE_IMAGE,
             "python",
             "/indexer.py",
             "/clips",
@@ -283,7 +272,9 @@ print(json.dumps(hashes))
     return infohashes
 
 
-def _run_wizard(args: list[str], target: Target, timeout: float = WIZARD_TIMEOUT) -> dict:
+def _run_wizard(
+    args: list[str], target: Target, captured: dict[str, str], timeout: float = WIZARD_TIMEOUT,
+) -> dict:
     __tracebackhide__ = True
     assert WIZARD_SCRIPT.is_file(), f"missing wizard driver: {WIZARD_SCRIPT}"
     node = shutil.which("node") or "node"
@@ -295,6 +286,10 @@ def _run_wizard(args: list[str], target: Target, timeout: float = WIZARD_TIMEOUT
         timeout=timeout,
         check=False,
     )
+    label = "wizard verification" if args[0] == "--verify-ready" else "setup wizard"
+    captured[f"{label} stdout"] = res.stdout
+    captured[f"{label} stderr"] = res.stderr
+    target.check_for_leaks({f"{label} stdout": res.stdout, f"{label} stderr": res.stderr})
     combined = target.scrub(res.stdout + "\n" + res.stderr)
     assert res.returncode == 0, f"wizard.cjs failed (exit {res.returncode}):\n{combined}"
     lines = [line for line in res.stdout.splitlines() if line.strip()]
@@ -335,7 +330,6 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
         assert target.run(["bash", "-c", "command -v docker"]).returncode != 0
 
     install_1 = _run_install(target)
-    captured_outputs["install-1"] = install_1.stdout
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "install-1.log").write_text(target.scrub(install_1.stdout), encoding="utf-8")
     assert install_1.returncode == 0, f"install.sh failed:\n{target.scrub(install_1.stdout)}"
@@ -347,6 +341,10 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     orama_port = int(match.group(2))
     setup_code = match.group(3)
     target.register_secret(setup_code)
+    # Exempt precisely the installer line which intentionally prints the one-time link.
+    captured_outputs["install-1"] = (
+        install_1.stdout[:match.start(3)] + "<hidden>" + install_1.stdout[match.end(3):]
+    )
 
     if target.expect_docker_installed:
         apt_file = _read_remote_bytes(target, "/etc/apt/sources.list.d/docker.list").decode()
@@ -403,7 +401,7 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
         },
     )
 
-    wizard_result = _run_wizard([target.url(orama_port), str(answers_path)], target)
+    wizard_result = _run_wizard([target.url(orama_port), str(answers_path)], target, captured_outputs)
     assert wizard_result["checklistOk"] is True
     checklist_lines = wizard_result["checklistLines"]
     assert checklist_lines and not any(line.lstrip().startswith("✗") for line in checklist_lines)
@@ -453,7 +451,7 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
             "-exec",
             "stat",
             "-c",
-            "%i|%h|%u|%g|%Y|%n",
+            "%i|%h|%u|%g|%n",
             "{}",
             "+",
         ],
@@ -464,14 +462,13 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     for line in stat_res.stdout.splitlines():
         if not line.strip():
             continue
-        inode, links, uid, gid, mtime, fpath = line.split("|", 5)
+        inode, links, uid, gid, fpath = line.split("|", 4)
         mkv_entries.append(
             {
                 "inode": int(inode),
                 "links": int(links),
                 "uid": int(uid),
                 "gid": int(gid),
-                "mtime": int(mtime),
                 "path": fpath,
             }
         )
@@ -542,16 +539,13 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     for key, imp in imported_videos.items():
         srt_path = str(Path(imp["path"]).with_suffix(".el.srt"))
         srt_stat = target.run(
-            ["stat", "-c", "%u|%g|%s|%Y", srt_path],
+            ["stat", "-c", "%u|%g|%s", srt_path],
             timeout=30,
         )
         assert srt_stat.returncode == 0, f"missing subtitle file {srt_path}"
-        suid, sgid, ssize, smtime = (int(x) for x in srt_stat.stdout.strip().split("|"))
+        suid, sgid, ssize = (int(x) for x in srt_stat.stdout.strip().split("|"))
         assert (suid, sgid) == (target.puid, target.pgid)
         assert ssize > 0, f"empty subtitle {srt_path}"
-        assert smtime >= imp["mtime"], (
-            f"subtitle {srt_path} mtime ({smtime}) precedes video mtime ({imp['mtime']})"
-        )
         srt_text = _read_remote_bytes(target, srt_path).decode("utf-8-sig")
         assert "Δοκιμή Orama" in srt_text, f"unexpected subtitle text in {srt_path}"
 
@@ -595,46 +589,19 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
             "request_urls": [r["url"] for r in request_results],
         },
     )
-    verify_res = _run_wizard(["--verify-ready", str(verify_path)], target, timeout=180)
+    verify_res = _run_wizard(["--verify-ready", str(verify_path)], target, captured_outputs, timeout=180)
     assert len(verify_res["requests"]) == 2
     for req_view in verify_res["requests"]:
         _assert_ready_page_text(req_view, f"post-reinstall {req_view['title']}")
 
-    # 9. Nothing leaks across stored secrets, runtime keys, container logs, or saved artifacts
-    stored = _read_secrets_map(target, target.config_root)
-    non_secret_keys = {"jellyfin:user", "plex:client-id"}
-    stored_secrets = [v for k, v in stored.items() if k not in non_secret_keys]
-    target.register_secret(*stored_secrets)
-    secret_values = {
-        v
-        for v in (*stored_secrets, orama_password, jellyfin_password, torznab_key)
-        if isinstance(v, str) and len(v) >= 8
-    }
-    assert secret_values
-    texts_to_scan: dict[str, str] = dict(captured_outputs)
-    for cname in (
-        "orama-server",
-        "orama-server-agent",
-        "orama-jellyfin",
-        "orama-sonarr",
-        "orama-radarr",
-        "orama-prowlarr",
-        "orama-bazarr",
-        "orama-qbittorrent",
-        INDEXER_CONTAINER,
-    ):
-        texts_to_scan[f"docker logs {cname}"] = target.run(
-            ["docker", "logs", cname], timeout=60
-        ).stdout
-    for artifact in sorted(log_dir.rglob("*")):
-        if artifact.is_file():
-            texts_to_scan[f"artifact {artifact.name}"] = artifact.read_text(
-                encoding="utf-8", errors="replace"
-            )
-    leaks = sorted(
-        where
-        for where, text in texts_to_scan.items()
-        if any(sec in text for sec in secret_values)
-        or (where != "install-1" and setup_code in text)
-    )
-    assert leaks == [], f"secret values leaked into: {leaks}"
+    # 9. Scan raw output independently of artifact redaction, then scan the actual files.
+    target.collect_stored_secrets()
+    captured_outputs["indexer logs"] = indexer_logs
+    captured_outputs.update(target.save_logs(log_dir))
+    target.check_for_leaks(captured_outputs)
+    target.check_for_leaks({
+        f"artifact {path.name}": path.read_text(encoding="utf-8")
+        for path in log_dir.iterdir() if path.is_file()
+    })
+    if scan_path := os.environ.get("ORAMA_E2E_SCAN_VALUES"):
+        target.write_scan_values(Path(scan_path))

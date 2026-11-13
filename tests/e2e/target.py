@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import logging
+import json
 import os
 import re
 import shutil
@@ -71,9 +71,57 @@ class Target(ABC):
     def url(self, port: int) -> str:
         """Return the base URL the test browser uses to reach ``port`` on the target."""
 
-    @abstractmethod
-    def save_logs(self, log_dir: Path) -> None:
-        """Collect scrubbed container and service logs into ``log_dir``."""
+    def collect_stored_secrets(self) -> None:
+        __tracebackhide__ = True
+        snippet = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "from orama.secrets import SecretStore\n"
+            "s = SecretStore(Path(sys.argv[1]))\n"
+            "print(json.dumps({n: s.get(n) for n in s.names()}))\n"
+        )
+        result = self.run(
+            ["docker", "exec", "orama-server", "python", "-c", snippet,
+             f"{self.config_root}/orama/secrets.bin"],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Could not read the proof's stored secrets")
+        non_secret = {"jellyfin:user", "plex:client-id"}
+        self.register_secret(*[v for k, v in json.loads(result.stdout).items() if k not in non_secret])
+
+    def check_for_leaks(self, texts: Mapping[str, str]) -> None:
+        __tracebackhide__ = True
+        for label, text in texts.items():
+            if any(secret in text for secret in self._secrets) or SETUP_CODE_RE.search(text):
+                raise AssertionError(f"Secret leaked in {label}")
+
+    def write_scan_values(self, path: Path) -> None:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(sorted(self._secrets), handle)
+
+    def save_logs(self, log_dir: Path) -> dict[str, str]:
+        __tracebackhide__ = True
+        raw = {
+            "docker-ps.txt": self.run(["docker", "ps", "-a", "--no-trunc"], timeout=60).stdout,
+            "docker-networks.txt": self.run(["docker", "network", "ls"], timeout=60).stdout,
+        }
+        listed = self.run(["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=60)
+        if listed.returncode != 0:
+            raise RuntimeError("Could not list containers for the proof's log snapshot")
+        for name in listed.stdout.split():
+            if re.fullmatch(r"orama-[a-z0-9-]+", name):
+                result = self.run(["docker", "logs", name], timeout=60)
+                if result.returncode != 0:
+                    raise RuntimeError(f"Could not collect logs from {name}")
+                raw[f"container-{name}.log"] = result.stdout
+        tree = self.run(["find", self.data_root, "-maxdepth", "6", "-ls"], timeout=60)
+        raw["data-tree.txt"] = tree.stdout
+        log_dir.mkdir(parents=True, exist_ok=True)
+        for name, content in raw.items():
+            (log_dir / name).write_text(self.scrub(content), encoding="utf-8", errors="replace")
+        return raw
 
 
 class LocalTarget(Target):
@@ -138,68 +186,3 @@ class LocalTarget(Target):
 
     def url(self, port: int) -> str:
         return f"http://127.0.0.1:{port}"
-
-    def _collect_stored_secrets(self) -> None:
-        secrets_file = f"{self.config_root}/orama/secrets.bin"
-        snippet = (
-            "import json, sys\n"
-            "from pathlib import Path\n"
-            "from orama.secrets import SecretStore\n"
-            "p = Path(sys.argv[1])\n"
-            "if p.exists():\n"
-            "    s = SecretStore(p)\n"
-            "    print(json.dumps({n: s.get(n) for n in s.names()}))\n"
-        )
-        try:
-            res = self.run(
-                ["docker", "exec", "orama-server", "python", "-c", snippet, secrets_file],
-                timeout=30,
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                import json
-
-                data = json.loads(res.stdout)
-                if isinstance(data, dict):
-                    non_secret = {"jellyfin:user", "plex:client-id"}
-                    self.register_secret(
-                        *[str(v) for k, v in data.items() if k not in non_secret and v is not None]
-                    )
-        except Exception as exc:  # noqa: BLE001 - best-effort before cleanup
-            logging.getLogger(__name__).debug("unable to read stored secrets before cleanup: %s", exc)
-
-    def _write_scrubbed(self, path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.scrub(content), encoding="utf-8", errors="replace")
-
-    def save_logs(self, log_dir: Path) -> None:
-        self._collect_stored_secrets()
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        self._write_scrubbed(
-            log_dir / "docker-ps.txt",
-            self.run(["docker", "ps", "-a", "--no-trunc"], timeout=60).stdout,
-        )
-        self._write_scrubbed(
-            log_dir / "docker-networks.txt",
-            self.run(["docker", "network", "ls"], timeout=60).stdout,
-        )
-
-        listed = self.run(["docker", "ps", "-a", "--format", "{{.Names}}"], timeout=60)
-        for cname in listed.stdout.split():
-            if not cname.startswith("orama-"):
-                continue
-            logs = self.run(["docker", "logs", cname], timeout=60)
-            self._write_scrubbed(log_dir / f"container-{cname}.log", logs.stdout)
-
-        recyclarr_logs = Path(self.config_root) / "config/recyclarr/logs"
-        if recyclarr_logs.is_dir():
-            for file_path in sorted(recyclarr_logs.rglob("*")):
-                if file_path.is_file():
-                    rel = str(file_path.relative_to(recyclarr_logs)).replace("/", "_")
-                    self._write_scrubbed(
-                        log_dir / f"recyclarr-{rel}",
-                        file_path.read_text(encoding="utf-8", errors="replace"),
-                    )
-
-        data_tree = self.run(["find", self.data_root, "-maxdepth", "6", "-ls"], timeout=60)
-        self._write_scrubbed(log_dir / "data-tree.txt", data_tree.stdout)

@@ -94,3 +94,17 @@ def test_target_scrubs_setup_codes_and_registered_secrets():
     assert "short" in scrubbed
     assert target.url(8765) == "http://127.0.0.1:8765"
 
+
+
+def test_debian_image_pin_matches_a_dated_generic_qcow2():
+    import re
+    from pathlib import Path
+
+    pin = Path(__file__).with_name("e2e") / "debian-12.image"
+    url, checksum = pin.read_text(encoding="ascii").splitlines()
+    assert re.fullmatch(
+        r"https://cloud\.debian\.org/images/cloud/bookworm/(\d{8}-\d+)/"
+        r"debian-12-generic-amd64-\1\.qcow2",
+        url,
+    )
+    assert re.fullmatch(r"[0-9a-f]{128}", checksum)

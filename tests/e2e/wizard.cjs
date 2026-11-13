@@ -313,6 +313,29 @@ async function runSetupAndRequests(setupUrlOrBase, answersPath) {
       current.bodyText = finalState.bodyText;
     }
 
+    // A fresh visitor can acquire a valid CSRF token, but the spent code cannot
+    // create an administrator or start a session again.
+    const visitor = await browser.newContext();
+    try {
+      const signIn = await visitor.request.get(`${baseUrl}/signin`);
+      const csrf = (await signIn.text()).match(/name="csrf_token"\s+value="([^"]+)"/);
+      if (!signIn.ok() || !csrf) fail("Could not obtain a fresh sign-in CSRF token");
+      const replay = await visitor.request.post(`${baseUrl}/setup/password`, {
+        form: { csrf_token: csrf[1], code: setupCode, password: answers.orama_password },
+        headers: { Origin: baseUrl },
+        maxRedirects: 0,
+      });
+      if (replay.status() !== 303 || replay.headers().location !== "/signin") {
+        fail("Replaying the old setup code did not return the visitor to sign-in");
+      }
+      const replayBody = await replay.text();
+      if (replayBody.includes(setupCode) || replayBody.includes(answers.orama_password)) {
+        fail("Setup replay response contained a secret");
+      }
+    } finally {
+      await visitor.close();
+    }
+
     if (problems.length) {
       fail([...new Set(problems)].join("\n"));
     }
