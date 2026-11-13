@@ -246,3 +246,5 @@ the request lease, at most once per 60 s (many events become one call), when an 
 Ready or the note is set. A failing or slow Jellyfin is logged as one line (no key) and never
 stops a tick. Open question for a later run: switch the refresh off in the end-to-end test once
 to see whether the notification alone is enough.
+
+- The "media changed" note is a single row in the request database. The worker takes it only when a scan really runs (at most once a minute), and an item that becomes Ready writes the same row, so a change held back by the one-minute window survives an Orama restart (tests in `tests/requests/test_media_refresh.py`).

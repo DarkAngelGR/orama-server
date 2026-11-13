@@ -143,3 +143,45 @@ def test_an_unreachable_jellyfin_never_aborts_a_tick(tmp_path):
     env.downloading_request()
     env.http.unreachable = True
     assert env.worker.tick(env.now) == 1
+
+
+def _restarted_worker(env):
+    """A new worker on the same database, as after Orama restarts."""
+    return RequestWorker(store=env.store, client_factory=env.worker.client_factory,
+                         clock=lambda: env.now)
+
+
+def test_a_change_held_back_by_the_window_survives_a_restart(tmp_path):
+    env = _Env(tmp_path)
+    env.store.mark_media_changed(env.now)
+    env.worker.tick(env.now)
+    assert len(env.refresh_calls()) == 1
+    env.now += 10.0
+    env.store.mark_media_changed(env.now)  # inside the 60 s window: held back
+    env.worker.tick(env.now)
+    assert len(env.refresh_calls()) == 1
+    env.worker = _restarted_worker(env)  # Orama restarts before the window ends
+    env.now += 61.0
+    env.worker.tick(env.now)
+    assert len(env.refresh_calls()) == 2
+
+
+def test_an_item_ready_inside_the_window_survives_a_restart(tmp_path):
+    env = _Env(tmp_path)
+    env.store.mark_media_changed(env.now)
+    env.worker.tick(env.now)
+    assert len(env.refresh_calls()) == 1
+    env.now += 5.0
+    env.downloading_request()
+    env.worker.tick(env.now)  # becomes Ready inside the window: refresh held back
+    assert len(env.refresh_calls()) == 1
+    env.worker = _restarted_worker(env)
+    env.now += 61.0
+    env.worker.tick(env.now)
+    assert len(env.refresh_calls()) == 2
+
+
+def test_the_client_refreshes_with_the_setup_it_was_given(tmp_path):
+    env = _Env(tmp_path)
+    assert MediaClient(env.setup, env.secrets, env.http).refresh_media_server() is True
+    assert len(env.refresh_calls()) == 1

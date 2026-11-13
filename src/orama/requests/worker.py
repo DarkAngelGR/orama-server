@@ -143,7 +143,6 @@ class RequestWorker:
         self._failures = 0
         self._last_kind: str | None = None
         self._last_logged = 0.0
-        self._media_refresh_pending = False
         self._last_media_refresh: float | None = None
 
     @property
@@ -220,8 +219,6 @@ class RequestWorker:
         """Process one due media request; returns number of processed records."""
         refreshes = self.store.drain_refreshes()
         _ = refreshes
-        if self.store.take_media_changed():
-            self._media_refresh_pending = True
         try:
             return self._process_one(now)
         finally:
@@ -229,13 +226,16 @@ class RequestWorker:
             self._refresh_media_server(now)
 
     def _refresh_media_server(self, now: float) -> None:
-        """Scan the media server if something changed, at most once a minute."""
-        if not self._media_refresh_pending:
-            return
+        """Scan the media server if something changed, at most once a minute.
+
+        The "media changed" note lives in the request database and is taken only when a scan
+        really runs, so a change held back by the one-minute window survives a restart.
+        """
         last = self._last_media_refresh
         if last is not None and 0 <= now - last < MEDIA_REFRESH_MIN_INTERVAL:
             return
-        self._media_refresh_pending = False
+        if not self.store.take_media_changed():
+            return
         self._last_media_refresh = now
         try:
             self.client_factory().refresh_media_server()
@@ -467,7 +467,7 @@ class RequestWorker:
             update = _clear_own_waiting_note(record, update)
             self.store.update(record.id, record.revision, update, now=now)
             if became_ready:
-                self._media_refresh_pending = True
+                self.store.mark_media_changed(now)
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
             return 1

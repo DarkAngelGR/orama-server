@@ -127,8 +127,7 @@ class MediaClient:
         """Ask the media server (Jellyfin) to scan; never raises. See ``refresh_library``."""
         from orama.wiring.jellyfin import refresh_library
 
-        setup = self.setup.current() if hasattr(self.setup, "current") else self.setup
-        return refresh_library(setup, self.store, self.http)
+        return refresh_library(self.setup, self.store, self.http)
 
     def _get_app_info(self, app_name: str) -> tuple[str, str]:
         removed = getattr(self.setup, "removed_apps", ()) or ()
