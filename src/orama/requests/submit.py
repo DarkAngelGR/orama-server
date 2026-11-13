@@ -89,6 +89,10 @@ def submit(
                     has_file=ep_has_file,
                 )
 
+            # A show Sonarr already had may follow almost nothing (an earlier episode or
+            # season request added it): the series search below finds only followed episodes.
+            client.follow_whole_series(remote_id, series_eps)
+
             if series_eps and all(bool(ep.get("hasFile")) for ep in series_eps):
                 requests.update(
                     current.id,

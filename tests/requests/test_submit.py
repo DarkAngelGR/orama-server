@@ -126,6 +126,8 @@ def test_submit_whole_series(tmp_path):
     http.route("GET", "/api/v3/rootfolder", lambda call: json_resp([{"id": 1, "path": "/data/media/tv"}]))
     http.route("POST", "/api/v3/series", lambda call: json_resp({"id": 99, "title": "Show B"}))
     http.route("POST", "/api/v3/command", lambda call: json_resp({"id": 777, "name": "SeriesSearch"}))
+    http.route("GET", "/api/v3/series/99", lambda call: json_resp(
+        {"id": 99, "monitored": True, "monitorNewItems": "all", "seasons": []}))
 
     client = make_client(http)
     submit(rec, client, store, now)
@@ -280,3 +282,67 @@ def test_ensure_series_never_adds_a_different_show():
     assert make_client(http).ensure_series(24)[0] == 55
     posted = next(c for c in http.calls if c.method == "POST")
     assert posted.json["tvdbId"] == 24 and posted.json["title"] == "The right show"
+
+
+def _existing_series_http(series):
+    """Sonarr already has the show (an earlier episode request added it, following nothing)."""
+    http = FakeHttp()
+    http.route("GET", "/api/v3/series", lambda call: json_resp([series]))
+    http.route("GET", f"/api/v3/series/{series['id']}", lambda call: json_resp(series))
+    http.route("PUT", f"/api/v3/series/{series['id']}", lambda call: json_resp(call.json))
+    http.route("GET", "/api/v3/episode", lambda call: json_resp([
+        {"id": 1, "seasonNumber": 0, "episodeNumber": 1, "monitored": False, "hasFile": False},
+        {"id": 2, "seasonNumber": 1, "episodeNumber": 1, "monitored": True, "hasFile": False},
+        {"id": 3, "seasonNumber": 1, "episodeNumber": 2, "monitored": False, "hasFile": False},
+        {"id": 4, "seasonNumber": 2, "episodeNumber": 1, "monitored": False, "hasFile": False},
+    ]))
+    http.route("PUT", "/api/v3/episode/monitor", lambda call: json_resp([]))
+    http.route("POST", "/api/v3/command", lambda call: json_resp({"id": 5, "name": "SeriesSearch"}))
+    http.route("GET", "/api/v3/command", lambda call: json_resp([]))
+    http.route("GET", "/api/v3/queue", lambda call: json_resp({"records": []}))
+    return http
+
+
+def test_whole_series_request_follows_a_show_sonarr_already_has(tmp_path):
+    """Sonarr's series search only looks for followed episodes, and an earlier episode or
+    season request added the show following almost nothing: a whole-show request must turn
+    following on (regular seasons, their episodes and future ones), or nothing downloads."""
+    store = RequestStore(tmp_path / "requests.db")
+    rec, _ = store.create(RequestSpec(kind="series", source_id=404), 1000.0)
+    series = {"id": 99, "tvdbId": 404, "title": "Show B", "monitored": False,
+              "monitorNewItems": "none", "statistics": {"episodeFileCount": 0},
+              "seasons": [{"seasonNumber": 0, "monitored": False},
+                          {"seasonNumber": 1, "monitored": False},
+                          {"seasonNumber": 2, "monitored": False}]}
+    http = _existing_series_http(series)
+
+    submit(rec, make_client(http), store, 1000.0)
+
+    put_series = next(c for c in http.calls if c.method == "PUT" and c.path == "/api/v3/series/99")
+    assert put_series.json["monitored"] is True
+    assert put_series.json["monitorNewItems"] == "all"
+    assert {s["seasonNumber"]: s["monitored"] for s in put_series.json["seasons"]} == {
+        0: False, 1: True, 2: True}  # specials stay as they were
+    put_eps = next(c for c in http.calls if c.path == "/api/v3/episode/monitor")
+    assert sorted(put_eps.json["episodeIds"]) == [3, 4] and put_eps.json["monitored"] is True
+    # Following is switched on before the search is asked for.
+    order = [(c.method, c.path) for c in http.calls]
+    assert order.index(("PUT", "/api/v3/series/99")) < order.index(("POST", "/api/v3/command"))
+    assert store.get(rec.id).stage == "downloading"
+
+
+def test_whole_series_request_changes_nothing_when_the_show_is_already_followed(tmp_path):
+    store = RequestStore(tmp_path / "requests.db")
+    rec, _ = store.create(RequestSpec(kind="series", source_id=404), 1000.0)
+    series = {"id": 99, "tvdbId": 404, "title": "Show B", "monitored": True,
+              "monitorNewItems": "all", "statistics": {"episodeFileCount": 0},
+              "seasons": [{"seasonNumber": 0, "monitored": False},
+                          {"seasonNumber": 1, "monitored": True},
+                          {"seasonNumber": 2, "monitored": True}]}
+    http = _existing_series_http(series)
+    http.route("GET", "/api/v3/episode", lambda call: json_resp([
+        {"id": 2, "seasonNumber": 1, "episodeNumber": 1, "monitored": True, "hasFile": False}]))
+
+    submit(rec, make_client(http), store, 1000.0)
+
+    assert not any(c.method == "PUT" for c in http.calls)

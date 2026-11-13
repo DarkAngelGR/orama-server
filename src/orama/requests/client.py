@@ -616,6 +616,37 @@ class MediaClient:
             )
         return target_ids
 
+    def follow_whole_series(self, series_id: int, episodes: list[dict[str, Any]]) -> None:
+        """Make Sonarr follow the whole show: the show, its regular seasons and their episodes,
+        and episodes that air later. Specials (season 0) are left as they are.
+
+        Needed because Sonarr's series search only looks for followed episodes, and a show an
+        earlier episode or season request added follows almost nothing. Changes nothing when
+        the show is already followed.
+        """
+        series = self._request("sonarr", f"series/{series_id}")
+        if isinstance(series, dict):
+            seasons = series.get("seasons") if isinstance(series.get("seasons"), list) else []
+            wanted = [
+                {**s, "monitored": True}
+                if isinstance(s, dict) and isinstance(s.get("seasonNumber"), int)
+                and s["seasonNumber"] > 0 else s
+                for s in seasons
+            ]
+            if (series.get("monitored") is not True
+                    or series.get("monitorNewItems", "all") != "all" or wanted != seasons):
+                body = {**series, "monitored": True, "monitorNewItems": "all", "seasons": wanted}
+                self._request("sonarr", f"series/{series_id}", method="PUT", json_body=body)
+        ids = [
+            ep["id"] for ep in episodes
+            if isinstance(ep, dict) and isinstance(ep.get("id"), int)
+            and isinstance(ep.get("seasonNumber"), int) and ep["seasonNumber"] > 0
+            and ep.get("monitored") is not True
+        ]
+        if ids:
+            self._request("sonarr", "episode/monitor", method="PUT",
+                          json_body={"episodeIds": ids, "monitored": True})
+
     def command_status(self, app_name: str, command_id: int | None = None) -> Any:
         """Query command status in Radarr or Sonarr."""
         path = f"command/{command_id}" if command_id is not None else "command"
