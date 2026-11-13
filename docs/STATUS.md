@@ -229,7 +229,7 @@ real-container integration tests.
 |---|---|---|---|
 | 1 | Publish gate | done (`0bcf21f`) | Gemini; Claude corrected the report |
 | 2 | Self-update (two Agent commands, hardened helper) | done (`ea34774`, `da28540`, review fixes `dc1cea1`) | Gemini, then Claude |
-| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | in progress — step 1 done (Claude); step 2 CI passed (ChatGPT/Codex, `8d46eff`, needs review); step 3 review fixes and step 4 claimed by ChatGPT/Codex; step 5 open | ChatGPT/Codex + Gemini |
+| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | in progress — step 1 done (Claude); step 2 CI passed (ChatGPT/Codex, `8d46eff`, needs review); steps 3–4 passed three runs on test (ChatGPT/Codex, needs review); step 5 claimed by ChatGPT/Codex | ChatGPT/Codex + Gemini |
 | 4 | Owner checklist on the NAS (`docs/OWNER-CHECKLIST.md`) | open (written, not run) | Owner |
 | 5 | Security scans, packaging, Release 1 sign-off | open | Owner + Claude |
 
