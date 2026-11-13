@@ -1,5 +1,8 @@
 <nav class="wizard-steps" aria-label="Setup steps">
-  <p class="wizard-progress">Step {{ position }} of {{ steps|length }} · {{ step.label }}</p>
+  <div class="wizard-progress-row">
+    <p class="wizard-progress"><span class="wizard-progress-count">Step {{ position }} of {{ steps|length }}</span> <span class="wizard-progress-label">{{ step.label }}</span></p>
+    <progress class="wizard-meter" value="{{ position }}" max="{{ steps|length }}" aria-hidden="true"></progress>
+  </div>
   <details>
     <summary>All steps</summary>
     <ol>

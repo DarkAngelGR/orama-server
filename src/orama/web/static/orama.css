@@ -52,7 +52,6 @@
   font-size: 100%;
   line-height: 1.618;
   color: var(--ink);
-  background: var(--room);
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -344,3 +343,120 @@ a.app-name:hover { color: var(--accent-hover); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------------------ second pass */
+
+html { scroll-behavior: smooth; scroll-padding-top: var(--s4); }
+::selection { background: var(--selected-edge); color: var(--on-primary); }
+
+/* Status pills: the word carries the meaning, the tint backs it up. */
+.app-state { display: inline-flex; align-items: center; gap: .45rem; padding: .2rem .8rem; border-radius: 999px; font-size: .875rem; font-weight: 600; line-height: 1.5; white-space: nowrap; color: var(--muted); background: var(--line); }
+.app-state-running, .app-state[data-state="Running"] { color: var(--ok); background: var(--ok-bg); }
+.app-state-running::before, .app-state[data-state="Running"]::before { width: .45rem; height: .45rem; margin: 0; vertical-align: 0; }
+.app-state[data-state="Starting"], .app-state-starting, .app-state-restarting { color: var(--accent); background: var(--selected); }
+.app-state-stopped, .app-state[data-state="Stopped"], .app-state-not-found { color: var(--wait); background: var(--wait-bg); }
+.app-detail { display: block; color: var(--muted); font-weight: 400; font-size: .9375rem; }
+.tag { display: inline-flex; align-items: center; padding: .2rem .8rem; border-radius: 999px; font-size: .875rem; font-weight: 600; border: 1px solid var(--control-border); color: var(--ink); }
+
+/* Rows that lead somewhere brighten their edge on hover. */
+.app-row:has(a.app-name):hover, .poster-card:hover { border-color: var(--selected-edge); }
+a.app-name { text-decoration: none; }
+a.app-name:hover, a.app-name:focus-visible { text-decoration: underline; }
+
+/* Empty states and waiting banners */
+.empty-state { display: grid; gap: var(--s1); padding: var(--s3); border: 1px dashed var(--control-border); border-radius: var(--r-panel); background: var(--well); }
+.empty-title { font-weight: 650; font-size: 1.125rem; }
+.apps > .empty-state { margin-top: var(--s4); }
+.banner { padding: var(--s2) var(--s3); border-radius: var(--r-small); border: 1px solid currentColor; color: var(--wait); background: var(--wait-bg); }
+.notice { display: grid; gap: .15rem; }
+.notice-label::before { content: ""; display: inline-block; width: .5rem; height: .5rem; margin-right: .6rem; border-radius: 50%; background: currentColor; vertical-align: .12em; }
+
+/* Wizard: where you are, at a glance. */
+.wizard-progress-row { display: grid; gap: var(--s1); padding: var(--s2) var(--s3) var(--s1); }
+.wizard-progress { padding: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem var(--s2); }
+.wizard-progress-count { color: var(--muted); font-weight: 500; font-size: .9375rem; }
+.wizard-progress-label { font-size: 1.0625rem; }
+.wizard-meter { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border: 0; border-radius: 999px; overflow: hidden; background: var(--line); color: var(--accent); }
+.wizard-meter::-webkit-progress-bar { background: var(--line); border-radius: 999px; }
+.wizard-meter::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+.wizard-meter::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+.wizard-steps summary { width: fit-content; border-radius: var(--r-small); }
+.wizard-steps summary:hover { color: var(--accent-hover); text-decoration: underline; }
+.wizard-steps ol { counter-reset: step; padding-top: var(--s1); border-top: 1px solid var(--line); margin-inline: var(--s2); padding-inline: 0; }
+.wizard-step { counter-increment: step; justify-content: flex-start; }
+.wizard-step::before { content: counter(step); flex: none; display: inline-grid; place-items: center; width: 1.625rem; height: 1.625rem; border-radius: 50%; font-size: .8125rem; font-weight: 650; color: var(--muted); border: 1px solid var(--control-border); }
+.wizard-step-done::before { color: var(--ok); border-color: var(--ok); background: var(--ok-bg); }
+.wizard-step-current::before { color: var(--on-primary); background: var(--primary); border-color: var(--primary); }
+.wizard-step-state { margin-left: auto; }
+.wizard-step-done .wizard-step-state { color: var(--ok); }
+.wizard-step-todo .wizard-step-state { color: var(--wait); }
+.wizard > h1 { margin-top: var(--s2); }
+
+/* Settings: a section menu beside the panels, 1 : 1.618 of the content's own rhythm. */
+.settings-page { display: grid; gap: var(--s4); min-width: 0; }
+.settings-page:has(.settings-nav) { grid-template-columns: minmax(0, 14rem) minmax(0, 46rem); justify-content: center; align-items: start; }
+.settings-page > h1 { grid-column: 1 / -1; font-size: clamp(1.75rem, 4.5vw, var(--t-h1)); letter-spacing: -.03em; }
+.settings-page .settings { margin: 0; width: 100%; }
+.settings-nav { position: sticky; top: var(--s3); padding: var(--s1); border-radius: var(--r-panel); background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine); }
+.settings-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.settings-nav a { display: flex; align-items: center; min-height: 44px; padding: 0 var(--s2); border-radius: var(--r-small); color: var(--muted); text-decoration: none; font-size: .9375rem; }
+.settings-nav a:hover { color: var(--ink); background: var(--selected); }
+.settings-section { scroll-margin-top: var(--s4); }
+.settings-section:target { border-color: var(--selected-edge); }
+@media (prefers-reduced-transparency: reduce) { .settings-nav { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+
+/* Request progress: four stages in order. */
+.stage-track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s1); }
+.stage { display: grid; gap: var(--s1); align-content: start; font-size: .875rem; color: var(--muted); overflow-wrap: anywhere; }
+.stage::before { content: ""; height: 6px; border-radius: 999px; background: var(--line); }
+.stage-done::before { background: var(--ok); }
+.stage-now { color: var(--ink); font-weight: 650; }
+.stage-now::before { background: var(--accent); box-shadow: 0 0 .75rem var(--accent); }
+.stage-meter { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border: 0; border-radius: 999px; background: var(--line); color: var(--accent); }
+.stage-meter::-webkit-progress-bar { background: var(--line); border-radius: 999px; }
+.stage-meter::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+.stage-meter::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+.request-summary { justify-content: space-between; }
+
+/* Search results: posters first, the way a shelf of films reads. */
+.poster-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.5rem), 1fr)); gap: var(--s3); }
+.poster-card { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s1); border-radius: var(--r-panel); background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine), var(--shadow); min-width: 0; }
+.poster-card-image { display: block; width: 100%; height: auto; aspect-ratio: 2 / 3; object-fit: cover; border-radius: var(--r-small); background: var(--well); }
+.poster-card-body { display: grid; gap: var(--s1); justify-items: start; padding: 0 var(--s1); flex: 1; align-content: start; }
+.poster-card-title { font-weight: 650; overflow-wrap: anywhere; }
+.poster-card .button { min-height: 44px; width: 100%; }
+@media (prefers-reduced-transparency: reduce) { .poster-card { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+
+/* A title: the poster and the decision, side by side. */
+.media-header { display: grid; grid-template-columns: minmax(0, 12.5rem) minmax(0, 1fr); gap: var(--s4); align-items: center; padding: var(--s4); margin-top: 0; }
+.poster-large { width: 100%; height: auto; aspect-ratio: 2 / 3; }
+.media-intro { display: grid; gap: var(--s3); justify-items: start; min-width: 0; }
+.media-intro h1 { font-size: clamp(1.75rem, 4.5vw, var(--t-h1)); }
+.media-tags { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.apps > .settings-section { margin-top: var(--s4); }
+
+/* Apps: a grid of tiles, each with a monogram. */
+#apps-list .app-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr)); gap: var(--s3); }
+#apps-list .app-row { flex-wrap: nowrap; padding: var(--s3); }
+.app-mark { flex: none; display: grid; place-items: center; width: 2.625rem; height: 2.625rem; border-radius: var(--r-small); font-weight: 650; font-size: 1.125rem; color: var(--ink); background: var(--selected); border: 1px solid var(--glass-edge); }
+.app-text { display: grid; gap: .3rem; justify-items: start; flex: 1; min-width: 0; }
+.app-text .app-name { flex: none; }
+#apps-notice { margin-top: var(--s3); }
+
+/* Message pages sit on glass too. */
+.message-page { padding: var(--s4); border-radius: var(--r-panel); background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--glass-edge); box-shadow: inset 0 1px 0 var(--glass-shine), var(--shadow); }
+
+@media (max-width: 1023px) {
+  .settings-page:has(.settings-nav) { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav { position: static; padding: var(--s1); overflow-x: auto; }
+  .settings-nav ul { display: flex; gap: var(--s1); width: max-content; }
+  .settings-nav a { white-space: nowrap; border: 1px solid var(--line); }
+}
+@media (max-width: 760px) {
+  .media-header { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr); gap: var(--s3); padding: var(--s3); align-items: start; }
+  .poster-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .stage { font-size: .8125rem; }
+  .message-page { padding: var(--s3); }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+.apps > section[aria-live] { margin-top: var(--s4); }

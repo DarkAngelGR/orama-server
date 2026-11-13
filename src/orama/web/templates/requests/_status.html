@@ -1,8 +1,25 @@
+{% set track = [('searching', 'Searching'), ('downloading', 'Downloading'), ('importing', 'Importing'), ('ready', 'Ready')] %}
+{% set here = 'searching' if req.stage == 'requested' else req.stage %}
+{% set keys = track|map('first')|list %}
 <div class="stack">
-  <div class="app-row">
+  <div class="app-row request-summary">
     <span class="app-name">{{ req.target_label }}</span>
-    <span class="app-state" data-state="{{ 'Running' if req.stage == 'ready' else ('Starting' if req.stage in ('searching', 'downloading', 'importing') else 'Stopped') }}">{{ req.stage_label }}</span>
+    <span class="app-state" data-state="{{ 'Running' if req.stage == 'ready' else ('Starting' if req.stage in ('requested', 'searching', 'downloading', 'importing') else 'Stopped') }}">{{ req.stage_label }}</span>
   </div>
+
+  {% if here in keys %}
+  {% set at = keys.index(here) %}
+  <ol class="stage-track" aria-label="Request progress">
+    {% for key, label in track %}
+    <li class="stage stage-{{ 'done' if loop.index0 < at else ('now' if loop.index0 == at else 'later') }}"{% if loop.index0 == at %} aria-current="step"{% endif %}>
+      <span class="stage-label">{{ label }}</span>
+      {% if key == 'downloading' and here == 'downloading' and req.progress is not none %}
+      <progress class="stage-meter" value="{{ req.progress }}" max="100" aria-label="Downloaded">{{ req.progress }}%</progress>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
 
   {% if req.season_summary %}
   <p class="note">{{ req.season_summary }}</p>
@@ -29,7 +46,7 @@
   <ul class="app-list">
     {% for ep in req.episodes %}
     <li class="app-row">
-      <span class="app-name">S{{ "%02d"|format(ep.season) }}E{{ "%02d"|format(ep.episode) }}{% if ep.title %} · {{ ep.title }}{% endif %}</span>
+      <span class="app-name">S{{ "%02d"|format(ep.season) }}E{{ "%02d"|format(ep.episode) }}{% if ep.title %} <span class="app-detail">{{ ep.title }}</span>{% endif %}</span>
       <span class="app-state" data-state="{{ 'Running' if ep.has_file or ep.stage == 'ready' else 'Starting' }}">
         {% if ep.has_file or ep.stage == 'ready' %}Ready{% else %}{{ ep.stage|capitalize }}{% endif %}
       </span>

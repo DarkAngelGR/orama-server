@@ -30,20 +30,21 @@
   {% if error %}
   <p class="notice notice-error" role="alert">{{ error }}</p>
   {% elif query and not results %}
-  <p class="note">No matches found for "{{ query }}".</p>
+  <div class="empty-state">
+    <p class="empty-title">No matches found for "{{ query }}".</p>
+    <p class="note">Check the spelling, try fewer words, or switch between Movie and TV show.</p>
+  </div>
   {% elif results %}
   <h2>Results</h2>
-  <ul class="app-list">
+  <ul class="app-list poster-grid">
     {% for item in results %}
-    <li class="app-row media-row">
-      <img class="poster-thumb" src="{{ url_for('posters.poster', kind=item.kind, source_id=item.source_id) }}" alt="" width="56" height="84" loading="lazy">
-      <div class="media-meta">
-        <span class="app-name">{{ item.title }}{% if item.year %} ({{ item.year }}){% endif %}</span>
-        {% if item.in_library %}
-        <span class="app-state" data-state="Running">In library</span>
-        {% endif %}
+    <li class="poster-card">
+      <img class="poster-card-image" src="{{ url_for('posters.poster', kind=item.kind, source_id=item.source_id) }}" alt="" width="200" height="300" loading="lazy">
+      <div class="poster-card-body">
+        <span class="poster-card-title">{{ item.title }}{% if item.year %} ({{ item.year }}){% endif %}</span>
+        {% if item.in_library %}<span class="app-state" data-state="Running">In library</span>{% endif %}
       </div>
-      <a class="button button-secondary" href="{{ url_for('requests.media', kind=item.kind, source_id=item.source_id) }}">Details</a>
+      <a class="button button-secondary" href="{{ url_for('requests.media', kind=item.kind, source_id=item.source_id) }}" aria-label="Details for {{ item.title }}{% if item.year %} ({{ item.year }}){% endif %}">Details</a>
     </li>
     {% endfor %}
   </ul>

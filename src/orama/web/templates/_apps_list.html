@@ -5,8 +5,11 @@
 <ul class="app-list">
   {% for row in rows %}
   <li class="app-row" id="app-row-{{ row.key }}">
-    <span class="app-name">{{ row.name }}</span>
-    {% if row.state %}<span class="app-state app-state-{{ row.state|lower|replace(' ', '-') }}">{{ row.state }}</span>{% endif %}
+    <span class="app-mark" aria-hidden="true">{{ row.name[:1] }}</span>
+    <span class="app-text">
+      <span class="app-name">{{ row.name }}</span>
+      {% if row.state %}<span class="app-state app-state-{{ row.state|lower|replace(' ', '-') }}">{{ row.state }}</span>{% endif %}
+    </span>
     {% if row.url %}<a class="button button-secondary" id="app-open-{{ row.key }}" href="{{ row.url }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ row.name }} in a new tab">Open</a>{% endif %}
   </li>
   {% endfor %}

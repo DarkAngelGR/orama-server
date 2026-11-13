@@ -10,30 +10,33 @@
   </div>
 {% elif detail %}
   <div class="media-header">
-    <img class="poster-large" src="{{ url_for('posters.poster', kind=kind, source_id=source_id) }}" alt="" width="120" height="180">
-    <div>
+    <img class="poster-large" src="{{ url_for('posters.poster', kind=kind, source_id=source_id) }}" alt="" width="200" height="300">
+    <div class="media-intro">
       <h1>{{ detail.result.title }}{% if detail.result.year %} ({{ detail.result.year }}){% endif %}</h1>
-      <p class="lead">
-        {% if kind == 'movie' %}Movie{% else %}TV show{% endif %}
-        {% if detail.result.in_library %} · <span class="app-state" data-state="Running">In library</span>{% endif %}
+      <p class="media-tags">
+        <span class="tag">{% if kind == 'movie' %}Movie{% else %}TV show{% endif %}</span>
+        {% if detail.result.in_library %}<span class="app-state" data-state="Running">In library</span>{% endif %}
       </p>
+      {% if kind == 'movie' %}
+        {% if detail.result.in_library %}
+        <p class="note">This movie is already in your library.</p>
+        {% else %}
+        <form method="post" action="{{ url_for('requests.create_request') }}" class="actions">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="kind" value="movie">
+          <input type="hidden" name="source_id" value="{{ source_id }}">
+          <input type="hidden" name="title" value="{{ detail.result.title }}">
+          {% if detail.result.year %}<input type="hidden" name="year" value="{{ detail.result.year }}">{% endif %}
+          <button class="button" type="submit">Request movie</button>
+        </form>
+        {% endif %}
+      {% else %}
+        <p class="note">Ask for the whole show, one season, or a single episode below.</p>
+      {% endif %}
     </div>
   </div>
 
-  {% if kind == 'movie' %}
-    {% if detail.result.in_library %}
-    <p class="note">This movie is already in your library.</p>
-    {% else %}
-    <form method="post" action="{{ url_for('requests.create_request') }}" class="actions">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="kind" value="movie">
-      <input type="hidden" name="source_id" value="{{ source_id }}">
-      <input type="hidden" name="title" value="{{ detail.result.title }}">
-      {% if detail.result.year %}<input type="hidden" name="year" value="{{ detail.result.year }}">{% endif %}
-      <button class="button" type="submit">Request movie</button>
-    </form>
-    {% endif %}
-  {% else %}
+  {% if kind != 'movie' %}
     <section class="settings-section">
       <h2>Whole show</h2>
       <p class="note">Request every season and automatically download future episodes as they air.</p>
@@ -55,7 +58,7 @@
         <li class="app-row">
           <span class="app-name">
             {% if season.season_number == 0 %}Specials (Season 0){% else %}Season {{ season.season_number }}{% endif %}
-            {% if season.episode_count %} · {{ season.episode_count }} episodes{% endif %}
+            {% if season.episode_count %}<span class="app-detail">{{ season.episode_count }} episodes</span>{% endif %}
           </span>
           <form method="post" action="{{ url_for('requests.create_request') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

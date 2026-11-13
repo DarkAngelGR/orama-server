@@ -2,8 +2,23 @@
 {% from "_macros.html" import notice, button, field, secret_field, choice %}
 {% block title %}Settings · Orama{% endblock %}
 {% block content %}
-<div class="settings">
+<div class="settings-page">
   <h1>Settings</h1>
+  {% if setup and not draft %}
+  <nav class="settings-nav" aria-label="Settings sections">
+    <ul>
+      {% for s in sections %}<li><a href="#{{ s.key }}">{{ s.title }}</a></li>{% endfor %}
+      <li><a href="#requests-policy">Requests and storage</a></li>
+      <li><a href="#indexers">Indexers</a></li>
+      <li><a href="#addresses">Addresses</a></li>
+      {% if graphics_found %}<li><a href="#graphics">Graphics</a></li>{% endif %}
+      <li><a href="#update-orama">Update Orama</a></li>
+      <li><a href="#change-setup">Change setup</a></li>
+      <li><a href="#password">Orama password</a></li>
+    </ul>
+  </nav>
+  {% endif %}
+<div class="settings">
   {% if message %}{{ notice('problem' if problem else 'ok', message) }}{% endif %}
   {% if show_job %}{% include "settings/_job_panel.html" %}{% endif %}
 
@@ -115,5 +130,6 @@
       <div class="wizard-actions">{{ button('Change password') }}</div>
     </form>
   </section>
+</div>
 </div>
 {% endblock %}

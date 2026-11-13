@@ -24,6 +24,11 @@ Read `AGENTS.md` first.
   which fixes the grey Search buttons. Only `orama.css`, `base.html` (CSS v8) and `home.html`
   changed; every label is the same. All browser tests pass in light and dark with axe on.
   Mock-ups: the owner's Claude design canvas "Orama — golden ratio redesigns".
+  Second pass (CSS v9): wizard progress bar and numbered step list; Settings section menu
+  (side column on wide screens, a scrolling row on phones); search results as a poster grid;
+  title page with a poster hero; request page with a four-stage progress track; Apps as
+  tiles; status pills; empty states. Also fixed: the glows never showed in v8 (`:root`
+  background outranked `html`).
 - **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
   still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2

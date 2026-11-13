@@ -41,12 +41,15 @@
           {% for r in recent_requests %}
           <li class="app-row">
             <a class="app-name" href="{{ url_for('requests.detail', request_id=r.id) }}">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
-            <span class="app-state" data-state="{{ 'Running' if r.stage == 'ready' else ('Starting' if r.stage in ('searching', 'downloading', 'importing') else 'Stopped') }}">{{ r.stage_label }}</span>
+            <span class="app-state" data-state="{{ 'Running' if r.stage == 'ready' else ('Starting' if r.stage in ('requested', 'searching', 'downloading', 'importing') else 'Stopped') }}">{{ r.stage_label }}</span>
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="note">No requests yet. Search above to add your first movie or TV show.</p>
+        <div class="empty-state">
+          <p class="empty-title">No requests yet.</p>
+          <p class="note">Search above to add your first movie or TV show. It shows up here while it downloads.</p>
+        </div>
         {% endif %}
       </section>
     </div>
