@@ -286,3 +286,41 @@ def retry_request(
     requests.update(record.id, record.revision, update)
     return requests.get(request_id)
 
+
+
+def restore_strict_profile(record: RequestRecord, client: MediaClient, requests: RequestStore) -> bool:
+    """Put the strict 'Orama' profile back on a finished fallback request's movie or show.
+
+    Fallback is per request: once the request is Ready, the title waits for playable releases
+    again (a followed show would otherwise take every later episode without the wait). Left
+    alone while another unfinished request for the same title still needs the fallback, when
+    the item already has the strict profile, and when the owner chose another profile by hand.
+    True if the profile was changed.
+    """
+    if not record.fallback_applied or record.stage != "ready" or record.remote_id is None:
+        return False
+    is_movie = record.spec.kind == "movie"
+    if any(
+        r.id != record.id and r.fallback_applied and r.stage != "ready"
+        and (r.spec.kind == "movie") == is_movie and r.spec.source_id == record.spec.source_id
+        for r in requests.list_active()
+    ):
+        return False
+    app_name = "radarr" if is_movie else "sonarr"
+    resource = "movie" if is_movie else "series"
+    strict_id = fallback_id = None
+    profiles = client._request(app_name, "qualityprofile")
+    for p in profiles if isinstance(profiles, list) else []:
+        if isinstance(p, dict) and type(p.get("id")) is int:
+            if p.get("name") == "Orama":
+                strict_id = p["id"]
+            elif p.get("name") == FALLBACK_PROFILE_NAME:
+                fallback_id = p["id"]
+    if strict_id is None or fallback_id is None:
+        return False
+    item = client._request(app_name, f"{resource}/{record.remote_id}")
+    if not isinstance(item, dict) or item.get("qualityProfileId") != fallback_id:
+        return False
+    client._request(app_name, f"{resource}/{record.remote_id}", method="PUT",
+                    json_body={**item, "qualityProfileId": strict_id})
+    return True

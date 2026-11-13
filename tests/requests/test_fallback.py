@@ -440,3 +440,102 @@ def test_fallback_refuses_when_strict_orama_profile_missing(tmp_path):
         apply_fallback(rec, client, store, setup, now=created_at + 25 * 3600)
     assert post_calls == []
     assert put_calls == []
+
+
+# ---------------------------------------------------------------- back to the strict profile
+
+def _restore_env(tmp_path, kind="series", item_profile=7, others=()):
+    """A store with one finished fallback request, a client, and Sonarr/Radarr routes."""
+    store = RequestStore(tmp_path / "requests.db")
+    spec = RequestSpec(kind=kind, source_id=500, season=1 if kind == "season" else None)
+    rec, _ = store.create(spec, 1000.0)
+    from orama.requests.models import RequestUpdate
+    store.update(rec.id, rec.revision, RequestUpdate(stage="ready", remote_id=42,
+                                                     fallback_applied=True))
+    for other_spec, other_update in others:
+        o, _ = store.create(other_spec, 1000.0)
+        store.update(o.id, o.revision, other_update)
+    app = "radarr" if kind == "movie" else "sonarr"
+    resource = "movie" if kind == "movie" else "series"
+    http = FakeHttp()
+    item = {"id": 42, "title": "Show", "qualityProfileId": item_profile}
+    http.route("GET", "/api/v3/qualityprofile", lambda c: Response(200, {}, json.dumps([
+        {"id": 1, "name": "Orama"}, {"id": 7, "name": FALLBACK_PROFILE_NAME}]).encode()))
+    http.route("GET", f"/api/v3/{resource}/42", lambda c: Response(200, {}, json.dumps(item).encode()))
+    http.route("PUT", f"/api/v3/{resource}/42", lambda c: Response(202, {}, json.dumps(c.json).encode()))
+    client = MediaClient(setup=SimpleNamespace(ports={app: 1}), store=_fake_store(), http=http)
+    return store, store.get(rec.id), client, http, resource
+
+
+def _puts(http, resource):
+    return [c for c in http.calls if c.method == "PUT" and c.path == f"/api/v3/{resource}/42"]
+
+
+@pytest.mark.parametrize("kind", ["movie", "series", "season"])
+def test_a_finished_fallback_request_puts_the_strict_profile_back(tmp_path, kind):
+    """Fallback is per request: once it is Ready, the title waits for playable releases again
+    (for a followed show, every later episode would otherwise skip the wait)."""
+    from orama.requests.fallback import restore_strict_profile
+
+    store, rec, client, http, resource = _restore_env(tmp_path, kind)
+    assert restore_strict_profile(rec, client, store) is True
+    (put,) = _puts(http, resource)
+    assert put.json["qualityProfileId"] == 1 and put.json["title"] == "Show"
+
+
+def test_strict_profile_is_not_put_back_while_another_request_still_needs_fallback(tmp_path):
+    from orama.requests.fallback import restore_strict_profile
+    from orama.requests.models import RequestUpdate
+
+    still_waiting = (RequestSpec(kind="season", source_id=500, season=2),
+                     RequestUpdate(stage="downloading", remote_id=42, fallback_applied=True))
+    store, rec, client, http, resource = _restore_env(tmp_path, "season", others=[still_waiting])
+    assert restore_strict_profile(rec, client, store) is False
+    assert _puts(http, resource) == []
+
+
+@pytest.mark.parametrize("profile", [1, 99])
+def test_strict_or_owner_profile_is_left_alone(tmp_path, profile):
+    """Already strict: nothing to do. A profile the owner chose by hand: never changed."""
+    from orama.requests.fallback import restore_strict_profile
+
+    store, rec, client, http, resource = _restore_env(tmp_path, "movie", item_profile=profile)
+    assert restore_strict_profile(rec, client, store) is False
+    assert _puts(http, resource) == []
+
+
+def test_worker_puts_the_strict_profile_back_when_a_fallback_request_turns_ready(tmp_path):
+    from requests.test_media_refresh import _Env
+
+    from orama.requests.models import RequestUpdate
+
+    env = _Env(tmp_path)
+    env.secrets.set("apikey:radarr", "radarr-key-for-test")
+    rec = env.downloading_request()
+    rec = env.store.get(rec.id)
+    env.store.update(rec.id, rec.revision, RequestUpdate(fallback_applied=True))
+    movie = {"id": 7, "title": "Inception", "qualityProfileId": 7}
+    env.http.route("GET", "/api/v3/qualityprofile", lambda c: Response(200, {}, json.dumps([
+        {"id": 1, "name": "Orama"}, {"id": 7, "name": FALLBACK_PROFILE_NAME}]).encode()))
+    env.http.route("GET", "/api/v3/movie/7", lambda c: Response(200, {}, json.dumps(movie).encode()))
+    env.http.route("PUT", "/api/v3/movie/7", lambda c: Response(202, {}, json.dumps(c.json).encode()))
+
+    assert env.worker.tick(env.now) == 1
+    assert env.store.get(rec.id).stage == "ready"
+    (put,) = [c for c in env.http.calls if c.method == "PUT" and c.path == "/api/v3/movie/7"]
+    assert put.json["qualityProfileId"] == 1
+
+
+def test_worker_still_marks_ready_when_putting_the_profile_back_fails(tmp_path):
+    from requests.test_media_refresh import _Env
+
+    from orama.requests.models import RequestUpdate
+
+    env = _Env(tmp_path)
+    rec = env.downloading_request()
+    rec = env.store.get(rec.id)
+    env.store.update(rec.id, rec.revision, RequestUpdate(fallback_applied=True))
+    env.http.route("GET", "/api/v3/qualityprofile", lambda c: Response(500, {}, b""))
+    assert env.worker.tick(env.now) == 1
+    got = env.store.get(rec.id)
+    assert got.stage == "ready" and got.claim_owner is None

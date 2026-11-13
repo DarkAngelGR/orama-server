@@ -11,7 +11,7 @@ from typing import Any
 from orama import state
 from orama.agent_client import AgentError
 from orama.requests.client import MediaClient, RequestError, _sanitize_title
-from orama.requests.fallback import apply_fallback, fallback_due
+from orama.requests.fallback import apply_fallback, fallback_due, restore_strict_profile
 from orama.requests.models import RequestUpdate
 from orama.requests.playback import assess_playback
 from orama.requests.reconcile import reconcile_with_evidence
@@ -224,6 +224,20 @@ class RequestWorker:
         finally:
             # After the lease is released, and whatever happened to the request.
             self._refresh_media_server(now)
+
+    def _restore_strict_profile(self, request_id: str, client: Any) -> None:
+        """Fallback is per request: a finished one gives its title the strict profile back.
+
+        Never blocks Ready. A failure is logged by type only and tried again at the next
+        Ready re-check (the step is idempotent).
+        """
+        record = self.store.get(request_id)
+        if record is None:
+            return
+        try:
+            restore_strict_profile(record, client, self.store)
+        except Exception as exc:  # noqa: BLE001 - never let this undo Ready
+            _LOG.warning("putting the strict quality profile back failed: %s", type(exc).__name__)
 
     def _refresh_media_server(self, now: float) -> None:
         """Scan the media server if something changed, at most once a minute.
@@ -468,6 +482,8 @@ class RequestWorker:
             self.store.update(record.id, record.revision, update, now=now)
             if became_ready:
                 self.store.mark_media_changed(now)
+            if update.stage == "ready" and record.fallback_applied:
+                self._restore_strict_profile(record.id, client)
             next_check = update.next_check_at if update.next_check_at is not None else now + 30.0
             self.store.release(record.id, self.worker_id, next_check)
             return 1
