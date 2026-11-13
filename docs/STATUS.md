@@ -35,6 +35,11 @@ Read `AGENTS.md` first.
   Bazarr and SABnzbd keep a letter). The title, request and Home pages show the title's poster,
   blurred and veiled, behind the glass (`backdrop` macro; Home uses the newest request), and
   recent requests carry a small poster. `RequestView` gained `poster_kind` and `source_id`.
+- **Next UI task (owner agreed, do with the code review):** fetch each app's own logo from the
+  app (internal Docker network, fixed per-app path, PNG/ICO only, size cap, cached) and serve it
+  from an Orama route such as `/apps/icon/<app>`, the same way posters are served. Keep the
+  bundled icons and letters as the fallback. Not from Docker Hub or GitHub: no internet fetch.
+  Check each app's real logo path against the running images before relying on it.
 - **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
   still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
