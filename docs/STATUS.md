@@ -24,11 +24,17 @@ Read `AGENTS.md` first.
   5 (gate and report) are open. Clone the repository again if your copy is older than
   2026-11-11 (the history was rewritten).
 - **Claude: request-feature review and fixes.** The request-store review found ten problems;
-  rounds 1 and 2 fixed them on `test` (`233cbcf`..`5251760`, then `b7a66bd`..`5c2c98c`), all CI
-  green. Round 3 is running: an independent check of round 2, and moving the Jellyfin library
-  refresh (added in `77210d1`) out of the webhook request into the background worker,
-  rate-limited. Still to review after that: worker and status flow, submission and fallback,
-  the new web routes, the Agent changes, the app client, playback and subtitle notes.
+  three fix rounds fixed them on `test` (`233cbcf`..`5251760`, `b7a66bd`..`5c2c98c`) and an
+  independent check found round 2 clean. The Jellyfin library refresh that `77210d1` put inside
+  the webhook request now runs in the background worker, at most once a minute (`6dcb0a1`);
+  its check is running. Still to review: worker and status flow, submission and fallback, the
+  new web routes, the Agent changes, the app client, playback and subtitle notes.
+- **Flaky CI: the real-app test sometimes cannot download the app images.** Twice (runs
+  43107652518 and 43333330345) `apply` failed with "Downloading the apps failed" and every
+  integration test then errored on the missing Plex container; a re-run passed. Most likely
+  Docker Hub's anonymous limit of 100 pulls an hour, now hit more often because the end-to-end
+  job pulls the same images at the same time. Open: pull Docker Hub images through a mirror or a
+  logged-in account in CI, and record the agent log when it happens.
 - **The repository is public** (seen 2026-11-12); the plan assumed private until release. The
   owner should confirm this is intended.
 - Still the owner's: the Claude Security scans, the NAS checklist, making the GHCR packages public.
