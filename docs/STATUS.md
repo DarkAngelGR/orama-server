@@ -40,6 +40,16 @@ Read `AGENTS.md` first.
   from an Orama route such as `/apps/icon/<app>`, the same way posters are served. Keep the
   bundled icons and letters as the fallback. Not from Docker Hub or GitHub: no internet fetch.
   Check each app's real logo path against the running images before relying on it.
+- **After Release 1 (owner decision, 2026-11-13): import indexers and Usenet servers from the
+  owner's current setup.** On the indexers step, "Import from my current setup": (1) connect
+  to an existing Prowlarr and SABnzbd by address and API key and list what they have; (2) to
+  fill in secrets those apps hide over their APIs, accept their backup files (Prowlarr
+  System -> Backup zip, SABnzbd config backup) and read only indexer and server details. The
+  owner ticks what to add; each is tested as today; secrets go to the SecretStore and are
+  never echoed. First check against the real apps which fields their APIs mask. Needs a
+  plan, tests and a Claude Security scan (uploaded files and outbound calls are new input).
+  Until then the owner adds them by hand in step 5. Installing next to an existing setup is
+  supported (own container names, free ports, own settings folder) but untested on a NAS.
 - **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
   still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
