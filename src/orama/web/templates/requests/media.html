@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "_macros.html" import backdrop %}
+{% block backdrop %}{% if detail %}{{ backdrop(kind, source_id) }}{% endif %}{% endblock %}
 {% block title %}{% if detail %}{{ detail.result.title }}{% else %}Media{% endif %} · Orama{% endblock %}
 {% block content %}
 <section class="apps">

@@ -467,3 +467,31 @@ a.app-name:hover, a.app-name:focus-visible { text-decoration: underline; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 .apps > section[aria-live] { margin-top: var(--s4); }
+
+/* ------------------------------------------------------------------ posters and icons */
+
+/* A title's poster, blurred into light behind the glass. The veil keeps text readable
+   whatever the poster's colours. */
+:root { --veil: rgba(16, 20, 38, .76); }
+@media (prefers-color-scheme: light) { :root { --veil: rgba(232, 235, 245, .8); } }
+.backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.backdrop img { display: block; width: 100%; height: 100%; object-fit: cover; filter: blur(34px) saturate(1.7); transform: scale(1.12); }
+.backdrop::after { content: ""; position: absolute; inset: 0; background: var(--veil); }
+@media (prefers-reduced-transparency: reduce) { .backdrop { display: none; } }
+@media (forced-colors: active) { .backdrop { display: none; } }
+
+/* App icons: the app's own mark, in the ink colour, on the glass badge. */
+.app-mark-icon { color: var(--ink); }
+.app-icon { width: 1.3125rem; height: 1.3125rem; display: block; }
+
+/* Recent requests carry a small poster. */
+.home-main .app-row { flex-wrap: nowrap; padding-block: var(--s1); }
+.home-main .app-row .app-name { flex: 1 1 auto; min-width: 0; }
+.home-main .poster-thumb { width: 2.125rem; height: 3.1875rem; border-radius: .375rem; }
+
+/* The request page opens with its poster, smaller than the title page's. */
+.media-header-compact { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); padding: var(--s3); }
+.media-header-compact .media-intro { gap: var(--s1); }
+@media (max-width: 760px) {
+  .media-header-compact { grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr); }
+}

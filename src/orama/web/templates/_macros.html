@@ -105,3 +105,8 @@
 {% macro button(label, kind='primary') -%}
 <button type="submit" class="button button-{{ kind if kind in ('primary', 'secondary', 'quiet', 'danger') else 'primary' }}">{{ label }}</button>
 {%- endmacro %}
+
+{# A poster, blurred and darkened, behind the page's glass. Decorative: hidden from screen readers. #}
+{% macro backdrop(kind, source_id) -%}
+<div class="backdrop" aria-hidden="true"><img src="{{ url_for('posters.poster', kind=kind, source_id=source_id) }}" alt="" decoding="async"></div>
+{%- endmacro %}

@@ -31,6 +31,10 @@ Read `AGENTS.md` first.
   background outranked `html`).
   CSS v10: the glass is now visible: panels are a light sheen over a little dark, and the
   glows are stronger and repeat down the page so they pass behind the panels.
+  CSS v11: app icons on the Apps tiles (Simple Icons, CC0, in `templates/icons/`; Prowlarr,
+  Bazarr and SABnzbd keep a letter). The title, request and Home pages show the title's poster,
+  blurred and veiled, behind the glass (`backdrop` macro; Home uses the newest request), and
+  recent requests carry a small poster. `RequestView` gained `poster_kind` and `source_id`.
 - **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
   still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
 - **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2

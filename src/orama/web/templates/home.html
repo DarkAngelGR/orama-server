@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "_macros.html" import backdrop %}
+{% block backdrop %}{% if recent_requests %}{{ backdrop(recent_requests[0].poster_kind, recent_requests[0].source_id) }}{% endif %}{% endblock %}
 {% block title %}Orama{% endblock %}
 {% block content %}
 <section class="home">
@@ -40,6 +42,7 @@
         <ul class="app-list">
           {% for r in recent_requests %}
           <li class="app-row">
+            <img class="poster-thumb" src="{{ url_for('posters.poster', kind=r.poster_kind, source_id=r.source_id) }}" alt="" width="56" height="84" loading="lazy">
             <a class="app-name" href="{{ url_for('requests.detail', request_id=r.id) }}">{{ r.title }}{% if r.year %} ({{ r.year }}){% endif %}</a>
             <span class="app-state" data-state="{{ 'Running' if r.stage == 'ready' else ('Starting' if r.stage in ('requested', 'searching', 'downloading', 'importing') else 'Stopped') }}">{{ r.stage_label }}</span>
           </li>

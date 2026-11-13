@@ -144,6 +144,8 @@ def create_app(
     )
     app.extensions["request_worker"] = request_worker
     app.jinja_env.globals["csrf_token"] = security.csrf_token
+    # Apps with an icon in templates/icons/ (the rest keep a letter).
+    app.jinja_env.globals["app_icons"] = frozenset({"plex", "jellyfin", "sonarr", "radarr", "qbittorrent"})
 
     configure_assets(app)
     app.before_request(_check_request)

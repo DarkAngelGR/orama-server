@@ -50,6 +50,9 @@ class RequestView:
     season_summary: str | None
     episodes: list[EpisodeTarget]
     can_retry: bool
+    # The poster the page shows behind its glass: series poster for seasons and episodes too.
+    poster_kind: str = "movie"
+    source_id: int = 0
 
 
 def _clean_title(raw: str | None, fallback: str) -> str:
@@ -114,6 +117,8 @@ def to_request_view(
         season_summary=season_summary,
         episodes=eps,
         can_retry=rec.stage != "ready" or bool(rec.waiting_reason),
+        poster_kind="movie" if rec.spec.kind == "movie" else "series",
+        source_id=rec.spec.source_id,
     )
 
 

@@ -1,9 +1,16 @@
 {% extends "base.html" %}
+{% from "_macros.html" import backdrop %}
+{% block backdrop %}{{ backdrop(req.poster_kind, req.source_id) }}{% endblock %}
 {% block title %}{{ req.title }} · Orama{% endblock %}
 {% block content %}
 <section class="apps">
-  <h1>{{ req.title }}{% if req.year %} ({{ req.year }}){% endif %}</h1>
-  <p class="lead">{{ req.kind_label }} request</p>
+  <div class="media-header media-header-compact">
+    <img class="poster-large" src="{{ url_for('posters.poster', kind=req.poster_kind, source_id=req.source_id) }}" alt="" width="200" height="300">
+    <div class="media-intro">
+      <h1>{{ req.title }}{% if req.year %} ({{ req.year }}){% endif %}</h1>
+      <p class="lead">{{ req.kind_label }} request</p>
+    </div>
+  </div>
 
   <section aria-live="polite"
            {% if live %}
