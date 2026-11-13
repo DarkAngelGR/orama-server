@@ -17,6 +17,22 @@ Read `AGENTS.md` first.
 
 ## Current hand-off (Claude, 2026-11-13) — read this first
 
+- **Code review, 2026-11-13 (Claude): Agent and outside-input routes — no blocking findings.**
+  Agent diff `206a601..HEAD` (data-space, two-step self-update with the hardened
+  `orama-updater` helper, sequential pull retries on registry rate limits, link refusal in
+  `_open_child_dir`): argv fixed, image names validated, helper has no network, no
+  capabilities, read-only root and config; tests pin all of it; 717 Agent tests pass.
+  Webhooks (per-app token, constant-time compare, 64 KiB cap, event allow-list), poster
+  proxy (pinned hosts, no redirects, MIME and size caps, placeholder on every failure),
+  request routes (auth, CSRF, id ranges, 200-char search cap, cleaned titles) and the app
+  client (key only in `X-Api-Key`, never in URLs, messages or logs): fine.
+  Low, not fixed: (1) Retry can lose its stage/waiting-reason reset if the worker claims the
+  record between read and write (`update()` returns False and is ignored; the recheck is
+  still kept). (2) "Update Orama" downloads inside the web request (up to ~25 min of
+  spinner); a background job would be kinder. (3) `MediaClient._request` decides its
+  service-host fallback by the class name `Http`; replace with an explicit flag.
+  Still to review: worker/status flow, submission and fallback, playback and subtitle notes,
+  claims vs evidence.
 - **New look (owner's choice, design D).** The web app now uses frosted glass panels over a dark
   room lit by soft glows, with a light variant; spacing and type follow the golden ratio. People
   who ask for less transparency, and browsers without blur, get solid panels. Home has a main
