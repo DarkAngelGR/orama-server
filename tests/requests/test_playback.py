@@ -210,3 +210,36 @@ def test_typed_followup_reasons_refuse_paths_or_commands(tmp_path):
         store.record_followup(rec.id, "conversion", "/data/media/movies/bad.mkv", 1005.0)
     with pytest.raises(ValueError):
         store.record_followup(rec.id, "exec", "audio_dts", 1005.0)
+
+
+def _video(codec: str) -> dict:
+    return {"videoCodec": codec, "audioCodec": "AAC", "audioChannels": 2,
+            "videoDynamicRange": "", "videoDynamicRangeType": ""}
+
+
+@pytest.mark.parametrize(("device", "codec"), [
+    ("nvidia_shield", "AV1"),  # no AV1 hardware decoder
+    ("apple_tv", "AV1"),
+    ("apple_tv", "VP9"),
+    ("safest", "AV1"),  # "plays on almost anything" means H.264/HEVC, not the newest codecs
+    ("safest", "VP9"),
+])
+def test_a_known_codec_the_device_cannot_play_is_may_transcode(device, codec):
+    res = assess_playback(_video(codec), device)
+    assert res.status == "may_transcode"
+    assert res.needs_conversion is True
+    assert res.reason_codes == (f"video_codec_{codec.lower()}",)
+    assert codec in res.note and "unrecognized" not in res.note
+
+
+@pytest.mark.parametrize(("device", "codec"), [
+    ("samsung_s95f", "AV1"), ("lg", "AV1"), ("safest", "x264"), ("safest", "x265"),
+    ("nvidia_shield", "VP9"), ("apple_tv", "HEVC"),
+])
+def test_codecs_the_device_plays_stay_direct_play(device, codec):
+    assert assess_playback(_video(codec), device).status == "direct_play"
+
+
+def test_an_unknown_codec_is_still_not_checked():
+    res = assess_playback(_video("RealVideo"), "safest")
+    assert res.status == "unknown" and "unrecognized video format" in res.note

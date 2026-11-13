@@ -169,7 +169,7 @@ def assess_playback(
         )
 
     video_key = _KNOWN_VIDEO_CODECS.get(raw_video.lower())
-    if video_key is None or video_key not in supported_video:
+    if video_key is None:
         return PlaybackAssessment(
             status="unknown",
             verified_device=verified,
@@ -208,6 +208,10 @@ def assess_playback(
 
     reasons: list[str] = []
     codes: list[str] = []
+
+    if video_key not in supported_video:  # a known codec this device cannot decode
+        codes.append(f"video_codec_{video_key}")
+        reasons.append(f"{raw_video} video")
 
     if dyn_sym is not None and dyn_sym in unplayable and dyn_label is not None:
         codes.append(f"video_{dyn_sym}")

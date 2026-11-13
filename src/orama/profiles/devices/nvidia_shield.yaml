@@ -4,7 +4,7 @@ unplayable: []
 preferred: [dv, hdr10, hdr10_plus, truehd_atmos, truehd, dts_hd_ma, dts_x]
 capabilities:
   source: NVIDIA Shield TV Android TV best-effort capability profile (Spec §6.1)
-  video_codecs: [h264, hevc, av1, mpeg4, vp9]
+  video_codecs: [h264, hevc, mpeg4, vp9]
   audio_codecs: [aac, ac3, eac3, truehd, truehd_atmos, dts, dts_hd_ma, dts_x, dts_hd_hra, dts_es, flac, pcm_multichannel, pcm_stereo, mp3, opus]
   hdr_formats: [dv, hdr10, hdr10_plus, hlg]
   text_subtitles: [srt, subrip, vtt, webvtt, ass, ssa]
