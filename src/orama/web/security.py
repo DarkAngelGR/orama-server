@@ -7,7 +7,11 @@ All of these run before any page code (``before_request``) or on every response
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import re
+import socket
+import struct
+from pathlib import Path
 
 from flask import g, request
 
@@ -143,3 +147,60 @@ def add_security_headers(response):
         response.headers["Cache-Control"] = "no-store"
         response.headers.pop("Expires", None)
     return response
+
+
+# ---------------------------------------------------------------- Docker's own networks
+
+# Refusal shown to a request that reaches Orama through its own Docker networks.
+SERVER_ADDRESS_REJECTED = (
+    "Orama cannot be used from the server itself or through Docker's network: the apps on "
+    "this server could then reuse your sign-in. Open Orama from another device, such as a "
+    "phone or laptop, at the server's network address (the link the installer printed)."
+)
+# The owner may allow it anyway by creating this file in Orama's state folder. Only root or
+# the Orama user can; app containers cannot reach that folder.
+SERVER_SIGNIN_FILE = "server-signin.allowed"
+_ROUTE_FILE = Path("/proc/net/route")
+_DOCKER_MARKER = Path("/.dockerenv")
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def container_networks(route_file: Path = _ROUTE_FILE,
+                       marker: Path = _DOCKER_MARKER) -> tuple[Network, ...]:
+    """The IPv4 networks this container is directly attached to (orama-net and the like).
+
+    Empty outside a container: there the host's own networks are the owner's home network.
+    """
+    try:
+        if not marker.exists():
+            return ()
+        lines = route_file.read_text().splitlines()[1:]
+    except OSError:
+        return ()
+    nets: list[Network] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 8:
+            continue
+        try:
+            dest = socket.inet_ntoa(struct.pack("<I", int(fields[1], 16)))
+            mask = socket.inet_ntoa(struct.pack("<I", int(fields[7], 16)))
+            if int(fields[2], 16) != 0 or dest == "0.0.0.0":
+                continue  # a route through a gateway, or the default route
+            net = ipaddress.ip_network(f"{dest}/{mask}", strict=False)
+        except (ValueError, struct.error, OSError):
+            continue
+        if net not in nets:
+            nets.append(net)
+    return tuple(nets)
+
+
+def is_internal(address: str, nets: tuple[Network, ...] | list[Network]) -> bool:
+    """True when ``address`` lies in one of ``nets`` (IPv4-mapped IPv6 included)."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in nets)

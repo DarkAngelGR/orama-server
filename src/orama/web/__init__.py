@@ -100,6 +100,8 @@ class WebState:
     setup: SetupReader
     jobs: JobRunner
     apply_gate: threading.Lock = field(default_factory=threading.Lock)
+    # Orama's own Docker networks: no page is served to a client from these (see security).
+    internal_networks: tuple = ()
     _requests: RequestStore | None = field(default=None, init=False, repr=False)
 
     @property
@@ -121,6 +123,7 @@ def create_app(
     http: Http | None = None,
     clock: Callable[[], float] = time.time,
     request_worker: Any = None,
+    internal_networks: Any = None,
 ) -> Flask:
     state_dir = Path(state_dir)
     app = Flask(__name__)
@@ -142,6 +145,8 @@ def create_app(
         store=store,
         setup=SetupReader(state_dir),
         jobs=JobRunner(state_dir, redact=store_redactor(store), clock=clock),
+        internal_networks=tuple(security.container_networks() if internal_networks is None
+                                else internal_networks),
     )
     app.extensions["request_worker"] = request_worker
     app.jinja_env.globals["csrf_token"] = security.csrf_token
@@ -203,12 +208,19 @@ def _check_request():
             return rejected(security.CSRF_REJECTED, 403)
         g.webhook_app = hooks.WEBHOOK_PATHS[request.path]
         return None
-    # 4. The session, from the cookie.
+    # 4. Not through Orama's own Docker networks: a request from the server itself arrives
+    #    from the same gateway address an app container gets, so a session there could be
+    #    replayed by a compromised app. The health check and static files still answer.
+    if (st.internal_networks and request.endpoint not in ("auth.healthz", "static")
+            and security.is_internal(request.remote_addr or "", st.internal_networks)
+            and not (st.state_dir / security.SERVER_SIGNIN_FILE).exists()):
+        return rejected(security.SERVER_ADDRESS_REJECTED, 403)
+    # 5. The session, from the cookie.
     session = st.sessions.get(request.cookies.get(auth.COOKIE), request.remote_addr or "")
     if session is not None:
         g.session = session
         g.principal = session.principal
-    # 5. CSRF on every state-changing request.
+    # 6. CSRF on every state-changing request.
     if request.method in security.UNSAFE_METHODS and not security.csrf_ok():
         return rejected(security.CSRF_REJECTED, 403)
     return None

@@ -53,6 +53,9 @@ Have these ready:
 
 ### 2. Open the setup link from your phone
 
+Use another device (your phone or a laptop), never a browser on the NAS itself: Orama
+refuses to be used from the server, because the apps on it could then reuse your sign-in.
+
 - **Do:** Type the whole link from step 1 into your phone's browser (or send it to yourself and
   tap it).
 - **You should see:** a page titled **Welcome to Orama** that asks you to create a password.

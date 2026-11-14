@@ -17,6 +17,19 @@ Read `AGENTS.md` first.
 
 ## Current hand-off (Claude, 2026-11-13) — read this first
 
+- **Claude Security scan, 2026-11-14 (changes `0997d22..093b272`, high).** Report in
+  `CLAUDE-SECURITY-20261114-161221/` (git-ignored). **Partial:** the 5-hour usage limit stopped
+  research for the Agent, installer/Docker/CI, core secrets/state/compose and most of wiring;
+  19/44 researchers returned. Those areas still need a scan (owner, `/claude-security` → Scan
+  changes, base `0997d22`, scope `src/orama_agent src/orama/agent_client.py docker install.sh
+  .github src/orama/secrets.py src/orama/state.py src/orama/compose.py src/orama/cli.py
+  src/orama/wiring`). Three verified findings, all fixed: F6 global sign-in lock and F7
+  pre-sign-in session flood (`be2a5c2`); F5 session replay through Docker's gateway address:
+  Orama now refuses every page (not `/healthz` or static files) to clients in its own
+  Docker networks (read from `/proc/net/route` inside a container), unless
+  `<config root>/orama/server-signin.allowed` exists. The e2e proof creates that file; the
+  owner uses Orama from another device. Verified against real Docker: host and an app
+  container both arrive from the bridge gateway.
 - **Code review, 2026-11-13 (Claude): Agent and outside-input routes — no blocking findings.**
   Agent diff `206a601..HEAD` (data-space, two-step self-update with the hardened
   `orama-updater` helper, sequential pull retries on registry rate limits, link refusal in

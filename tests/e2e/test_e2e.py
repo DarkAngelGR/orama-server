@@ -333,6 +333,11 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "install-1.log").write_text(target.scrub(install_1.stdout), encoding="utf-8")
     assert install_1.returncode == 0, f"install.sh failed:\n{target.scrub(install_1.stdout)}"
+    # The proof drives the web app from the server itself, which reaches Orama through
+    # Docker's proxy from the orama-net gateway. Orama refuses that address by default (an app
+    # container gets the same one); the owner-only allow file in its state folder lifts it.
+    allow = target.run(["touch", f"{target.config_root}/orama/server-signin.allowed"], timeout=30)
+    assert allow.returncode == 0, "could not allow server sign-in for the proof"
 
     match = READY_LINE_RE.search(install_1.stdout)
     assert match is not None, (
