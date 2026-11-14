@@ -38,10 +38,12 @@ IDLE_TIMEOUT = 7 * 24 * 60 * 60
 ABSOLUTE_TIMEOUT = 30 * 24 * 60 * 60
 # Pre-sign-in sessions anyone can create by opening the sign-in page: keep only so many.
 MAX_ANONYMOUS_SESSIONS = 1000
+# Pre-sign-in sessions one client address may hold; its oldest go first, so flooding the
+# sign-in page from one machine never pushes out another machine's half-filled form.
+ANONYMOUS_PER_ADDRESS = 20
 
 WINDOW = 15 * 60
 PER_ADDRESS_FAILURES = 5
-GLOBAL_FAILURES = 30
 RATE_MESSAGE = "Too many wrong tries. Wait 15 minutes, then try again."
 
 _MAX_FILE = 4096
@@ -209,6 +211,7 @@ class Sessions:
         self._lock = threading.Lock()
         self._signed_in: dict[str, Session] = {}
         self._anonymous: OrderedDict[str, Session] = OrderedDict()
+        self._anonymous_by_address: dict[str, deque[str]] = {}
 
     def new(self, principal: Principal | None, address: str) -> Session:
         now = self._clock()
@@ -216,9 +219,7 @@ class Sessions:
                           now, now, address)
         with self._lock:
             if principal is None:
-                self._anonymous[session.id] = session
-                while len(self._anonymous) > MAX_ANONYMOUS_SESSIONS:
-                    self._anonymous.popitem(last=False)
+                self._add_anonymous(session)
             else:
                 self._prune(now)
                 self._signed_in[session.id] = session
@@ -253,10 +254,36 @@ class Sessions:
         with self._lock:
             self._signed_in.clear()
             self._anonymous.clear()
+            self._anonymous_by_address.clear()
+
+    def _add_anonymous(self, session: Session) -> None:
+        """Keep a pre-sign-in session within both caps; the caller holds the lock.
+
+        Over its address's cap, that address's oldest goes. Over the overall cap, the
+        oldest session of the address holding the most goes, so a busy client evicts
+        its own sessions long before anyone else's.
+        """
+        self._anonymous[session.id] = session
+        mine = self._anonymous_by_address.setdefault(session.address, deque())
+        mine.append(session.id)
+        while len(mine) > ANONYMOUS_PER_ADDRESS:
+            self._anonymous.pop(mine.popleft(), None)
+        while len(self._anonymous) > MAX_ANONYMOUS_SESSIONS:
+            busiest = max(self._anonymous_by_address.values(), key=len)
+            self._remove(busiest[0])
 
     def _remove(self, session_id: str) -> None:
         self._signed_in.pop(session_id, None)
-        self._anonymous.pop(session_id, None)
+        session = self._anonymous.pop(session_id, None)
+        if session is not None:
+            ids = self._anonymous_by_address.get(session.address)
+            if ids is not None:
+                try:
+                    ids.remove(session_id)
+                except ValueError:
+                    pass
+                if not ids:
+                    del self._anonymous_by_address[session.address]
 
     @staticmethod
     def _expired(session: Session, now: float) -> bool:
@@ -271,8 +298,11 @@ class Sessions:
 
 
 class RateLimiter:
-    """5 failures from one address in 15 minutes lock that address for 15 minutes; 30
-    failures from all addresses in 15 minutes lock everyone until the window clears.
+    """5 failures from one address in 15 minutes lock that address for 15 minutes.
+
+    There is no lock across addresses: failures from other clients must never keep the
+    owner out of sign-in, first run or a password change. Many addresses gain little
+    against a password of 12 or more characters checked with Argon2.
 
     A check is ``try_begin`` (refused while locked) and then ``finish``. Checks still
     running count against both limits, so parallel attempts cannot slip past them.
@@ -283,9 +313,7 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._failures: dict[str, deque[float]] = {}
         self._locked_until: dict[str, float] = {}
-        self._all: deque[float] = deque()
         self._pending: dict[str, int] = {}
-        self._pending_all = 0
 
     def blocked(self, address: str) -> bool:
         now = self._clock()
@@ -301,7 +329,6 @@ class RateLimiter:
             if self._blocked(address):
                 return False
             self._pending[address] = self._pending.get(address, 0) + 1
-            self._pending_all += 1
             return True
 
     def finish(self, address: str, *, failed: bool) -> None:
@@ -317,7 +344,6 @@ class RateLimiter:
                 self._pending[address] = left
             else:
                 self._pending.pop(address, None)
-            self._pending_all = max(0, self._pending_all - 1)
             if failed:
                 self._record_failure(address, now)
 
@@ -329,7 +355,6 @@ class RateLimiter:
     def _record_failure(self, address: str, now: float) -> None:
         """Count a failure; the caller holds the lock."""
         self._expire(now)
-        self._all.append(now)
         times = self._failures.setdefault(address, deque())
         times.append(now)
         if len(times) >= PER_ADDRESS_FAILURES:
@@ -340,12 +365,9 @@ class RateLimiter:
         if address in self._locked_until:
             return True
         mine = len(self._failures.get(address, ())) + self._pending.get(address, 0)
-        return (mine >= PER_ADDRESS_FAILURES
-                or len(self._all) + self._pending_all >= GLOBAL_FAILURES)
+        return mine >= PER_ADDRESS_FAILURES
 
     def _expire(self, now: float) -> None:
-        while self._all and now - self._all[0] >= WINDOW:
-            self._all.popleft()
         for address in list(self._failures):
             times = self._failures[address]
             while times and now - times[0] >= WINDOW:

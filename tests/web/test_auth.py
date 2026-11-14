@@ -357,14 +357,13 @@ def test_other_address_still_allowed(client, password):
     assert signin(client, password, **addr(2)).status_code == 303
 
 
-def test_global_limit_locks_everyone(client, password, clock):
-    for n in range(6):
+def test_failures_from_other_addresses_never_lock_out_a_fresh_address(client, password, clock):
+    """No global lock: any client could otherwise keep the owner out of sign-in, first run
+    and password change. Each address still locks itself after 5 failures."""
+    for n in range(12):
         for _ in range(5):
             assert _fail(client, password, 10 + n).status_code == 401
-    response = signin(client, password, **addr(99))
-    assert response.status_code == 429
-    assert RATE_MESSAGE in response.get_data(as_text=True)
-    clock.advance(FIFTEEN_MINUTES)
+        assert signin(client, password, **addr(10 + n)).status_code == 429
     assert signin(client, password, **addr(99)).status_code == 303
 
 
@@ -451,6 +450,34 @@ def test_sessions_are_bounded(clock):
     for _ in range(auth.MAX_ANONYMOUS_SESSIONS + 10):
         sessions.new(None, "a")
     assert sessions.get(admin.id, "a") is not None
+
+
+def test_one_address_cannot_evict_another_addresses_pre_sign_in_session(clock):
+    """Flooding the sign-in page from one machine must not push out the owner's form."""
+    sessions = auth.Sessions(clock)
+    owner = sessions.new(None, "owner")
+    for _ in range(auth.MAX_ANONYMOUS_SESSIONS * 3):
+        sessions.new(None, "flood")
+    assert sessions.get(owner.id, "owner") is not None
+
+
+def test_each_address_keeps_only_its_newest_pre_sign_in_sessions(clock):
+    sessions = auth.Sessions(clock)
+    made = [sessions.new(None, "a") for _ in range(auth.ANONYMOUS_PER_ADDRESS + 3)]
+    assert all(sessions.get(s.id, "a") is None for s in made[:3])
+    assert all(sessions.get(s.id, "a") is not None for s in made[3:])
+
+
+def test_the_overall_cap_drops_from_the_busiest_address_first(clock):
+    sessions = auth.Sessions(clock)
+    owner = sessions.new(None, "owner")
+    # Many addresses, a few sessions each, until the overall cap is passed.
+    per = auth.ANONYMOUS_PER_ADDRESS
+    for n in range(auth.MAX_ANONYMOUS_SESSIONS // per + 5):
+        for _ in range(per):
+            sessions.new(None, f"x{n}")
+    assert sessions.get(owner.id, "owner") is not None
+    assert len(sessions._anonymous) <= auth.MAX_ANONYMOUS_SESSIONS
 
 
 def test_main_serves_with_waitress(monkeypatch, state_dir: Path):
@@ -663,17 +690,12 @@ class _HookLock:
         return False
 
 
-@pytest.mark.parametrize("scope", ["address", "global"])
-def test_finish_records_the_failure_with_no_gap(clock, scope):
+def test_finish_records_the_failure_with_no_gap(clock):
     limiter = auth.RateLimiter(clock)
     a = ip(203, 0, 113, 30)
-    if scope == "address":
-        for _ in range(4):
-            limiter.fail(a)
-    else:
-        for n in range(29):
-            limiter.fail(ip(198, 51, 100, n))  # 29 failures overall, none locked here
-    assert limiter.try_begin(a)  # the 5th (or 30th) check is now running
+    for _ in range(4):
+        limiter.fail(a)
+    assert limiter.try_begin(a)  # the 5th check is now running
     lock = _HookLock()
     limiter._lock = lock
     seen = []
