@@ -441,7 +441,7 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
             f"fake web seed did not serve {release_name}"
         )
 
-    # 4. Hardlink: downloaded file and imported media file share inode and link count >= 2
+    # 4. Hardlink: the files share a filesystem device and inode, with link count >= 2.
     stat_res = target.run(
         [
             "find",
@@ -453,7 +453,7 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
             "-exec",
             "stat",
             "-c",
-            "%i|%h|%u|%g|%n",
+            "%d|%i|%h|%u|%g|%n",
             "{}",
             "+",
         ],
@@ -464,10 +464,10 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
     for line in stat_res.stdout.splitlines():
         if not line.strip():
             continue
-        inode, links, uid, gid, fpath = line.split("|", 4)
+        device, inode, links, uid, gid, fpath = line.split("|", 5)
         mkv_entries.append(
             {
-                "inode": int(inode),
+                "identity": (int(device), int(inode)),
                 "links": int(links),
                 "uid": int(uid),
                 "gid": int(gid),
@@ -491,12 +491,12 @@ def test_end_to_end_install_wizard_download_subtitle_and_idempotency(
             (
                 e
                 for e in mkv_entries
-                if e["path"].startswith(media_root + rel_subdir) and e["inode"] == dl["inode"]
+                if e["path"].startswith(media_root + rel_subdir) and e["identity"] == dl["identity"]
             ),
             None,
         )
         assert imp is not None, (
-            f"no imported hardlink under {media_root + rel_subdir} matching inode {dl['inode']}: "
+            f"no imported hardlink under {media_root + rel_subdir} matching {dl['identity']}: "
             f"{mkv_entries}"
         )
         assert imp["links"] >= 2 and dl["links"] >= 2, (dl, imp)

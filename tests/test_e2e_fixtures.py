@@ -113,3 +113,28 @@ def test_debian_image_pin_matches_a_dated_generic_qcow2():
         url,
     )
     assert re.fullmatch(r"[0-9a-f]{128}", checksum)
+
+
+@pytest.mark.parametrize(
+    "occupied",
+    [
+        ("docker", "container", "ls", "-a", "--format", "{{.Names}}"),
+        ("docker", "network", "ls", "--format", "{{.Name}}"),
+        ("docker", "volume", "ls", "-q", "--filter", "label=com.docker.compose.project=orama-apps"),
+    ],
+)
+def test_ubuntu_proof_refuses_existing_orama_resources(occupied):
+    from subprocess import CompletedProcess
+
+    from e2e.conftest import _check_clean_ubuntu
+
+    class Host:
+        def run(self, command, **kwargs):
+            assert command[:3] in (
+                ["docker", "container", "ls"], ["docker", "network", "ls"],
+                ["docker", "volume", "ls"],
+            ), "preflight must not modify Docker resources"
+            return CompletedProcess(command, 0, "orama-existing\n" if tuple(command) == occupied else "")
+
+    with pytest.raises(pytest.fail.Exception, match="existing Orama"):
+        _check_clean_ubuntu(Host())

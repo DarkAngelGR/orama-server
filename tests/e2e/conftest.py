@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECTS = ("orama-apps", "orama-core")
 INDEXER_CONTAINER = "orama-e2e-indexer"
 UPDATER_CONTAINER = "orama-updater"
+LOCAL_ROOT = Path("/srv/orama-e2e")
 
 
 def _install_ids() -> tuple[int, int] | None:
@@ -70,6 +71,31 @@ def _check_sudo_if_non_root() -> None:
         pytest.fail("e2e proof: requires root or passwordless sudo")
 
 
+def _check_clean_ubuntu(target: LocalTarget) -> None:
+    """Refuse to start if the host has any resources the proof could take over."""
+    if LOCAL_ROOT.exists() or LOCAL_ROOT.is_symlink():
+        pytest.fail(f"e2e proof: existing Orama test directory at {LOCAL_ROOT}; use a clean host")
+    for kind, field in (("container", "Names"), ("network", "Name"), ("volume", "Name")):
+        command = ["docker", kind, "ls", "--format", "{{." + field + "}}"]
+        if kind == "container":
+            command.insert(3, "-a")
+        result = target.run(command, timeout=30)
+        if result.returncode != 0:
+            pytest.fail(f"e2e proof: could not check existing Docker {kind} resources")
+        if any(name.startswith(("orama-", "orama_")) for name in result.stdout.splitlines()):
+            pytest.fail(f"e2e proof: existing Orama Docker {kind} resources; use a clean host")
+        for project in PROJECTS:
+            query = ["docker", kind, "ls", "-q", "--filter",
+                     f"label=com.docker.compose.project={project}"]
+            if kind == "container":
+                query[3] = "-aq"
+            result = target.run(query, timeout=30)
+            if result.returncode != 0:
+                pytest.fail(f"e2e proof: could not check existing Docker {kind} labels")
+            if result.stdout.strip():
+                pytest.fail(f"e2e proof: existing Orama Docker {kind} resources; use a clean host")
+
+
 def _cleanup_local(target: LocalTarget) -> None:
     target.run(["docker", "rm", "-f", INDEXER_CONTAINER], timeout=60)
     target.run(["docker", "rm", "-f", UPDATER_CONTAINER], timeout=60)
@@ -88,7 +114,7 @@ def _cleanup_local(target: LocalTarget) -> None:
                 if kind == "container":
                     rm_args.append("-f")
                 target.run([*rm_args, *ids], timeout=300)
-    target.run(["rm", "-rf", "/srv/orama-e2e"], timeout=120)
+    target.run(["rm", "-rf", str(LOCAL_ROOT)], timeout=120)
 
 
 @pytest.fixture(scope="session")
@@ -130,11 +156,11 @@ def e2e_target() -> Target:
             name="ubuntu",
             puid=puid,
             pgid=pgid,
-            data_root="/srv/orama-e2e/data",
-            config_root="/srv/orama-e2e/cfg",
+            data_root=str(LOCAL_ROOT / "data"),
+            config_root=str(LOCAL_ROOT / "cfg"),
             repo_dir=str(REPO_ROOT),
         )
-        _cleanup_local(target)
+        _check_clean_ubuntu(target)
         try:
             yield target
         finally:
