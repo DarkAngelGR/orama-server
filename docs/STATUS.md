@@ -13,7 +13,7 @@ Read `AGENTS.md` first.
 
 | 3 Web app | auth/security, setup wizard, Settings, Apps page (designed with `frontend-design`) | Code complete: Tasks 1–12 + final review/fix wave done, CI green (last checked `fea5f72`). Owner Claude Security scan pending (see below). |
 | 4 Requests | search, request types, status stages, webhooks, post-download check, reboot/drift | Code complete (`needs review`, Gemini + Codex): Tasks 1–11 + review fix wave (`729e24c`, `853dce0`, `01903ae`) passed CI (`42511960464`; 2,014 unit tests, browser, demo, images, and all 41 real-container integration tests). Task board in `docs/tasks/plan-4/`. Owner Claude Security scan pending. |
-| 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) is in progress. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
+| 5 Proof | self-update, end-to-end VM tests, owner's NAS checklist, security review | **Not done.** Task 1 (publish gate) and Task 2 (self-update) done. Task 3 (end-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM) passed CI and needs review. Task 4 (owner NAS checklist: `docs/OWNER-CHECKLIST.md`) and Task 5 (security scans, packaging, sign-off) open. |
 
 ## Current hand-off (Claude, 2026-11-13) — read this first
 
@@ -93,14 +93,10 @@ Read `AGENTS.md` first.
   plan, tests and a Claude Security scan (uploaded files and outbound calls are new input).
   Until then the owner adds them by hand in step 5. Installing next to an existing setup is
   supported (own container names, free ports, own settings folder) but untested on a NAS.
-- **CI:** the real-app job is green with the Docker Hub mirror (run 43405247417). The e2e job
-  still fails with "Downloading the apps failed" because it has no mirror yet (T03.md asks for it).
-- **Plan 5 Task 3 (end-to-end proof): ChatGPT/Codex and Gemini.** Step 1 done (Claude). Step 2
-  (fake indexer and clips) done and reviewed OK. Step 3 (Ubuntu end-to-end job) runs and passed
-  once on GitHub, but Claude's review found things to fix before it counts as done; they are
-  listed in `docs/tasks/plan-5/T03.md` under "Review of steps 2-3". Steps 4 (Debian 12 VM) and
-  5 (gate and report) are open. Clone the repository again if your copy is older than
-  2026-11-11 (the history was rewritten).
+- **Plan 5 Task 3 (end-to-end proof): needs review.** Both the Ubuntu and Debian 12 jobs
+  passed three runs on `test` at `420e479`, and publish now requires both proofs
+  (`39e0f05`, CI run 43527653657). See `docs/tasks/plan-5/T03.md` for the run links,
+  timings and coverage. The NAS checklist and release security scans are separate.
 - **Claude: request-feature review and fixes.** The request-store review found ten problems;
   three fix rounds fixed them on `test` (`233cbcf`..`5251760`, `b7a66bd`..`5c2c98c`) and an
   independent check found round 2 clean. The Jellyfin library refresh that `77210d1` put inside
@@ -229,7 +225,7 @@ real-container integration tests.
 |---|---|---|---|
 | 1 | Publish gate | done (`0bcf21f`) | Gemini; Claude corrected the report |
 | 2 | Self-update (two Agent commands, hardened helper) | done (`ea34774`, `da28540`, review fixes `dc1cea1`) | Gemini, then Claude |
-| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | in progress — step 1 done (Claude); step 2 CI passed (ChatGPT/Codex, `8d46eff`, needs review); steps 3–4 passed three runs on test (ChatGPT/Codex, needs review); step 5 claimed by ChatGPT/Codex | ChatGPT/Codex + Gemini |
+| 3 | End-to-end proof on clean Ubuntu 24.04 and a Debian 12 VM | needs review — both proofs passed three runs; publish gate green at `39e0f05` | ChatGPT/Codex + Gemini |
 | 4 | Owner checklist on the NAS (`docs/OWNER-CHECKLIST.md`) | open (written, not run) | Owner |
 | 5 | Security scans, packaging, Release 1 sign-off | open | Owner + Claude |
 
