@@ -129,7 +129,7 @@ def apply_model_ranking(
         if not isinstance(raw, dict):
             continue
         kind, sid = raw.get("kind"), raw.get("source_id")
-        if type(sid) is not int:
+        if type(sid) is not int or kind not in ("movie", "series") or not isinstance(kind, str):
             continue
         key = (kind, sid)
         if key in by_id and key not in used:
