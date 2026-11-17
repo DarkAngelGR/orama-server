@@ -334,4 +334,4 @@ Needs review: fixed on test in ebafe86. CI 44083546792 passed unit, browser, ima
 Needs review: fixed on test in 5583032 and 875eb7b. Embedded status checks wired and voice streaming interruption resolved. CI 44093313920 passed unit, browser, images, integration, and both Debian 12 / Ubuntu 24.04 end-to-end VM proofs.
 
 ## Existing-app request routing (Codex)
-In progress: requests ignore adopted app addresses; see docs/tasks/adopted-request-routing.md.
+Needs review: adopted-app routing fixed in 5aba065 and 1db9bfe. CI 44157159080 passed all six test/build jobs; publish skipped. NAS update and API authentication pending. See docs/tasks/adopted-request-routing.md.
