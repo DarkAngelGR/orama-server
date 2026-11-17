@@ -87,11 +87,17 @@ def _pages() -> Blueprint:
 
     @pages.get("")
     def hermes_redirect():
+        external_url = os.environ.get("HERMES_URL", "").rstrip("/")
+        if external_url:
+            return redirect(external_url, code=302)
         return redirect("/hermes/", code=308)
 
     @pages.get("/")
     @auth.requires("hermes")
     def hermes_index():
+        external_url = os.environ.get("HERMES_URL", "").rstrip("/")
+        if external_url:
+            return redirect(external_url, code=302)
         index_file = HERMES_STATIC_DIR / "index.html"
         content = index_file.read_text(encoding="utf-8")
         # Inject Orama session context and CSRF token so Hermes connects seamlessly

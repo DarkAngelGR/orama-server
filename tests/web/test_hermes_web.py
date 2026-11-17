@@ -76,3 +76,11 @@ def test_nav_link_in_base_templates(signed):
     res = signed.get("/", headers=HEADERS)
     assert res.status_code == 200
     assert b'href="/hermes"' in res.data
+
+
+def test_hermes_external_url_redirect(signed, monkeypatch):
+    monkeypatch.setenv("HERMES_URL", "http://192.168.1.50:8787")
+    res = signed.get("/hermes", headers=HEADERS)
+    assert res.status_code == 302
+    assert res.headers["Location"] == "http://192.168.1.50:8787"
+
