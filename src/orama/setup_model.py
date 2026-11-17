@@ -92,7 +92,7 @@ def _validate_root(value: Any) -> PurePosixPath:
     return path
 
 
-Root = Annotated[PurePosixPath, PlainValidator(_validate_root), PlainSerializer(str)]
+Root = Annotated[PurePosixPath, PlainValidator(_validate_root), PlainSerializer(lambda p: p.as_posix() if isinstance(p, PurePath) else str(p))]
 
 FOLDER_NAME_PATTERN = r"^[a-zA-Z0-9_-]{1,64}$"
 _FOLDER_NAME_RE = re.compile(FOLDER_NAME_PATTERN)

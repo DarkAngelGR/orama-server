@@ -484,18 +484,6 @@ for line in docker_lines:
             "source": "docker",
         }
 
-for p in taken:
-    if p in PORT_TO_APP:
-        app = PORT_TO_APP[p]
-        if app not in discovered:
-            discovered[app] = {
-                "name": app,
-                "container_name": None,
-                "image": None,
-                "host_port": p,
-                "source": "port",
-            }
-
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(list(discovered.values()), f, indent=2)
     f.write("\n")

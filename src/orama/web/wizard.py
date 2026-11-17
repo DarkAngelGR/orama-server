@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -249,8 +249,8 @@ def _wizard_pages() -> Blueprint:
                         with state.locked(state.setup_lock(st.state_dir)):
                             current = _working_setup(st) or setup
                             updated = current.model_copy(update={
-                                "app_config_root": Path(probe["app_path"]),
-                                "data_root": Path(probe["data_path"]),
+                                "app_config_root": PurePosixPath(probe["app_path"]),
+                                "data_root": PurePosixPath(probe["data_path"]),
                             })
                             updated.save(st.state_dir / DRAFT_FILE)
                         return redirect(_after(key), 303)

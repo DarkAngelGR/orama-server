@@ -138,12 +138,29 @@ class StorageManifest:
         app_cand = self.candidates[app_candidate_id]
         data_cand = self.candidates[data_candidate_id]
 
-        app_path = app_cand.prepared_path / valid_app_folder
-        data_path = data_cand.prepared_path / valid_data_folder
+        if (
+            (app_candidate_id == "cand_config" and valid_app_folder in (app_cand.prepared_path.name, "config", "apps"))
+            or valid_app_folder == app_cand.prepared_path.name
+        ):
+            app_path = app_cand.prepared_path
+        else:
+            app_path = app_cand.prepared_path / valid_app_folder
+
+        if (
+            (data_candidate_id == "cand_default" and valid_data_folder in (data_cand.prepared_path.name, "data", "media"))
+            or valid_data_folder == data_cand.prepared_path.name
+        ):
+            data_path = data_cand.prepared_path
+        else:
+            data_path = data_cand.prepared_path / valid_data_folder
 
         if app_path == data_path:
             raise Refused("app settings and media/downloads must use separate folders.")
-        if app_path.is_relative_to(data_path) or data_path.is_relative_to(app_path):
+        if (
+            app_path != data_path
+            and not (data_candidate_id == "cand_default" and data_path == data_cand.prepared_path and app_candidate_id != "cand_default")
+            and (app_path.is_relative_to(data_path) or data_path.is_relative_to(app_path))
+        ):
             raise Refused("app settings and media/downloads folders must not be nested within each other.")
 
         return app_path, data_path

@@ -236,14 +236,24 @@ document.addEventListener("error", function (event) {
 
     const update = () => {
       if (appInput && appPreview) {
-        const appBase = getBase(appSelect);
+        const appBase = getBase(appSelect).replace(/\/+$/, "");
         const appFolder = (appInput.value || "").trim() || "apps";
-        appPreview.textContent = appBase.replace(/\/+$/, "") + "/" + appFolder.replace(/^\/+/, "");
+        const baseName = appBase.split("/").filter(Boolean).pop();
+        if (baseName && baseName === appFolder) {
+          appPreview.textContent = appBase;
+        } else {
+          appPreview.textContent = appBase + "/" + appFolder.replace(/^\/+/, "");
+        }
       }
       if (dataInput && dataPreview) {
-        const dataBase = getBase(dataSelect);
+        const dataBase = getBase(dataSelect).replace(/\/+$/, "");
         const dataFolder = (dataInput.value || "").trim() || "data";
-        dataPreview.textContent = dataBase.replace(/\/+$/, "") + "/" + dataFolder.replace(/^\/+/, "");
+        const baseName = dataBase.split("/").filter(Boolean).pop();
+        if (baseName && baseName === dataFolder) {
+          dataPreview.textContent = dataBase;
+        } else {
+          dataPreview.textContent = dataBase + "/" + dataFolder.replace(/^\/+/, "");
+        }
       }
     };
 
