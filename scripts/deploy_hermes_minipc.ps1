@@ -53,9 +53,21 @@ if ($voicesCount -eq 0) {
 }
 
 # 5. Build and Launch
+# hermes.env is not used for the published port unless Compose is told to read it.
+$composeArgs = @("-f", "docker-compose.hermes.yml")
+if (Test-Path "hermes.env") {
+    $composeArgs = @("--env-file", "hermes.env") + $composeArgs
+}
+$hasBind = $false
+if (Test-Path "hermes.env") {
+    $hasBind = [bool](Select-String -Path "hermes.env" -Pattern "^HERMES_BIND_IP=.+" -Quiet)
+}
+if (-not $env:HERMES_BIND_IP -and -not $hasBind) {
+    $env:HERMES_BIND_IP = "0.0.0.0"
+}
 Write-Host "Building and launching Hermes container..." -ForegroundColor Cyan
-docker compose -f docker-compose.hermes.yml build hermes
-docker compose -f docker-compose.hermes.yml up -d hermes
+docker compose @composeArgs build hermes
+docker compose @composeArgs up -d hermes
 
 # 6. Verify Health
 Write-Host "Waiting for Hermes to be ready on port 8787..." -ForegroundColor Cyan

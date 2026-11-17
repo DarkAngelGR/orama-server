@@ -343,3 +343,5 @@ Needs review: Settings App connections in cdec2ce. CI 44164818162 passed unit, b
 Needs review: Settings → Hermes saves a home-network address in the state folder, and the Hermes link opens it (`dd0ab76`). The Orama container never received `HERMES_URL` from `orama.env`, so the NAS kept opening the empty built-in page. CI 44176261549 passed unit, browser, images, integration and Ubuntu/Debian end-to-end; publish skipped. NAS install of this commit is still pending.
 
 The mini PC page now remembers a successful Hermes workspace key in that browser (`hermes.workspace`). A rejected key is forgotten. Gemini and Ollama stay in the mini PC environment. This is in the Hermes image, so the mini PC has to be rebuilt. CI for that change is not recorded yet.
+
+Compose was publishing Hermes on localhost because `hermes.env` is not read for the host port, so other devices could not open the page. The mini PC still needs `HERMES_BIND_IP=0.0.0.0 docker compose -f docker-compose.hermes.yml up -d hermes`.

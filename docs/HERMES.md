@@ -60,7 +60,7 @@ Hermes is natively mounted into Orama's Flask web server on a single host/port:
 ### Mode B: Distributed Companion Node (e.g. Server on NAS + Hermes on Mini-PC/VM)
 Run Orama on your primary server/NAS and offload LLM inference and TTS speech synthesis to a dedicated companion node (Mini-PC, secondary server, or VM):
 1. **On Orama Server (NAS)**: Open Settings → Hermes and save the mini PC address, for example `http://mini-pc.local:8787`. The Hermes link then opens that address. `orama.env` is not loaded by the Orama container. A `HERMES_URL` variable on the Orama process itself still wins when it is actually set.
-2. **On Hermes Node**: Run `docker compose -f docker-compose.hermes.yml up -d` with `ORAMA_URL=http://<nas-ip>:8765` and `PLEX_URL=http://<nas-ip>:32400`.
+2. **On Hermes Node**: Put `HERMES_BIND_IP=0.0.0.0` in `hermes.env`, then start with `HERMES_BIND_IP=0.0.0.0 docker compose --env-file hermes.env -f docker-compose.hermes.yml up -d`. Compose does not use `hermes.env` for the published port unless `--env-file` is set, so the page stays on localhost.
 3. Automated deployment scripts:
    - Linux: `./scripts/deploy_hermes_minipc.sh`
    - Windows PowerShell: `./scripts/deploy_hermes_minipc.ps1`

@@ -32,6 +32,8 @@ services:
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
       - REFRESH_HOURS=${REFRESH_HOURS:-24}
+    # The host port comes from the shell or --env-file, not from env_file below.
+    # hermes.env is invisible here unless the deploy script passes it.
     ports:
       - "${HERMES_BIND_IP:-127.0.0.1}:8787:8787"
     volumes:

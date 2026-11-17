@@ -61,9 +61,18 @@ if [ -z "$(ls -A voices 2>/dev/null)" ]; then
 fi
 
 # 5. Build and Launch
+# hermes.env is not used for the published port unless Compose is told to read it.
+# Without this, Hermes stays on localhost and the LAN address never opens.
+COMPOSE_ENV=()
+if [ -f hermes.env ]; then
+  COMPOSE_ENV=(--env-file hermes.env)
+fi
+if [ -z "${HERMES_BIND_IP:-}" ] && ! grep -q '^HERMES_BIND_IP=.' hermes.env 2>/dev/null; then
+  export HERMES_BIND_IP=0.0.0.0
+fi
 echo "Building and starting Hermes container..."
-$COMPOSE_CMD -f docker-compose.hermes.yml build hermes
-$COMPOSE_CMD -f docker-compose.hermes.yml up -d hermes
+$COMPOSE_CMD "${COMPOSE_ENV[@]}" -f docker-compose.hermes.yml build hermes
+$COMPOSE_CMD "${COMPOSE_ENV[@]}" -f docker-compose.hermes.yml up -d hermes
 
 # 6. Verify Health
 echo "Waiting for Hermes to be ready on port 8787..."
@@ -80,6 +89,10 @@ HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 echo ""
 echo "=========================================================="
 echo " Hermes Assistant is running on your Mini-PC!"
-echo " Local Access:   http://localhost:8787/"
-echo " LAN Access:     http://${HOST_IP}:8787/"
+echo " On this computer: http://localhost:8787/"
+if curl -sf --max-time 3 "http://${HOST_IP}:8787/healthz" >/dev/null; then
+  echo " From other devices: http://${HOST_IP}:8787/"
+else
+  echo " Other devices cannot open Hermes yet. Port 8787 is not reachable at ${HOST_IP}."
+fi
 echo "=========================================================="
