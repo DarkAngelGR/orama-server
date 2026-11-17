@@ -9,6 +9,7 @@
     <ul>
       {% for s in sections %}<li><a href="#{{ s.key }}">{{ s.title }}</a></li>{% endfor %}
       <li><a href="#requests-policy">Requests and storage</a></li>
+      <li><a href="#hermes">Hermes</a></li>
       {% if app_connections %}<li><a href="#app-connections">App connections</a></li>{% endif %}
       <li><a href="#indexers">Indexers</a></li>
       <li><a href="#addresses">Addresses</a></li>
@@ -52,6 +53,16 @@
       {{ choice('request_wait_mode', 'When no directly playable release is found yet', request_values.wait_modes, request_values.request_wait_mode, request_errors.request_wait_mode) }}
       {{ field('request_wait_hours', 'Hours to wait before accepting another format', request_values.request_wait_hours, request_errors.request_wait_hours, 'Between 1 and 720 hours (default 24). Used when waiting a set number of hours.', 'number', 'off') }}
       {{ field('disk_warning_percent', 'Warn when free storage drops below (%)', request_values.disk_warning_percent, request_errors.disk_warning_percent, 'Between 1% and 50% of the media drive (default 5%).', 'number', 'off') }}
+      <div class="wizard-actions">{{ button('Save') }}</div>
+    </form>
+  </section>
+
+  <section class="settings-section" id="hermes" aria-labelledby="hermes-title">
+    <h2 id="hermes-title">Hermes</h2>
+    <p class="field-help">Hermes on your mini PC already has its models. Save that address and the Hermes link opens it.</p>
+    <form method="post" action="/settings/hermes" class="wizard-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {{ field('hermes_url', 'Mini PC address', hermes_url, '', 'Example: http://mini-pc.local:8787. Leave empty to use the Hermes page inside Orama.', 'url', 'off') }}
       <div class="wizard-actions">{{ button('Save') }}</div>
     </form>
   </section>

@@ -59,7 +59,7 @@ Hermes is natively mounted into Orama's Flask web server on a single host/port:
 
 ### Mode B: Distributed Companion Node (e.g. Server on NAS + Hermes on Mini-PC/VM)
 Run Orama on your primary server/NAS and offload LLM inference and TTS speech synthesis to a dedicated companion node (Mini-PC, secondary server, or VM):
-1. **On Orama Server (NAS)**: Set `HERMES_URL=http://<companion-ip>:8787` in `orama.env`. When users click "Hermes" in Orama's navbar, it seamlessly redirects to the companion node.
+1. **On Orama Server (NAS)**: Open Settings → Hermes and save the mini PC address, for example `http://mini-pc.local:8787`. The Hermes link then opens that address. `orama.env` is not loaded by the Orama container. A `HERMES_URL` variable on the Orama process itself still wins when it is actually set.
 2. **On Hermes Node**: Run `docker compose -f docker-compose.hermes.yml up -d` with `ORAMA_URL=http://<nas-ip>:8765` and `PLEX_URL=http://<nas-ip>:32400`.
 3. Automated deployment scripts:
    - Linux: `./scripts/deploy_hermes_minipc.sh`
@@ -91,7 +91,7 @@ Hermes connects to any combination of cloud and local inference engines:
 | `HERMES_API_KEY` | Secret bearer token required for `/v1/` routes (min 32 chars) | *Required for standalone* |
 | `HERMES_BIND_IP` | Host IP binding | `127.0.0.1` (`0.0.0.0` for LAN) |
 | `ORAMA_URL` | Base URL of Orama Server for request links and health probing | `http://orama:8765` |
-| `HERMES_URL` | (Orama server setting) Remote Hermes companion URL to redirect navbar clicks | *Optional* |
+| `HERMES_URL` | Optional override on the Orama process. Settings → Hermes is how the NAS saves the mini PC address | *Optional* |
 | `PLEX_URL` | Private LAN/container URL to Plex Media Server | *Optional* |
 | `PLEX_TOKEN` | Plex authentication token | *Optional* |
 | `JELLYFIN_URL` | Private LAN/container URL to Jellyfin | *Optional* |

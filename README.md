@@ -32,7 +32,7 @@ Everything runs on one machine (such as your NAS or a dedicated server). Orama, 
 Offload compute-intensive tasks to keep your storage NAS cool, quiet, and responsive:
 - **Primary Storage (NAS)**: Runs Orama Server (`:8765`), Plex/Jellyfin (`:32400` / `:8096`), Sonarr, Radarr, and download clients.
 - **Companion Node (Mini-PC / Secondary PC)**: Runs Hermes Assistant (`:8787`), local LLM inference via Ollama (`:11434`), and CPU-only Piper neural voice synthesis.
-- **Seamless LAN Navigation**: Set `HERMES_URL=http://companion.local:8787` on your NAS. Clicking **Hermes** in Orama's top navigation bar instantly forwards users to your Mini-PC companion dashboard.
+- **Seamless LAN Navigation**: In Orama, open Settings → Hermes and save the mini PC address, for example `http://mini-pc.local:8787`. Clicking **Hermes** then opens that dashboard.
 - **Direct 1-Click Requests**: Media recommendations discovered by Hermes on the Mini-PC link directly back to Orama on the NAS (`http://nas.local:8765/media/<kind>/<id>`) for automated retrieval.
 
 ```
@@ -80,10 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/DarkAngelGR/orama-server/main/insta
 ```
 Open the setup link printed by the installer to configure your administrator password, storage folder, and media apps.
 
-To route Orama's navbar to your Mini-PC, add your companion node's address to Orama's environment file (`orama.env`):
-```ini
-HERMES_URL=http://companion.local:8787
-```
+To route Orama's navbar to your Mini-PC, open Orama → Settings → Hermes and save the mini PC address, for example `http://mini-pc.local:8787`. The Hermes link then opens that address.
 
 ### Step 2: Deploy Hermes on the Mini-PC
 Clone this repository on your Mini-PC and run the automated deployment script:

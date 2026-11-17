@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import stat
+
 import pytest
 
-from web.conftest import signin, write_setup
+from web.conftest import csrf_from, signin, write_setup
 
 HEADERS = {"Host": "localhost"}
 
@@ -104,4 +107,73 @@ def test_hermes_external_url_redirect(signed, monkeypatch):
     res = signed.get("/hermes", headers=HEADERS)
     assert res.status_code == 302
     assert res.headers["Location"] == target
+
+
+def _post_hermes(client, url: str):
+    token = csrf_from(client.get("/settings", headers=HEADERS))
+    return client.post(
+        "/settings/hermes", data={"csrf_token": token, "hermes_url": url}, headers=HEADERS
+    )
+
+
+def test_settings_saves_mini_pc_and_hermes_opens_it(signed, app):
+    lan_ip = _ip(192, 168, 1, 13)
+    target = f"http://{lan_ip}:8787"
+    saved = _post_hermes(signed, target + "/")
+    assert saved.status_code == 303
+    assert saved.headers["Location"].endswith("saved=hermes")
+
+    path = app.extensions["orama"].state_dir / "hermes.url"
+    assert path.read_text(encoding="utf-8") == target + "\n"
+    if os.name == "posix":
+        assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+
+    opened = signed.get("/hermes", headers=HEADERS)
+    assert opened.status_code == 302
+    assert opened.headers["Location"] == target
+    page = signed.get("/settings?saved=hermes", headers=HEADERS)
+    assert b"The Hermes link now opens your mini PC." in page.data
+    assert target.encode() in page.data
+
+
+def test_settings_rejects_a_public_hermes_address(signed, app):
+    response = _post_hermes(signed, "https://example.com")
+    assert response.status_code == 400
+    assert b"home network" in response.data
+    assert not (app.extensions["orama"].state_dir / "hermes.url").exists()
+    opened = signed.get("/hermes", headers=HEADERS)
+    assert opened.status_code == 308
+
+
+def test_clearing_the_hermes_address_opens_the_page_inside_orama(signed, app, monkeypatch):
+    monkeypatch.delenv("HERMES_URL", raising=False)
+    assert _post_hermes(signed, f"http://{_ip(10, 1, 1, 8)}:8787").status_code == 303
+    cleared = _post_hermes(signed, "  ")
+    assert cleared.status_code == 303
+    assert cleared.headers["Location"].endswith("saved=hermes-off")
+    assert not (app.extensions["orama"].state_dir / "hermes.url").exists()
+    assert signed.get("/hermes/", headers=HEADERS).status_code == 200
+
+
+def test_process_environment_wins_over_the_saved_address(signed, app, monkeypatch):
+    saved_ip = _ip(10, 2, 2, 2)
+    env_ip = _ip(10, 3, 3, 3)
+    assert _post_hermes(signed, f"http://{saved_ip}:8787").status_code == 303
+    monkeypatch.setenv("HERMES_URL", f"http://{env_ip}:8787")
+    opened = signed.get("/hermes/", headers=HEADERS)
+    assert opened.status_code == 302
+    assert opened.headers["Location"] == f"http://{env_ip}:8787"
+
+
+def test_a_public_environment_address_is_not_opened(signed, monkeypatch):
+    monkeypatch.setenv("HERMES_URL", "https://example.com/hermes")
+    opened = signed.get("/hermes", headers=HEADERS)
+    assert opened.status_code == 308
+
+
+def test_hermes_save_waits_while_a_setup_change_is_unfinished(signed, app):
+    write_setup(app.extensions["orama"].state_dir, "setup.draft.json")
+    response = _post_hermes(signed, f"http://{_ip(10, 4, 4, 4)}:8787")
+    assert response.status_code == 409
+    assert not (app.extensions["orama"].state_dir / "hermes.url").exists()
 

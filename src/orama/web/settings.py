@@ -29,6 +29,7 @@ from orama.web import app_connections as _app_connections
 from orama.web import auth, catalogue, draft, forms, security
 from orama.web.draft import undo_candidate as _undo_candidate
 from orama.web.draft import write_back as _write_back
+from orama.web.hermes_link import companion_url, save_companion_url
 from orama.web.jobs import TEST_BUSY, apply_operation
 from orama.web.wizard import STEPS
 from orama.wiring import prowlarr, sabnzbd
@@ -219,7 +220,8 @@ def _pages() -> Blueprint:
     # ------------------------------------------------------------ the page
 
     def render_page(status: int = 200, overrides: dict[str, dict] | None = None,
-                    message: str = "", problem: bool = False):
+                    message: str = "", problem: bool = False,
+                    hermes_value: str | None = None):
         st = auth.web_state()
         overrides = overrides or {}
         setup = _load(st, SETUP_FILE)
@@ -255,6 +257,10 @@ def _pages() -> Blueprint:
             message = UPDATE_STARTED
         elif not message and saved == "current":
             message = UP_TO_DATE
+        elif not message and saved == "hermes":
+            message = "Saved. The Hermes link now opens your mini PC."
+        elif not message and saved == "hermes-off":
+            message = "Saved. The Hermes link opens the page inside Orama."
         elif not message and saved.startswith("app-"):
             app_key = saved.removeprefix("app-")
             app_meta = _app_connections.APP_METADATA.get(app_key)
@@ -270,6 +276,12 @@ def _pages() -> Blueprint:
             if (setup is not None and not has_draft)
             else []
         )
+        if hermes_value is not None:
+            shown_hermes = hermes_value
+        elif setup is not None and not has_draft:
+            shown_hermes = companion_url(st.state_dir)
+        else:
+            shown_hermes = ""
         return render_template(
             "settings/index.html", setup=setup, draft=has_draft, sections=sections, job=job,
             show_job=show_job, running=bool(job and job.status == "running"),
@@ -279,7 +291,9 @@ def _pages() -> Blueprint:
             password_errors=overrides.get("password", {}).get("errors", {}),
             indexer_count=len(setup.indexers) if setup else 0,
             usenet_count=len(setup.usenet_servers) if setup else 0,
-            max_names=MAX_EXTRA_HOST_NAMES, app_connections=app_conns, **extra,
+            max_names=MAX_EXTRA_HOST_NAMES, app_connections=app_conns,
+            hermes_url=shown_hermes,
+            **extra,
         ), status
 
     @pages.get("/settings")
@@ -831,5 +845,24 @@ def _pages() -> Blueprint:
             return render_page(409, message=TEST_BUSY, problem=True)
 
         return redirect(f"/settings?saved=app-{app}", 303)
+
+    @pages.post("/settings/hermes")
+    @auth.requires("settings")
+    def hermes_address():
+        st = auth.web_state()
+        if not (st.state_dir / SETUP_FILE).exists():
+            return render_template(
+                "rejected.html",
+                message="Orama has no setup to change yet. Finish the setup first.",
+            ), 409
+        if (st.state_dir / DRAFT_FILE).exists():
+            return draft_page()
+        raw = request.form.get("hermes_url", "")
+        error = save_companion_url(st.state_dir, raw)
+        if error:
+            shown = raw if len(raw) <= 200 else ""
+            return render_page(400, message=error, problem=True, hermes_value=shown)
+        opened = companion_url(st.state_dir)
+        return redirect("/settings?saved=hermes" if opened else "/settings?saved=hermes-off", 303)
 
     return pages

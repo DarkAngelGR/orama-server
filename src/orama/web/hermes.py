@@ -17,6 +17,7 @@ from typing import Any
 from flask import Blueprint, Flask, Response, g, jsonify, redirect, request, send_from_directory
 
 from orama.web import auth, security
+from orama.web.hermes_link import companion_url
 
 try:
     import httpx
@@ -105,7 +106,7 @@ def _pages() -> Blueprint:
 
     @pages.get("")
     def hermes_redirect():
-        external_url = os.environ.get("HERMES_URL", "").rstrip("/")
+        external_url = companion_url(auth.web_state().state_dir)
         if external_url:
             return redirect(external_url, code=302)
         return redirect("/hermes/", code=308)
@@ -113,7 +114,7 @@ def _pages() -> Blueprint:
     @pages.get("/")
     @auth.requires("apps")
     def hermes_index():
-        external_url = os.environ.get("HERMES_URL", "").rstrip("/")
+        external_url = companion_url(auth.web_state().state_dir)
         if external_url:
             return redirect(external_url, code=302)
         index_file = HERMES_STATIC_DIR / "index.html"
