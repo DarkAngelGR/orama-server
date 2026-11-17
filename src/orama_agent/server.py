@@ -41,6 +41,12 @@ from orama_agent.runner import (
     RunnerError,
     project_file,
 )
+from orama_agent.storage import (
+    JOURNAL_FILENAME,
+    ActivationJournal,
+    StorageManifest,
+    validate_storage_selection,
+)
 from orama_agent.validate import (
     Refused,
     Roots,
@@ -65,12 +71,25 @@ ENV_DIR_MODE = 0o700  # <config>/app-env, root-owned
 APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after it failed
 _ID_MAX = 128
 COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
-                      "recyclarr-sync", "data-space", "self-update-pull", "self-update"})
+                      "recyclarr-sync", "data-space", "self-update-pull", "self-update",
+                      "storage-candidates", "storage-validate", "storage-lock"})
 UPDATE_BUSY = "Orama is already downloading or starting an update. Try again in a few minutes."
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-_NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+_DIR_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_NEW_FILE_FLAGS = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
 
 Chown = Callable[..., None]
 
@@ -260,6 +279,9 @@ class Agent:
             "data-space": self.data_space,
             "self-update-pull": self.self_update_pull,
             "self-update": self.self_update,
+            "storage-candidates": self.storage_candidates,
+            "storage-validate": self.storage_validate,
+            "storage-lock": self.storage_lock,
         }[cmd]
         if cmd == "self-update-pull":
             # Only downloads images (see self_update_pull): it takes the update lock alone.
@@ -351,7 +373,13 @@ class Agent:
             os.close(config_fd)
 
         check_host_paths(doc, self.roots)
-        return {"changed": self._up(doc)}
+        journal = ActivationJournal(self.roots.config / JOURNAL_FILENAME)
+        if journal.current_phase() is not None:
+            journal.record_phase("activating")
+        changed = self._up(doc)
+        if journal.current_phase() is not None:
+            journal.record_phase("deployed")
+        return {"changed": changed}
 
     def _up(self, doc: dict[str, Any]) -> list[str]:
         """Run up behind a marker file, so an interrupted apply is reported in full.
@@ -452,6 +480,33 @@ class Agent:
             "total_bytes": int(vfs.f_frsize * vfs.f_blocks),
             "free_bytes": int(vfs.f_frsize * vfs.f_bavail),
         }
+
+    # ------------------------------------------------------------ storage
+
+    def storage_candidates(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+        _expect_keys(args, set())
+        manifest = StorageManifest.load(self.roots)
+        return manifest.web_projection()
+
+    def storage_validate(self, args: dict[str, Any]) -> dict[str, Any]:
+        _expect_keys(args, {"app_candidate_id", "app_folder_name", "data_candidate_id", "data_folder_name"})
+        journal = ActivationJournal(self.roots.config / JOURNAL_FILENAME)
+        if journal.is_locked():
+            raise Refused("Storage configuration is locked.")
+        manifest = StorageManifest.load(self.roots)
+        return validate_storage_selection(
+            manifest,
+            str(args["app_candidate_id"]),
+            str(args["app_folder_name"]),
+            str(args["data_candidate_id"]),
+            str(args["data_folder_name"]),
+        )
+
+    def storage_lock(self, args: dict[str, Any]) -> dict[str, bool]:
+        _expect_keys(args, set())
+        journal = ActivationJournal(self.roots.config / JOURNAL_FILENAME)
+        journal.record_phase("locked")
+        return {"locked": True}
 
     def restart(self, args: dict[str, Any]) -> None:
         _expect_keys(args, {"app"})
@@ -749,7 +804,10 @@ class _Handler(socketserver.StreamRequestHandler):
             pass
 
 
-class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+_UnixStreamServer = getattr(socketserver, "UnixStreamServer", socketserver.TCPServer)
+
+
+class AgentServer(socketserver.ThreadingMixIn, _UnixStreamServer):
     daemon_threads = True
 
     def __init__(
@@ -762,7 +820,7 @@ class AgentServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         read_timeout: float = READ_TIMEOUT,
     ) -> None:
         if chown is None:
-            chown = os.chown if os.geteuid() == 0 else _skip_chown
+            chown = os.chown if getattr(os, "geteuid", lambda: -1)() == 0 else _skip_chown
         self._chown = chown
         self.roots = roots
         self.read_timeout = read_timeout

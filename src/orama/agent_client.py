@@ -69,6 +69,32 @@ class AgentClient:
         """Return ``{"total_bytes": int, "free_bytes": int}`` for the configured data root."""
         return self._call("data-space", {})
 
+    def get_storage_candidates(self) -> list[dict[str, Any]]:
+        """Return the sanitized list of prepared storage candidates."""
+        return self._call("storage-candidates", {})
+
+    def validate_storage(
+        self,
+        app_candidate_id: str,
+        app_folder_name: str,
+        data_candidate_id: str,
+        data_folder_name: str,
+    ) -> dict[str, Any]:
+        """Validate candidate IDs and folder names with the Agent."""
+        return self._call(
+            "storage-validate",
+            {
+                "app_candidate_id": app_candidate_id,
+                "app_folder_name": app_folder_name,
+                "data_candidate_id": data_candidate_id,
+                "data_folder_name": data_folder_name,
+            },
+        )
+
+    def lock_storage(self) -> bool:
+        """Lock the storage configuration so it cannot be altered by future wizard requests."""
+        return bool(self._call("storage-lock", {})["locked"])
+
     def self_update_pull(self) -> bool:
         """Download the newest Orama and Agent images; nothing is restarted.
 
