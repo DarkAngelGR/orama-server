@@ -328,4 +328,4 @@ At every task boundary record the latest tested commit, CI result, open decision
 - Plan 2b Task 11 verified the carried real-app checks; results and owner checks are recorded in the Plan 2b notes.
 
 ## CI storage repair (Codex, 2026-11-17)
-In progress on test: repair default folder selection and integration setup path; Agent restrictions unchanged.
+Needs review: fixed on test in ebafe86. CI 44083546792 passed unit, browser, images, integration and Ubuntu/Debian end-to-end; publish skipped. Agent restrictions unchanged. Report: docs/tasks/ci-storage-repair.md.
