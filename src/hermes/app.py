@@ -12,10 +12,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-import httpx
 
 from .conversation import ChatRequest, stream_chat
 from .providers import jellyfin_data, plex_data, private_server_url, tmdb_candidates
