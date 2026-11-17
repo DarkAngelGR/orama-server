@@ -69,7 +69,7 @@ def test_unreachable_adopted_app_does_not_retry_service_hostname(monkeypatch):
 
     def unreachable(self, method, url, **kwargs):
         calls.append(url)
-        raise Unreachable()
+        raise Unreachable(url)
 
     monkeypatch.setattr(Http, "request", unreachable)
     client = make_client(Http())
