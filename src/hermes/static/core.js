@@ -1,4 +1,8 @@
 export const HISTORY_KEY='hermes.history.v2';
+export const WORKSPACE_KEY='hermes.workspace';
+const workspaceKeyOk=value=>typeof value==='string'&&value.length>=32&&value.length<=512&&/^[\x21-\x7e]+$/.test(value);
+export function loadWorkspaceKey(storage){try{const value=storage?.getItem(WORKSPACE_KEY)||'';return workspaceKeyOk(value)?value:'';}catch{return '';}}
+export function saveWorkspaceKey(storage,value){try{if(!storage)return false;if(!value){storage.removeItem(WORKSPACE_KEY);return true;}if(!workspaceKeyOk(value))return false;storage.setItem(WORKSPACE_KEY,value);return true;}catch{return false;}}
 const cleanHistory=items=>Array.isArray(items)?items.filter(x=>x&&['user','assistant'].includes(x.role)&&typeof x.content==='string').slice(-20).map(x=>({role:x.role,content:x.content.slice(0,8000)})):[];
 export function loadHistory(storage){try{return cleanHistory(JSON.parse(storage.getItem(HISTORY_KEY)||storage.getItem('jarvis.history.v2')||'[]'));}catch{return [];}}
 export function saveHistory(storage,items){try{storage.setItem(HISTORY_KEY,JSON.stringify(cleanHistory(items)));return true;}catch{return false;}}

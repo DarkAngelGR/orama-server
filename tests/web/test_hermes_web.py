@@ -41,6 +41,17 @@ def test_hermes_signed_in(signed):
     assert b'meta name="csrf-token"' in res.data
 
 
+def test_hermes_page_remembers_a_workspace_key(client):
+    script = client.get("/hermes/static/app.js", headers=HEADERS)
+    assert script.status_code == 200
+    text = script.get_data(as_text=True)
+    assert "loadWorkspaceKey(storage)" in text
+    assert "saveWorkspaceKey(storage,typed)" in text
+    assert "saveWorkspaceKey(storage,'')" in text
+    page = client.get("/hermes/static/index.html", headers=HEADERS)
+    assert b"Enter it once" in page.data
+
+
 def test_hermes_static_served(client):
     res = client.get("/hermes/static/style.css", headers=HEADERS)
     assert res.status_code == 200

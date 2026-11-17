@@ -1,4 +1,4 @@
-import {readEvents,loadHistory,saveHistory,TurnGuard,HISTORY_KEY} from './core.js';
+import {readEvents,loadHistory,saveHistory,TurnGuard,HISTORY_KEY,loadWorkspaceKey,saveWorkspaceKey} from './core.js';
 
 const $=id=>document.getElementById(id),guard=new TurnGuard();
 let apiKey='',oramaUrl='',history=[],lastReply='',recognition=null,micTimer=null,audioContext=null,gain=null,sources=new Set(),audioEnd=0,audioFinished=false,activeTurn=null,voiceController=null,voiceEpoch=0;
@@ -45,7 +45,7 @@ async function call(path,body,signal){
   if(apiKey) headers['Authorization'] = 'Bearer '+apiKey;
   if(csrfToken) headers['X-CSRF-Token'] = csrfToken;
   const res=await fetch(BASE + path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body),signal,cache:'no-store'});
-  if(!res.ok){if(res.status===401){$('connection-label').textContent=oramaSession?'Sign-in required':'Reconnect required';$('connect-open').classList.remove('connected');}
+  if(!res.ok){if(res.status===401){apiKey='';saveWorkspaceKey(storage,'');$('connection-label').textContent=oramaSession?'Sign-in required':'Reconnect required';$('connect-open').classList.remove('connected');}
    throw Error(({401:oramaSession?'Your Orama session expired. Refresh the page to sign in again.':'Your Hermes key was not accepted. Reconnect in settings.',422:'Please check the message and voice settings.',429:'Hermes is busy. Wait a moment and try again.',503:'The service is unavailable. Check your server settings.'})[res.status]||`Request failed (${res.status}). Please try again.`);}
   return res;
  }
@@ -183,8 +183,10 @@ async function loadVoices(){const data=await jsonCall('/v1/voices');const select
 function voiceSummary(){$('voice-summary').replaceChildren(document.createTextNode($('tts-provider').value==='piper'?'Piper · local':$('voice').value));const small=document.createElement('small');small.textContent=$('language').value+' · '+($('tts-provider').value==='auto'?'automatic fallback':$('tts-provider').value);$('voice-summary').append(small);}
 for(const id of ['language','voice','tts-provider','local-voice'])$(id).onchange=()=>{stopAll();voiceSummary();if(id==='language'){$('local-voice').value='auto';if(apiKey||oramaSession)loadVoices().catch(e=>notice(e.message));}};
 $('connect').onclick=async()=>{
- stopAll();apiKey=$('key').value.trim();$('key').value='';$('connect').disabled=true;notice('');
- try{await loadVoices();$('settings').close();$('connection-label').textContent='Workspace connected';$('connect-open').classList.add('connected');await Promise.all([checkStatus(),recommendations()]);}
+ stopAll();const typed=$('key').value.trim();$('key').value='';
+ if(!typed){notice('Enter the Hermes key once. This browser keeps it.');return;}
+ $('connect').disabled=true;notice('');
+ try{apiKey=typed;await loadVoices();if(!saveWorkspaceKey(storage,typed))notice('This browser could not save the key. It will last for this tab only.');$('settings').close();$('connection-label').textContent='Workspace connected';$('connect-open').classList.add('connected');await Promise.all([checkStatus(),recommendations()]);}
  catch(e){notice(e.message);$('settings').close();}finally{$('connect').disabled=false;}
 };
 $('status-refresh').onclick=()=>void checkStatus();
@@ -193,5 +195,8 @@ if(oramaSession){
   $('connection-label').textContent='Orama connected';
   $('connect-open').classList.add('connected');
   Promise.all([loadVoices(), checkStatus(), recommendations()]).catch(()=>{});
+}else{
+  const saved=loadWorkspaceKey(storage);
+  if(saved){apiKey=saved;loadVoices().then(()=>{$('connection-label').textContent='Workspace connected';$('connect-open').classList.add('connected');return Promise.all([checkStatus(),recommendations()]);}).catch(e=>{if(!apiKey){$('connection-label').textContent='Reconnect required';$('connect-open').classList.remove('connected');}notice(e.message);});}
 }
 setInterval(()=>{if((apiKey||oramaSession)&&!document.hidden)void checkStatus();},60000);
