@@ -332,3 +332,6 @@ Needs review: fixed on test in ebafe86. CI 44083546792 passed unit, browser, ima
 
 ## Embedded Hermes status & voice repairs (2026-11-17)
 Needs review: fixed on test in 5583032 and 875eb7b. Embedded status checks wired and voice streaming interruption resolved. CI 44093313920 passed unit, browser, images, integration, and both Debian 12 / Ubuntu 24.04 end-to-end VM proofs.
+
+## Existing-app request routing (Codex)
+In progress: requests ignore adopted app addresses; see docs/tasks/adopted-request-routing.md.
