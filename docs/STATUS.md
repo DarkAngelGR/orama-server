@@ -330,5 +330,5 @@ At every task boundary record the latest tested commit, CI result, open decision
 ## CI storage repair (Codex, 2026-11-17)
 Needs review: fixed on test in ebafe86. CI 44083546792 passed unit, browser, images, integration and Ubuntu/Debian end-to-end; publish skipped. Agent restrictions unchanged. Report: docs/tasks/ci-storage-repair.md.
 
-## Embedded Hermes status repair (Codex, 2026-11-17)
-In progress on test: missing runtime HTTP client prevents embedded status checks.
+## Embedded Hermes status & voice repairs (2026-11-17)
+Needs review: fixed on test in 5583032 and 875eb7b. Embedded status checks wired and voice streaming interruption resolved. CI 44093313920 passed unit, browser, images, integration, and both Debian 12 / Ubuntu 24.04 end-to-end VM proofs.
