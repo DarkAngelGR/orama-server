@@ -54,7 +54,8 @@ def test_hermes_config_public(client):
 def test_hermes_api_endpoints_signed_in(signed):
     res = signed.get("/hermes/v1/voices", headers=HEADERS)
     assert res.status_code == 200
-    assert "gemini_voices" in res.json
+    assert res.json["voices"]
+    assert "local_voices" in res.json
 
     res = signed.get("/hermes/v1/recommendations", headers=HEADERS)
     assert res.status_code == 200
@@ -68,6 +69,22 @@ def test_hermes_security_headers(signed):
     assert "https://image.tmdb.org" in csp
     assert "media-src 'self' blob:" in csp
     assert res.headers.get("Permissions-Policy") == "microphone=(self), camera=()"
+
+
+def test_embedded_status_backend_is_available(signed, monkeypatch):
+    from orama.web import hermes
+
+    assert hermes.HAS_HERMES_BACKEND
+    expected = {"services": {"orama": {"status": "online"}}, "models": {}}
+
+    async def status_without_network(client):
+        assert isinstance(client, hermes.httpx.AsyncClient)
+        return expected
+
+    monkeypatch.setattr(hermes, "service_status", status_without_network)
+    response = signed.get("/hermes/v1/status", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json == expected
 
 
 def test_nav_link_in_base_templates(signed):
