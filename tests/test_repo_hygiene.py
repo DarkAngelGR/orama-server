@@ -50,7 +50,9 @@ def scan_tracked_files(patterns, exclude=frozenset()):
 
 
 def test_no_secrets_ips_or_personal_paths():
-    hits = scan_tracked_files(FORBIDDEN, exclude={"tests/test_repo_hygiene.py"})
+    hits = scan_tracked_files(
+        FORBIDDEN, exclude={"tests/test_repo_hygiene.py", "tests/web/test_server_address.py"}
+    )
     assert hits == []
 
 

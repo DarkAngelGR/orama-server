@@ -58,7 +58,7 @@ class Principal:
 
 ADMIN = Principal(
     "admin",
-    frozenset({"setup", "settings", "apps", "requests:read", "requests:write", "hermes"}),
+    frozenset({"setup", "settings", "apps", "requests:read", "requests:write"}),
 )
 
 

@@ -16,7 +16,7 @@ from typing import Any
 
 from flask import Blueprint, Flask, Response, g, jsonify, redirect, request, send_from_directory
 
-from orama.web import auth
+from orama.web import auth, security
 
 try:
     import httpx
@@ -111,7 +111,7 @@ def _pages() -> Blueprint:
         return redirect("/hermes/", code=308)
 
     @pages.get("/")
-    @auth.requires("hermes")
+    @auth.requires("apps")
     def hermes_index():
         external_url = os.environ.get("HERMES_URL", "").rstrip("/")
         if external_url:
@@ -120,7 +120,7 @@ def _pages() -> Blueprint:
         content = index_file.read_text(encoding="utf-8")
         # Inject Orama session context and CSRF token so Hermes connects seamlessly
         session_meta = (
-            f'<meta name="csrf-token" content="{auth.csrf_token()}">\n'
+            f'<meta name="csrf-token" content="{security.csrf_token()}">\n'
             f'<meta name="orama-session" content="{g.principal}">\n'
         )
         content = content.replace("<head>", f"<head>\n  {session_meta}", 1)
