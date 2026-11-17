@@ -272,8 +272,11 @@ class RequestWorker:
                 except (AgentError, OSError):
                     states = None
 
+                adopted = set(getattr(setup_obj, "adopted_apps", ()) or ())
                 if isinstance(states, dict) and states:
-                    if states.get(app_name) != "running":
+                    # An adopted app is not an Orama container, so its absence from
+                    # docker status is not a reason to hold the request.
+                    if app_name not in adopted and states.get(app_name) != "running":
                         self.store.update(
                             record.id,
                             record.revision,
@@ -311,7 +314,16 @@ class RequestWorker:
                 or record.waiting_reason == "Waiting for episode metadata"
             )
             if needs_submit and hasattr(client, "ensure_movie"):
-                submit(record, client, self.store, now)
+                try:
+                    submit(record, client, self.store, now)
+                except RequestError as exc:
+                    self.store.update(
+                        record.id,
+                        record.revision,
+                        RequestUpdate(waiting_reason=str(exc), next_check_at=now + 15.0),
+                    )
+                    self.store.release(record.id, self.worker_id, now + 15.0)
+                    return 1
                 updated_after_submit = self.store.get(record.id)
                 next_after = (
                     updated_after_submit.next_check_at

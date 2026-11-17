@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from orama import state
-from orama.requests.client import AppSnapshot, MediaClient
+from orama.requests.client import AppSnapshot, MediaClient, RequestError
 from orama.requests.models import RequestSpec, RequestUpdate
 from orama.requests.store import RequestStore
 from orama.requests.worker import RequestWorker, schedule_startup_check
@@ -227,3 +227,59 @@ def test_worker_waits_for_down_app_and_continues_usenet_when_torrent_vpn_down(tm
     assert after_dual is not None
     assert after_dual.stage == "ready"
     assert http_calls == 1
+
+
+def test_adopted_radarr_is_submitted_when_it_has_no_container(tmp_path: Path):
+    store = RequestStore(tmp_path / "requests.sqlite3")
+    now = 1_700_000_000.0
+    rec, _ = store.create(RequestSpec(kind="movie", source_id=345), now)
+    submitted: list[int] = []
+
+    class AdoptedClient(MediaClient):
+        def __init__(self) -> None:
+            self.setup = _make_setup(adopted_apps=frozenset({"radarr"}))
+
+        def ensure_movie(self, tmdb_id: int) -> tuple[int, bool]:
+            submitted.append(tmdb_id)
+            return 9, False
+
+        def search_targets(self, app_name, remote_id, season=None, episode_ids=None):
+            return 1
+
+    worker = RequestWorker(
+        store=store,
+        client_factory=AdoptedClient,
+        clock=lambda: now,
+        agent=FakeAgent({"plex": "running", "sabnzbd": "running"}),
+    )
+    assert worker.tick(now) == 1
+    assert submitted == [345]
+    saved = store.get(rec.id)
+    assert saved is not None
+    assert saved.remote_id == 9
+    assert saved.waiting_reason != "Waiting for Radarr"
+
+
+def test_submit_error_is_shown_on_the_request(tmp_path: Path):
+    store = RequestStore(tmp_path / "requests.sqlite3")
+    now = 1_700_000_000.0
+    rec, _ = store.create(RequestSpec(kind="movie", source_id=345), now)
+
+    class BrokenClient(MediaClient):
+        def __init__(self) -> None:
+            self.setup = _make_setup(adopted_apps=frozenset({"radarr"}))
+
+        def ensure_movie(self, tmdb_id: int) -> tuple[int, bool]:
+            raise RequestError("Orama quality profile is not configured in Radarr yet.")
+
+    worker = RequestWorker(
+        store=store,
+        client_factory=BrokenClient,
+        clock=lambda: now,
+        agent=FakeAgent({"plex": "running"}),
+    )
+    assert worker.tick(now) == 1
+    saved = store.get(rec.id)
+    assert saved is not None
+    assert saved.remote_id is None
+    assert saved.waiting_reason == "Orama quality profile is not configured in Radarr yet."
