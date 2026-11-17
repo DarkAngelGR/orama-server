@@ -137,7 +137,7 @@ $('ptt').onpointercancel=()=>{held=false;stopAll();};
 $('ptt').onkeydown=e=>{if((e.code==='Space'||e.code==='Enter')&&!e.repeat){e.preventDefault();held=true;beginMic();}};
 $('ptt').onkeyup=e=>{if(held&&(e.code==='Space'||e.code==='Enter')){e.preventDefault();held=false;stopMic(false);}};
 
-const serviceNames={orama:['◈','Orama'],gemini:['✦','Gemini'],ollama:['◉','Ollama'],plex:['›','Plex'],jellyfin:['△','Jellyfin'],nas:['▤','NAS']};
+const serviceNames={orama:['◈','Orama'],gemini:['✦','Gemini'],openai:['❖','OpenAI / LLM'],ollama:['◉','Ollama'],plex:['›','Plex'],jellyfin:['△','Jellyfin'],nas:['▤','NAS']};
 const statusNames={online:'Reachable',configured:'Configured',not_configured:'Not configured',unavailable:'Unavailable',unknown:'Not checked'};
 function showStatuses(data={}){
  $('statuses').replaceChildren();for(const [id,[symbol,name]] of Object.entries(serviceNames)){
@@ -149,7 +149,7 @@ function showStatuses(data={}){
  }
 }
 showStatuses();
-async function checkStatus(){try{const result=await jsonCall('/v1/status');showStatuses(result.services);$('status-time').textContent='Checked '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+' · reachability, not device health';$('model-details').textContent=`Gemini: ${result.models.gemini} · Ollama: ${result.models.ollama}`;try{const cfg=await(await fetch('/v1/config')).json();if(cfg?.orama_url)oramaUrl=cfg.orama_url;}catch{}}catch(e){showStatuses();notice(e.name==='AbortError'?'Connection checks timed out.':e.message);}}
+async function checkStatus(){try{const result=await jsonCall('/v1/status');showStatuses(result.services);$('status-time').textContent='Checked '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})+' · reachability, not device health';const m=result.models||{};const parts=[];if(m.gemini)parts.push('Gemini: '+m.gemini);if(m.openai)parts.push('OpenAI: '+m.openai);if(m.ollama)parts.push('Ollama: '+m.ollama);$('model-details').textContent=parts.join(' · ');try{const cfg=await(await fetch(BASE+'/v1/config')).json();if(cfg?.orama_url)oramaUrl=cfg.orama_url;if(cfg?.node_name&&$('node-tag'))$('node-tag').textContent=cfg.node_name;}catch{}}catch(e){showStatuses();notice(e.name==='AbortError'?'Connection checks timed out.':e.message);}}
 async function recommendations(){const result=await jsonCall('/v1/recommendations');renderPicks(result.recommendations||[]);}
 function renderPicks(items){
  $('recommendations').replaceChildren();if(!items.length){const empty=document.createElement('div');empty.className='empty-recommendations';empty.textContent='No picks yet. Configure Plex or Jellyfin and TMDB, then refresh your library.';$('recommendations').append(empty);return;}

@@ -13,6 +13,7 @@ services:
       - path: hermes.env
         required: false
     environment:
+      - NODE_NAME=${NODE_NAME:-Hermes Companion Node}
       - HERMES_API_KEY=${HERMES_API_KEY:-}
       - HERMES_BIND_IP=${HERMES_BIND_IP:-127.0.0.1}
       - ORAMA_URL=${ORAMA_URL:-http://orama:8765}
@@ -25,6 +26,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_TTS_MODEL=${GEMINI_TTS_MODEL:-gemini-3.8-flash-tts}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
       - REFRESH_HOURS=${REFRESH_HOURS:-24}
@@ -59,6 +63,14 @@ services:
     expose:
       - "11434"
     mem_limit: 24g
+    # Uncomment to enable NVIDIA GPU acceleration if available:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
 volumes:
   hermes-data:

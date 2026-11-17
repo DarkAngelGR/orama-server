@@ -46,8 +46,20 @@ def test_hermes_plex_xml_parsing():
 def test_private_server_url_validation():
     assert private_server_url("http://192.168.1.100:32400") == "http://192.168.1.100:32400"
     assert private_server_url("http://localhost:8096") == "http://localhost:8096"
+    assert private_server_url("http://orama:8765") == "http://orama:8765"
+    assert private_server_url("http://plex:32400") == "http://plex:32400"
+    assert private_server_url("http://nas.lan:8765") == "http://nas.lan:8765"
+    assert private_server_url("http://companion.ts.net:8787") == "http://companion.ts.net:8787"
 
     with pytest.raises(ValueError):
         private_server_url("https://malicious-public-site.com")
     with pytest.raises(ValueError):
         private_server_url("http://127.0.0.1@evil.com")
+
+
+def test_hermes_chat_request_providers():
+    from hermes.conversation import ChatRequest
+    req = ChatRequest(message="Hello", provider="openai")
+    assert req.provider == "openai"
+    req_auto = ChatRequest(message="Hello")
+    assert req_auto.provider == "auto"

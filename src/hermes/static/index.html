@@ -37,7 +37,7 @@
     <div class="entry-intro">
       <div class="eyebrow">AI-NATIVE VOICE & DISCOVERY</div>
       <h1>Speak, discover, and request.</h1>
-      <p class="lead">Personalized recommendations from your Plex and Jellyfin watch history, powered by Gemini and Ollama with neural speech synthesis.</p>
+      <p class="lead">Personalized recommendations from your Plex and Jellyfin watch history, powered by your choice of Gemini, OpenAI, or local Ollama models with neural speech synthesis.</p>
     </div>
 
     <!-- Home Golden Ratio Grid (1.618fr : 1fr) -->
@@ -52,6 +52,7 @@
               <h2>Hermes Conversation</h2>
             </div>
             <div class="panel-actions">
+              <span class="lang-tag" id="node-tag">Hermes</span>
               <span class="lang-tag">EN / EL</span>
               <button id="clear" class="button button-quiet" type="button">New Chat ↗</button>
             </div>
@@ -223,8 +224,9 @@
       <label class="form-group">
         <span>Conversation Model</span>
         <select id="provider">
-          <option value="auto">Gemini → Ollama Fallback</option>
+          <option value="auto">Auto (Gemini → OpenAI → Ollama)</option>
           <option value="gemini">Gemini Only</option>
+          <option value="openai">OpenAI / OpenRouter / LocalAI</option>
           <option value="ollama">Ollama Only (Local)</option>
         </select>
       </label>

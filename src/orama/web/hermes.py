@@ -114,7 +114,10 @@ def _pages() -> Blueprint:
 
     @pages.get("/v1/config")
     def config():
-        return jsonify({"orama_url": ""})
+        return jsonify({
+            "orama_url": "",
+            "node_name": os.environ.get("NODE_NAME", "Orama Embedded Node"),
+        })
 
     @pages.get("/v1/status")
     def status():

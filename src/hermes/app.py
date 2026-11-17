@@ -298,7 +298,10 @@ def voices():
 
 @app.get("/v1/config")
 def config():
-    return {"orama_url": os.environ.get("ORAMA_URL", "")}
+    return {
+        "orama_url": os.environ.get("ORAMA_URL", ""),
+        "node_name": os.environ.get("NODE_NAME", "Hermes Companion Node"),
+    }
 
 
 @app.get("/v1/status", dependencies=[Depends(require_auth)])

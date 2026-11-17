@@ -26,7 +26,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     message: str = Field(min_length=1, max_length=2000)
     history: list[Message] = Field(default_factory=list, max_length=20)
-    provider: Literal['auto', 'gemini', 'ollama'] = 'auto'
+    provider: Literal['auto', 'gemini', 'ollama', 'openai'] = 'auto'
 
     @field_validator('message')
     @classmethod
@@ -62,6 +62,13 @@ async def provider_tokens(req, client, provider):
                              'parts':[{'text':m['content']}]} for m in history],
                 'generationConfig':{'temperature':0.5,'maxOutputTokens':2048}}
         headers = {'x-goog-api-key':key}
+    elif provider == 'openai':
+        base = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')
+        key = os.environ.get('OPENAI_API_KEY', '')
+        model = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        url = f'{base}/chat/completions'
+        data = {'model': model, 'messages': [{'role':'system','content':SYSTEM}]+history, 'stream': True}
+        headers = {'Authorization': f'Bearer {key}'} if key else {}
     else:
         url = private_server_url(os.environ.get('OLLAMA_URL','http://ollama:11434')) + '/api/chat'
         data = {'model':os.environ.get('OLLAMA_MODEL','llama3.1:8b'),
@@ -69,11 +76,12 @@ async def provider_tokens(req, client, provider):
                 'stream':True,'options':{'num_predict':700}}
         headers = {}
     completed = False
-    async with asyncio.timeout(100 if provider == 'ollama' else 40):
+    timeout_sec = 100 if provider == 'ollama' else 45
+    async with asyncio.timeout(timeout_sec):
         async with client.stream('POST', url, json=data, headers=headers,
                                  timeout=httpx.Timeout(30, connect=5), follow_redirects=False) as res:
             res.raise_for_status()
-            async for obj in json_lines(res, sse=provider=='gemini'):
+            async for obj in json_lines(res, sse=provider in ('gemini', 'openai')):
                 if provider == 'gemini':
                     for candidate in obj.get('candidates', []):
                         if candidate.get('finishReason'):
@@ -83,6 +91,15 @@ async def provider_tokens(req, client, provider):
                         for part in candidate.get('content',{}).get('parts',[]):
                             if not part.get('thought') and isinstance(part.get('text'),str):
                                 yield part['text']
+                elif provider == 'openai':
+                    choices = obj.get('choices', [])
+                    if choices:
+                        delta = choices[0].get('delta', {})
+                        text = delta.get('content', '')
+                        if text and isinstance(text, str):
+                            yield text
+                        if choices[0].get('finish_reason'):
+                            completed = True
                 else:
                     text = obj.get('message',{}).get('content','')
                     if not isinstance(text,str):
@@ -96,7 +113,13 @@ async def provider_tokens(req, client, provider):
 
 
 async def stream_chat(req, client):
-    choices = ['gemini','ollama'] if req.provider == 'auto' else [req.provider]
+    if req.provider == 'auto':
+        choices = []
+        if os.environ.get('GEMINI_API_KEY'): choices.append('gemini')
+        if os.environ.get('OPENAI_API_KEY') or os.environ.get('OPENAI_BASE_URL'): choices.append('openai')
+        choices.append('ollama')
+    else:
+        choices = [req.provider]
     for provider in choices:
         count = 0
         yield {'type':'provider','provider':provider}

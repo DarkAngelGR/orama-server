@@ -50,7 +50,7 @@ def test_hermes_static_served(client):
 def test_hermes_config_public(client):
     res = client.get("/hermes/v1/config", headers=HEADERS)
     assert res.status_code == 200
-    assert res.json == {"orama_url": ""}
+    assert res.json == {"orama_url": "", "node_name": "Orama Embedded Node"}
 
 
 def test_hermes_api_endpoints_signed_in(signed):

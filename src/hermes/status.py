@@ -35,14 +35,20 @@ async def service_status(client):
             probe(client,jelly,'/System/Info',{'X-Emby-Token':os.environ.get('JELLYFIN_API_KEY','')}),
             probe(client,os.environ.get('NAS_HEALTH_URL',''),'/'),
             probe(client,orama_url,'/healthz'))
+        openai_key = os.environ.get('OPENAI_API_KEY', '')
+        openai_base = os.environ.get('OPENAI_BASE_URL', '')
+        openai_status = 'configured' if (openai_key or openai_base) else 'not_configured'
         _cache = {'checked_at':time.time(), 'services':{
             'orama':{'status':orama_state,'detail':'Orama server media request and management system.'},
             'gemini':{'status':'configured' if os.environ.get('GEMINI_API_KEY') else 'not_configured',
                       'detail':'Availability and quota are checked when you send a message.'},
+            'openai':{'status':openai_status,
+                      'detail':'OpenAI-compatible LLM endpoint (LM Studio, vLLM, OpenRouter, Groq, or OpenAI).'},
             'ollama':{'status':ollama,'detail':'Service reachability; the configured model must also be installed.'},
             'plex':{'status':plex_state},'jellyfin':{'status':jelly_state},
             'nas':{'status':nas,'detail':'HTTP endpoint reachability only; not disk or RAID health.'}},
             'models':{'gemini':os.environ.get('GEMINI_MODEL','gemini-2.5-flash'),
+                      'openai':os.environ.get('OPENAI_MODEL','gpt-4o-mini'),
                       'ollama':os.environ.get('OLLAMA_MODEL','llama3.1:8b')}}
         _checked = time.monotonic()
         return _cache

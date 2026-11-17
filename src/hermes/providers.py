@@ -20,9 +20,13 @@ def private_server_url(value: str) -> str:
         ip = ipaddress.ip_address(host)
         ok = ip.is_private or ip.is_loopback
     except ValueError:
-        ok = host in ("localhost", "ollama") or host.endswith(".local")
+        ok = (
+            host in ("localhost", "ollama", "orama", "orama-server", "plex", "jellyfin", "emby")
+            or "." not in host
+            or any(host.endswith(suffix) for suffix in (".local", ".lan", ".home", ".internal", ".ts.net", ".home.arpa"))
+        )
     if not ok:
-        raise ValueError("Media server must use a private address or .local hostname")
+        raise ValueError(f"Media server must use a private address, Docker container name, or local domain (got '{host}')")
     return value.rstrip("/")
 
 
