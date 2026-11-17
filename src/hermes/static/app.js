@@ -35,11 +35,18 @@ async function unlockAudio(){
 }
 $('volume').oninput=()=>{if(gain)gain.gain.value=Number($('volume').value);};
 $('speak').onchange=()=>{if(!$('speak').checked){const wasVoice=voiceController||sources.size;stopAudio();if(wasVoice)state('idle');}};
+const BASE = window.location.pathname.startsWith('/hermes') ? '/hermes' : '';
+const oramaSession = document.querySelector('meta[name="orama-session"]')?.content;
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+
 async function call(path,body,signal){
- if(!apiKey)throw Error('Connect your workspace in settings first.');
-  const res=await fetch(path,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+apiKey,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal,cache:'no-store'});
-  if(!res.ok){if(res.status===401){$('connection-label').textContent='Reconnect required';$('connect-open').classList.remove('connected');}
-   throw Error(({401:'Your Hermes key was not accepted. Reconnect in settings.',422:'Please check the message and voice settings.',429:'Hermes is busy. Wait a moment and try again.',503:'The service is unavailable. Check your server settings.'})[res.status]||`Request failed (${res.status}). Please try again.`);}
+ if(!apiKey && !oramaSession)throw Error('Connect your workspace in settings first.');
+  const headers = body===undefined?{}:{'Content-Type':'application/json'};
+  if(apiKey) headers['Authorization'] = 'Bearer '+apiKey;
+  if(csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  const res=await fetch(BASE + path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body),signal,cache:'no-store'});
+  if(!res.ok){if(res.status===401){$('connection-label').textContent=oramaSession?'Sign-in required':'Reconnect required';$('connect-open').classList.remove('connected');}
+   throw Error(({401:oramaSession?'Your Orama session expired. Refresh the page to sign in again.':'Your Hermes key was not accepted. Reconnect in settings.',422:'Please check the message and voice settings.',429:'Hermes is busy. Wait a moment and try again.',503:'The service is unavailable. Check your server settings.'})[res.status]||`Request failed (${res.status}). Please try again.`);}
   return res;
  }
 async function jsonCall(path,body){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),90000);try{return await(await call(path,body,controller.signal)).json();}finally{clearTimeout(timer);}}
@@ -78,7 +85,7 @@ async function speak(text,turn){
 }
 async function send(message){
  message=message.trim();if(!message)return;
- if(!apiKey){notice('Connect Hermes using your application key to start a conversation.');openSettings();return;}
+ if(!apiKey && !oramaSession){notice('Connect Hermes using your application key to start a conversation.');openSettings();return;}
  const prior=contextHistory();stopAll();const turn=guard.next();activeTurn=turn;
  // Resume synchronously from the user's gesture, before the network round trip.
  void unlockAudio();notice('');state('processing');$('send').disabled=true;
@@ -114,7 +121,7 @@ const micSupported=!!Recognition&&window.isSecureContext;
 if(!micSupported){$('mic').disabled=true;$('ptt').disabled=true;$('mic-help').textContent=window.isSecureContext?'Voice input unavailable · use keyboard dictation':'Open Jarvis over HTTPS for voice input';}
 else $('mic-help').textContent='Tap mic to toggle · hold to talk';
 function beginMic(){
- if(!micSupported)return;if(!apiKey){openSettings();notice('Connect your workspace before using the microphone.');return;}
+ if(!micSupported)return;if(!apiKey && !oramaSession){openSettings();notice('Connect your workspace before using the microphone.');return;}
  stopAll();void unlockAudio();notice('');const turn=guard.next(),rec=new Recognition();recognition=rec;let transcript='';let failed=false;
  rec.lang=$('language').value;rec.interimResults=true;rec.continuous=true;
  rec.onresult=e=>{if(!guard.current(turn.id))return;transcript=Array.from(e.results).map(r=>r[0].transcript).join(' ').trim().slice(0,2000);$('message').value=transcript;};
@@ -163,7 +170,7 @@ function renderPicks(items){
 }
 async function loadVoices(){const data=await jsonCall('/v1/voices');const selected=$('local-voice').value;$('local-voice').replaceChildren(new Option('Match selected language','auto'));for(const v of data.local_voices||[]){if(v.language===$('language').value)$('local-voice').add(new Option(v.name+(v.available?'':' · not installed'),v.id));}if(Array.from($('local-voice').options).some(o=>o.value===selected))$('local-voice').value=selected;$('voice-availability').textContent=(data.local_voices||[]).filter(v=>v.available).length+' local voices installed. Missing voices need server setup.';}
 function voiceSummary(){$('voice-summary').replaceChildren(document.createTextNode($('tts-provider').value==='piper'?'Piper · local':$('voice').value));const small=document.createElement('small');small.textContent=$('language').value+' · '+($('tts-provider').value==='auto'?'automatic fallback':$('tts-provider').value);$('voice-summary').append(small);}
-for(const id of ['language','voice','tts-provider','local-voice'])$(id).onchange=()=>{stopAll();voiceSummary();if(id==='language'){$('local-voice').value='auto';if(apiKey)loadVoices().catch(e=>notice(e.message));}};
+for(const id of ['language','voice','tts-provider','local-voice'])$(id).onchange=()=>{stopAll();voiceSummary();if(id==='language'){$('local-voice').value='auto';if(apiKey||oramaSession)loadVoices().catch(e=>notice(e.message));}};
 $('connect').onclick=async()=>{
  stopAll();apiKey=$('key').value.trim();$('key').value='';$('connect').disabled=true;notice('');
  try{await loadVoices();$('settings').close();$('connection-label').textContent='Workspace connected';$('connect-open').classList.add('connected');await Promise.all([checkStatus(),recommendations()]);}
@@ -171,4 +178,9 @@ $('connect').onclick=async()=>{
 };
 $('status-refresh').onclick=()=>void checkStatus();
 $('refresh').onclick=async()=>{$('refresh').disabled=true;$('refresh').textContent='Finding your next favorite…';notice('');try{await jsonCall('/v1/refresh',{});await recommendations();}catch(e){notice(e.name==='AbortError'?'Refresh timed out. Existing picks are preserved.':e.message);}finally{$('refresh').disabled=false;$('refresh').textContent='Refresh picks ↻';}};
-setInterval(()=>{if(apiKey&&!document.hidden)void checkStatus();},60000);
+if(oramaSession){
+  $('connection-label').textContent='Orama connected';
+  $('connect-open').classList.add('connected');
+  Promise.all([loadVoices(), checkStatus(), recommendations()]).catch(()=>{});
+}
+setInterval(()=>{if((apiKey||oramaSession)&&!document.hidden)void checkStatus();},60000);

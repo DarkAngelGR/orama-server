@@ -46,11 +46,19 @@ src/hermes/
 
 ---
 
-## Deployment & Configuration
+## Deployment & Integration Modes
 
-### Docker Compose
-Run Hermes using `docker-compose.hermes.yml`:
+Hermes supports two deployment architectures:
 
+### 1. Unified Orama Mount (Single Server & Port)
+Hermes is natively mounted into Orama's Flask web server:
+- **URL**: `http://<orama-host>:8765/hermes/`
+- **Navigation**: Click **Hermes** in Orama's top navigation bar (between Apps and Settings).
+- **Zero-Config Authentication**: Logged-in Orama users are authenticated automatically via their existing session cookie with CSRF protection; no manual API key entry is needed.
+- **Single Port**: Everything runs on Orama's default port `8765`.
+
+### 2. Standalone Container
+Hermes can also run as an independent microservice container on port `8787`:
 ```bash
 docker compose -f docker-compose.hermes.yml build hermes
 docker compose -f docker-compose.hermes.yml up -d hermes

@@ -28,6 +28,7 @@ from orama.web import auth, hooks, security
 from orama.web.app_icons import register_app_icons
 from orama.web.apps import disk_warning, register_apps, running_summary
 from orama.web.assets import configure_assets
+from orama.web.hermes import register_hermes
 from orama.web.hooks import register_hooks
 from orama.web.jobs import JobRunner, register_jobs, store_redactor
 from orama.web.plex import register_plex
@@ -169,6 +170,7 @@ def create_app(
     register_hooks(app)
     register_posters(app)
     register_requests(app)
+    register_hermes(app)
     return app
 
 
@@ -221,8 +223,17 @@ def _check_request():
         g.session = session
         g.principal = session.principal
     # 6. CSRF on every state-changing request.
-    if request.method in security.UNSAFE_METHODS and not security.csrf_ok():
-        return rejected(security.CSRF_REJECTED, 403)
+    if request.method in security.UNSAFE_METHODS:
+        auth_hdr = request.headers.get("Authorization", "")
+        token = os.environ.get("HERMES_API_KEY", os.environ.get("JARVIS_API_KEY", ""))
+        is_hermes_bearer = (
+            request.path.startswith("/hermes/v1/")
+            and bool(token)
+            and len(token) >= 32
+            and auth_hdr == f"Bearer {token}"
+        )
+        if not is_hermes_bearer and not security.csrf_ok():
+            return rejected(security.CSRF_REJECTED, 403)
     return None
 
 

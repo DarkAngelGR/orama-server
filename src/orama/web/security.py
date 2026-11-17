@@ -143,6 +143,14 @@ def add_security_headers(response):
     for name in [k for k, _ in response.headers.items() if k.lower().startswith("access-control-")]:
         del response.headers[name]
     response.headers.update(SECURITY_HEADERS)
+    if request.path.startswith("/hermes"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' https://image.tmdb.org; media-src 'self' blob:; "
+            "connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'"
+        )
+        response.headers["Permissions-Policy"] = "microphone=(self), camera=()"
     if request.endpoint != "static" or response.status_code not in (200, 304):
         response.headers["Cache-Control"] = "no-store"
         response.headers.pop("Expires", None)
