@@ -1,0 +1,27 @@
+<section class="settings-section" id="app-connections" aria-labelledby="app-connections-title">
+  <h2 id="app-connections-title">App connections</h2>
+  <p class="field-help">API credentials for apps you already run outside Orama. Orama tests each key against your app before saving it.</p>
+  <div class="app-connections-list">
+    {% for item in app_connections %}
+    <div class="app-connection-item">
+      <div class="app-connection-header">
+        <h3>{{ item.name }}</h3>
+        {% if item.saved %}
+        <span class="app-badge-saved">Saved</span>
+        {% else %}
+        <span class="app-badge-missing">Not configured</span>
+        {% endif %}
+      </div>
+      <p class="field-help">{{ item.help_text }}</p>
+      <form method="post" action="/settings/app-connections/{{ item.app }}" class="wizard-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field">
+          <label for="{{ item.app }}-api-key">{{ item.name }} API key</label>
+          <input id="{{ item.app }}-api-key" name="key" type="password" autocomplete="new-password">
+        </div>
+        <div class="wizard-actions">{{ button('Test and save') }}</div>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</section>

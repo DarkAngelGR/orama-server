@@ -9,6 +9,7 @@
     <ul>
       {% for s in sections %}<li><a href="#{{ s.key }}">{{ s.title }}</a></li>{% endfor %}
       <li><a href="#requests-policy">Requests and storage</a></li>
+      {% if app_connections %}<li><a href="#app-connections">App connections</a></li>{% endif %}
       <li><a href="#indexers">Indexers</a></li>
       <li><a href="#addresses">Addresses</a></li>
       {% if graphics_found %}<li><a href="#graphics">Graphics</a></li>{% endif %}
@@ -54,6 +55,8 @@
       <div class="wizard-actions">{{ button('Save') }}</div>
     </form>
   </section>
+
+  {% if app_connections %}{% include "settings/_app_connections.html" %}{% endif %}
 
   <section class="settings-section" id="indexers" aria-labelledby="indexers-title">
     <h2 id="indexers-title">Indexers</h2>

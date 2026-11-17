@@ -24,7 +24,8 @@ from pydantic import ValidationError
 from orama import state
 from orama.agent_client import AgentError
 from orama.secrets import SecretStore
-from orama.setup_model import MAX_EXTRA_HOST_NAMES, DesiredSetup
+from orama.setup_model import MAX_EXTRA_HOST_NAMES, DesiredSetup, enabled_apps
+from orama.web import app_connections as _app_connections
 from orama.web import auth, catalogue, draft, forms, security
 from orama.web.draft import undo_candidate as _undo_candidate
 from orama.web.draft import write_back as _write_back
@@ -254,10 +255,20 @@ def _pages() -> Blueprint:
             message = UPDATE_STARTED
         elif not message and saved == "current":
             message = UP_TO_DATE
+        elif not message and saved.startswith("app-"):
+            app_key = saved.removeprefix("app-")
+            app_meta = _app_connections.APP_METADATA.get(app_key)
+            app_label = app_meta["name"] if app_meta else app_key.capitalize()
+            message = f"{app_label} API key saved."
         req_override = overrides.get("requests", {})
         request_values = (
             req_override.get("values")
             or (forms.read_requests(setup, st.store) if setup else {})
+        )
+        app_conns = (
+            _app_connections.get_adopted_app_connections(setup, st.store)
+            if (setup is not None and not has_draft)
+            else []
         )
         return render_template(
             "settings/index.html", setup=setup, draft=has_draft, sections=sections, job=job,
@@ -268,7 +279,7 @@ def _pages() -> Blueprint:
             password_errors=overrides.get("password", {}).get("errors", {}),
             indexer_count=len(setup.indexers) if setup else 0,
             usenet_count=len(setup.usenet_servers) if setup else 0,
-            max_names=MAX_EXTRA_HOST_NAMES, **extra,
+            max_names=MAX_EXTRA_HOST_NAMES, app_connections=app_conns, **extra,
         ), status
 
     @pages.get("/settings")
@@ -780,5 +791,45 @@ def _pages() -> Blueprint:
         if action not in ("test", "remove"):
             abort(404)
         return change_entry("usenet", action, slug)
+
+    @pages.post("/settings/app-connections/<app>")
+    @auth.requires("settings")
+    def app_connection(app: str):
+        if app not in _app_connections.SUPPORTED_APPS:
+            abort(404)
+        st = auth.web_state()
+        path = st.state_dir / SETUP_FILE
+        if not path.exists():
+            return render_template(
+                "rejected.html",
+                message="Orama has no setup to change yet. Finish the setup first.",
+            ), 409
+        if (st.state_dir / DRAFT_FILE).exists():
+            return draft_page()
+        setup = _load(st, SETUP_FILE)
+        if setup is None or app not in enabled_apps(setup) or app not in setup.adopted_apps:
+            abort(404)
+
+        raw_key = request.form.get("key", "")
+        key, err = _app_connections.validate_key_input(raw_key)
+        if err:
+            return render_page(400, message=err, problem=True)
+
+        try:
+            with apply_operation(st):
+                job = st.jobs.current()
+                if job and job.status == "running":
+                    raise state.Busy
+                with state.locked(state.apply_lock(st.state_dir), blocking=False):
+                    if (st.state_dir / DRAFT_FILE).exists():
+                        return draft_page()
+                    error = _app_connections.probe_key(app, setup, key, st.http)
+                    if error:
+                        return render_page(400, message=error, problem=True)
+                    st.store.set(f"apikey:{app}", key)
+        except state.Busy:
+            return render_page(409, message=TEST_BUSY, problem=True)
+
+        return redirect(f"/settings?saved=app-{app}", 303)
 
     return pages
