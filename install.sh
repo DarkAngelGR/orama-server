@@ -24,6 +24,7 @@ NVIDIA_CDI_SPECS="${NVIDIA_CDI_SPECS:-/etc/cdi/nvidia.yaml /var/run/cdi/nvidia.y
 SS_BIN="${SS_BIN:-ss}"
 IP_BIN="${IP_BIN:-ip}"
 PROC_NET_ROUTE="${PROC_NET_ROUTE:-/proc/net/route}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 DRY_RUN="${DRY_RUN:-0}"
 
 INSTALL_URL="https://raw.githubusercontent.com/DarkAngelGR/orama-server/main/install.sh"
@@ -288,6 +289,141 @@ prepare_config_root() {
   fi
   run mkdir -p -- "$CONFIG_ROOT"
   run chmod 0755 -- "$CONFIG_ROOT"
+}
+
+# Discover eligible storage volumes and write root-owned storage_candidates.json.
+# shellcheck disable=SC2016  # Python source, not shell
+STORAGE_DISCOVERY_PY='
+import json, os, sys
+
+config_root, data_root, mounts_file, puid, pgid, out_path = sys.argv[1:7]
+puid, pgid = int(puid), int(pgid)
+
+candidates = [
+    {
+        "id": "cand_default",
+        "label": f"Default storage ({data_root})",
+        "mount_point": "/",
+        "prepared_path": data_root,
+        "filesystem": "default",
+        "default_app_folder": "apps",
+        "default_data_folder": "data",
+    }
+]
+
+if config_root != data_root:
+    candidates.append({
+        "id": "cand_config",
+        "label": f"Control storage ({config_root})",
+        "mount_point": config_root,
+        "prepared_path": f"{config_root}/config",
+        "filesystem": "default",
+        "default_app_folder": "apps",
+        "default_data_folder": "data",
+    })
+
+SYSTEM_MOUNTS = {
+    "/", "/boot", "/dev", "/proc", "/sys", "/run", "/etc", "/tmp", "/var",
+    "/usr", "/home", "/bin", "/sbin", "/lib", "/lib64", "/opt"
+}
+ALLOWED_FS = {"ext4", "btrfs", "xfs", "zfs", "nfs", "nfs4", "fuse.rclone", "cifs", "smb3"}
+
+if os.path.exists(mounts_file):
+    try:
+        with open(mounts_file, "r", encoding="utf-8") as f:
+            idx = 1
+            seen_mounts = {c["mount_point"] for c in candidates}
+            seen_paths = {c["prepared_path"] for c in candidates}
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 3:
+                    src, target, fstype = parts[0], parts[1], parts[2]
+                    if fstype not in ALLOWED_FS:
+                        continue
+                    if target in SYSTEM_MOUNTS or any(
+                        target.startswith(sm + "/") for sm in ["/boot", "/dev", "/proc", "/sys", "/run"]
+                    ):
+                        continue
+                    if target in seen_mounts:
+                        continue
+                    seen_mounts.add(target)
+                    prep_path = target.rstrip("/") + "/orama-data"
+                    if prep_path in seen_paths:
+                        continue
+                    seen_paths.add(prep_path)
+                    candidates.append({
+                        "id": f"cand_{idx:02d}",
+                        "label": f"{target} ({fstype})",
+                        "mount_point": target,
+                        "prepared_path": prep_path,
+                        "filesystem": fstype,
+                        "default_app_folder": "apps",
+                        "default_data_folder": "data",
+                    })
+                    idx += 1
+    except Exception:
+        pass
+
+doc = {
+    "version": 1,
+    "config_root": config_root,
+    "data_root": data_root,
+    "candidates": candidates,
+}
+
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+'
+
+prepare_storage_candidates() {
+  local manifest="$CONFIG_ROOT/storage_candidates.json"
+  if [[ -f "$manifest" ]]; then
+    return 0
+  fi
+  if is_dry_run; then
+    say "+ write $manifest (0600)"
+    return 0
+  fi
+
+  local mounts_file="${PROC_MOUNTS_FILE:-/proc/mounts}"
+  local tmp_manifest
+  tmp_manifest=$(mktemp "$CONFIG_ROOT/.storage_candidates.XXXXXX")
+
+  if command -v "$PYTHON_BIN" > /dev/null 2>&1 && "$PYTHON_BIN" -c "import sys" > /dev/null 2>&1; then
+    "$PYTHON_BIN" -c "$STORAGE_DISCOVERY_PY" "$CONFIG_ROOT" "$DATA_ROOT" "$mounts_file" "$PUID" "$PGID" "$tmp_manifest"
+  else
+    cat << JSONEOF > "$tmp_manifest"
+{
+  "version": 1,
+  "config_root": "$CONFIG_ROOT",
+  "data_root": "$DATA_ROOT",
+  "candidates": [
+    {
+      "id": "cand_default",
+      "label": "Default storage ($DATA_ROOT)",
+      "mount_point": "/",
+      "prepared_path": "$DATA_ROOT",
+      "filesystem": "default",
+      "default_app_folder": "apps",
+      "default_data_folder": "data"
+    },
+    {
+      "id": "cand_config",
+      "label": "Control storage ($CONFIG_ROOT)",
+      "mount_point": "$CONFIG_ROOT",
+      "prepared_path": "$CONFIG_ROOT/config",
+      "filesystem": "default",
+      "default_app_folder": "apps",
+      "default_data_folder": "data"
+    }
+  ]
+}
+JSONEOF
+  fi
+
+  chmod 0600 "$tmp_manifest"
+  mv -f "$tmp_manifest" "$manifest"
 }
 
 # Create the data folder only if it is missing; an existing one is never changed.
@@ -594,6 +730,7 @@ main() {
   taken=$(taken_ports)
 
   prepare_config_root
+  prepare_storage_candidates
   run_bootstrap "$platform" "$docker_gid" "$render_gid" "$nvidia" "$taken"
   prepare_data_root
   start_core

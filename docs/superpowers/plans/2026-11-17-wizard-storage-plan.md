@@ -89,20 +89,20 @@ Update `install.sh` to safely discover host filesystem volumes, prepare dedicate
 - `install.sh`
 - `tests/test_installer.py` (or installer unit tests)
 
-- [ ] **Step 1: Write test for installer candidate manifest structure and safety**
+- [x] **Step 1: Write test for installer candidate manifest structure and safety**
   - Verify `storage_candidates.json` schema:
     - `version`: int (1)
     - `candidates`: list of `{ id: str, label: str, mount_point: str, prepared_path: str, filesystem: str, default_folder: str }`
   - Verify that system mounts (`/`, `/boot`, `/dev`, `/proc`, `/sys`, `/run`) are never offered as raw general destinations without dedicated subfolder sandboxing.
   - Verify permissions: mode `0600`, owned by `root:root`, stored inside `<config_root>/storage_candidates.json`.
 
-- [ ] **Step 2: Implement volume discovery in `install.sh`**
+- [x] **Step 2: Implement volume discovery in `install.sh`**
   - Scan mounts via `findmnt` or `/proc/mounts`, filtering for ext4, btrfs, zfs, xfs.
   - For each eligible mount, establish a dedicated Orama directory (e.g. `<mount>/orama-data`) with ownership `PUID:PGID` and mode `0775`.
   - Always register the default candidate pointing to the installer's configured `--data-root` and `--config-root`.
   - Atomically write `<config_root>/storage_candidates.json`.
 
-- [ ] **Step 3: ShellCheck and installer verification**
+- [x] **Step 3: ShellCheck and installer verification**
   - Run `uvx --from shellcheck-py shellcheck install.sh`.
 
 ---

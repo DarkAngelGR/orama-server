@@ -4,8 +4,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "install.sh"
+BASH = shutil.which("bash") or ("C:/Program Files/Git/bin/bash.exe" if Path("C:/Program Files/Git/bin/bash.exe").exists() else "bash")
 FIXTURES = Path(__file__).parent / "fixtures" / "os-release"
 UBUNTU, DEBIAN, UGOS, FEDORA = (
     str(FIXTURES / n) for n in ("ubuntu-24.04", "debian-12", "ugos-pro", "fedora-40")
@@ -22,15 +25,21 @@ AWKWARD_ROOT = AWKWARD.replace(":", "&")  # Docker cannot mount a path with ":"
 
 
 def _env(**overrides):
-    env = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/root"), "LANG": "C.UTF-8"}
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ.get("HOME", "/root"),
+        "LANG": "C.UTF-8",
+        "PYTHON_BIN": sys.executable.replace("\\", "/"),
+    }
     env.update({k: str(v) for k, v in overrides.items()})
     return env
 
 
 def run_fn(fn, *, merge=True, **env):
     """Source install.sh and run ``fn``; stderr is merged into stdout unless ``merge=False``."""
+    script_path = str(SCRIPT).replace("\\", "/")
     return subprocess.run(
-        ["bash", "-c", f"source {shlex.quote(str(SCRIPT))}; {fn}"],
+        [BASH, "-c", f"source {shlex.quote(script_path)}; {fn}"],
         check=False,
         env=_env(**env),
         cwd=REPO_ROOT,
@@ -793,3 +802,67 @@ def test_main_prints_the_link_with_the_code():
     text = SCRIPT.read_text()
     assert 'print_address "$ORAMA_PORT" "$ORAMA_CODE"' in text
     assert "tee" not in text and ">> " not in text  # the code is never written to a log
+
+
+def test_prepare_storage_candidates_creates_manifest(tmp_path):
+    config = tmp_path / "c"
+    config.mkdir()
+    data = tmp_path / "d"
+    data.mkdir()
+    cfg_p, data_p = config.as_posix(), data.as_posix()
+    out = run_fn(
+        f'CONFIG_ROOT={shlex.quote(cfg_p)} DATA_ROOT={shlex.quote(data_p)} '
+        'PUID=1000 PGID=1000; prepare_storage_candidates'
+    )
+    assert out.returncode == 0, out.stdout
+    manifest = config / "storage_candidates.json"
+    assert manifest.is_file()
+    doc = json.loads(manifest.read_text(encoding="utf-8"))
+    assert doc["version"] == 1
+    assert doc["config_root"] == cfg_p
+    assert doc["data_root"] == data_p
+    ids = [c["id"] for c in doc["candidates"]]
+    assert "cand_default" in ids
+    assert "cand_config" in ids
+
+
+def test_prepare_storage_candidates_discovers_extra_mounts(tmp_path):
+    config = tmp_path / "c"
+    config.mkdir()
+    data = tmp_path / "d"
+    data.mkdir()
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        "/dev/sda1 / ext4 rw 0 0\n"
+        "/dev/sdb1 /volume2 btrfs rw 0 0\n"
+        "/dev/sdc1 /boot ext4 rw 0 0\n"
+        "/dev/sdd1 /sys/fs/cgroup cgroup2 rw 0 0\n"
+        "/dev/sde1 /mnt/storage xfs rw 0 0\n"
+    )
+    cfg_p, data_p, m_p = config.as_posix(), data.as_posix(), mounts.as_posix()
+    out = run_fn(
+        f'CONFIG_ROOT={shlex.quote(cfg_p)} DATA_ROOT={shlex.quote(data_p)} '
+        f'PROC_MOUNTS_FILE={shlex.quote(m_p)} PUID=1000 PGID=1000; prepare_storage_candidates'
+    )
+    assert out.returncode == 0, out.stdout
+    doc = json.loads((config / "storage_candidates.json").read_text(encoding="utf-8"))
+    mount_points = [c["mount_point"] for c in doc["candidates"]]
+    assert "/volume2" in mount_points
+    assert "/mnt/storage" in mount_points
+    assert "/boot" not in mount_points
+    assert "/sys/fs/cgroup" not in mount_points
+
+
+def test_prepare_storage_candidates_idempotent(tmp_path):
+    config = tmp_path / "c"
+    config.mkdir()
+    manifest = config / "storage_candidates.json"
+    manifest.write_text('{"custom": true}')
+    cfg_p = config.as_posix()
+    out = run_fn(
+        f'CONFIG_ROOT={shlex.quote(cfg_p)} DATA_ROOT=/srv/d PUID=1000 PGID=1000; '
+        'prepare_storage_candidates'
+    )
+    assert out.returncode == 0, out.stdout
+    assert manifest.read_text() == '{"custom": true}'
+
