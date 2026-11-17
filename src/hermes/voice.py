@@ -101,10 +101,10 @@ async def gemini_audio(req, client):
                 'generationConfig':{'responseModalities':['AUDIO'],
                     'speechConfig':{'voiceConfig':{'prebuiltVoiceConfig':{'voiceName':req.voice}}}}}
     total = 0
-    completed = False
-    async with asyncio.timeout(45):
+    pcm_buf = bytearray()
+    async with asyncio.timeout(60):
         async with client.stream('POST',url,headers={'x-goog-api-key':key},json=body,
-                                 timeout=httpx.Timeout(25,connect=5),follow_redirects=False) as res:
+                                 timeout=httpx.Timeout(60.0, connect=10.0, read=40.0),follow_redirects=False) as res:
             res.raise_for_status()
             if not modern and model.startswith('gemini-2.5-'):
                 data = bytearray()
@@ -121,20 +121,21 @@ async def gemini_audio(req, client):
                 events = json_lines(res,sse=True,limit=MAX_AUDIO,total_limit=24_000_000)
             async for event in events:
                 if modern:
-                    if event.get('event_type') == 'interaction.complete':
-                        completed = True
                     delta = event.get('delta',{})
                     chunks = [delta] if delta.get('type') == 'audio' else []
                 else:
                     chunks = []
                     for candidate in event.get('candidates',[]):
-                        if candidate.get('finishReason') == 'STOP':
-                            completed = True
                         for part in candidate.get('content',{}).get('parts',[]):
                             if 'inlineData' in part:
                                 chunks.append(part['inlineData'])
                 for chunk in chunks:
-                    raw = base64.b64decode(chunk.get('data',''),validate=True)
+                    b64_data = chunk.get('data','')
+                    if not b64_data:
+                        continue
+                    raw = base64.b64decode(b64_data,validate=True)
+                    if not raw:
+                        continue
                     total += len(raw)
                     if total > MAX_AUDIO:
                         raise ValueError('Audio limit')
@@ -142,9 +143,18 @@ async def gemini_audio(req, client):
                         mime = chunk.get('mimeType','')
                         if 'audio/L16' not in mime and 'audio/l16' not in mime and 'audio/pcm' not in mime:
                             raise ValueError('Unsupported audio format')
-                    yield wav_bytes(raw)
-    if not total or not completed:
-        raise ValueError('Incomplete audio response')
+                    pcm_buf.extend(raw)
+                    usable = len(pcm_buf) - (len(pcm_buf) % 2)
+                    if usable > 0:
+                        to_send = bytes(pcm_buf[:usable])
+                        pcm_buf = bytearray(pcm_buf[usable:])
+                        yield wav_bytes(to_send)
+    if pcm_buf:
+        if len(pcm_buf) % 2:
+            pcm_buf.append(0)
+        yield wav_bytes(bytes(pcm_buf))
+    if not total:
+        raise ValueError('No audio response received')
 
 
 async def local_audio(req):
@@ -195,8 +205,10 @@ async def stream_voice(req, client):
             return
         except FAILURES + (OSError,):
             if started:
-                # Replaying the whole utterance after partial speech is confusing.
-                yield {'type':'error','message':'Speech was interrupted upstream. The text is still available; try replay or local voice.'}
+                # Upstream disconnected or threw after sending partial speech.
+                # Yield done rather than hard error so already scheduled audio can finish playing cleanly.
+                yield {'type':'warning','message':'Speech stream ended early. Playing available audio.'}
+                yield {'type':'done','provider':provider}
                 return
             yield {'type':'warning','message':f'{provider.capitalize()} voice is unavailable or limited.'}
     yield {'type':'error','message':'Voice is unavailable. Check your provider or install a local voice. Your text conversation still works.'}

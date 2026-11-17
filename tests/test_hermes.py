@@ -124,3 +124,43 @@ async def test_hermes_fastapi_app_endpoints():
         assert "reply" in data
         assert data.get("provider") == "local"
 
+
+def test_wav_bytes_pcm_validation():
+    from hermes.voice import wav_bytes
+
+    pcm = b"\x00\x00" * 100
+    wav = wav_bytes(pcm, rate=24000)
+    assert wav.startswith(b"RIFF")
+    assert len(wav) == len(pcm) + 44
+
+    with pytest.raises(ValueError):
+        wav_bytes(b"\x00")  # odd byte length
+
+
+@pytest.mark.anyio
+async def test_voice_stream_resilience_on_upstream_interruption(monkeypatch):
+    import httpx
+
+    from hermes.voice import VoiceRequest, stream_voice
+
+    req = VoiceRequest(text="Hello world", provider="gemini")
+
+    async def fake_gemini_audio(_req, _client):
+        from hermes.voice import wav_bytes
+        yield wav_bytes(b"\x00\x00" * 50)
+        # Simulate network drop or upstream abort
+        raise httpx.ReadTimeout("upstream dropped")
+
+    monkeypatch.setattr("hermes.voice.gemini_audio", fake_gemini_audio)
+
+    async with httpx.AsyncClient() as client:
+        events = [e async for e in stream_voice(req, client)]
+
+    event_types = [e["type"] for e in events]
+    assert "audio" in event_types
+    assert "warning" in event_types
+    assert "done" in event_types
+    # Crucially, should not yield a hard error that halts playback
+    assert "error" not in event_types
+
+

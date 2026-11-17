@@ -3,7 +3,7 @@ import {readEvents,loadHistory,saveHistory,TurnGuard,HISTORY_KEY} from './core.j
 const $=id=>document.getElementById(id),guard=new TurnGuard();
 let apiKey='',oramaUrl='',history=[],lastReply='',recognition=null,micTimer=null,audioContext=null,gain=null,sources=new Set(),audioEnd=0,audioFinished=false,activeTurn=null,voiceController=null,voiceEpoch=0;
 const labels={idle:'Ready when you are',listening:'I’m listening',processing:'Thinking it through',speaking:'Hermes is speaking'};
-const state=(name,detail)=>{$('voice-stage').dataset.state=name;$('state').textContent=labels[name];$('voice-detail').textContent=detail||({idle:'Speak or type to begin',listening:'Release to send, or tap the microphone to finish',processing:'Connecting the dots…',speaking:'Press Stop or start talking to interrupt'})[name];};
+const state=(name,detail)=>{$('voice-stage').dataset.state=name;$('state').textContent=labels[name];$('voice-detail').textContent=detail||({idle:'Speak or type to begin',listening:'Release to send, or tap the microphone to finish',processing:'Connecting the dots…',speaking:'Press Stop or tap mic to interrupt'})[name];};
 function notice(text){$('notice').textContent=text;$('notice').hidden=!text;}
 function openSettings(){$('settings').showModal();}
 for(const id of ['settings-open','connect-open','voice-settings'])$(id).onclick=openSettings;
@@ -58,7 +58,9 @@ async function scheduleAudio(event,turn,epoch){
  const buffer=await audioContext.decodeAudioData(bytes.buffer);
  if(!guard.current(turn.id)||epoch!==voiceEpoch)return;
  const source=audioContext.createBufferSource();source.buffer=buffer;source.connect(gain);sources.add(source);
- const start=Math.max(audioContext.currentTime+.035,audioEnd);audioEnd=start+buffer.duration;
+ const now=audioContext.currentTime;
+ const start=Math.max(now+.035,audioEnd>now?audioEnd:now+.035);
+ audioEnd=start+buffer.duration;
  source.onended=()=>{sources.delete(source);if(guard.current(turn.id)&&audioFinished&&!sources.size)state('idle');};
  state('speaking',`${event.provider==='piper'?'Piper · local voice':'Gemini · neural voice'} · ${$('language').value}`);source.start(start);
 }
@@ -78,9 +80,18 @@ async function speak(text,turn){
    else if(e.type==='error')throw Error(e.message);
    else if(e.type==='done')done=true;
   }
-  if(!done)throw Error('Voice connection ended early. Try replaying the reply.');
+  if(!done&&!sources.size)throw Error('Voice connection ended early. Try replaying the reply.');
   if(epoch===voiceEpoch){audioFinished=true;if(!sources.size)state('idle');}
- }catch(e){if(guard.current(turn.id)&&epoch===voiceEpoch){stopAudio();state('idle');if(e.name!=='AbortError')notice(e.message);}}
+ }catch(e){
+  if(guard.current(turn.id)&&epoch===voiceEpoch){
+   if(sources.size){
+    audioFinished=true;
+    if(e.name!=='AbortError')notice(e.message);
+   }else{
+    stopAudio();state('idle');if(e.name!=='AbortError')notice(e.message);
+   }
+  }
+ }
  finally{clearTimeout(timer);turn.signal.removeEventListener('abort',abort);if(voiceController===controller)voiceController=null;}
 }
 async function send(message){
