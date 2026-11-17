@@ -14,13 +14,23 @@ except ImportError:
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .providers import private_server_url
+from .providers import ollama_base_urls
 from .streams import json_lines
 
 SYSTEM = ('You are Hermes, a warm, concise personal media assistant for Orama. Reply in the user\'s language. '
           'You cannot execute commands, access private files, or control devices. '
           'Never claim to have performed actions. Keep spoken answers natural and brief.')
 FAILURES = (_HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError, TimeoutError)
+class _NoConnect(Exception):
+    """Placeholder so the connect handler stays valid when httpx is absent."""
+
+
+_CONNECT_FAILURES = tuple(
+    err for err in (
+        getattr(httpx, "ConnectError", None),
+        getattr(httpx, "ConnectTimeout", None),
+    ) if err is not None
+) or (_NoConnect,)
 
 
 class Message(BaseModel):
@@ -57,31 +67,7 @@ def gemini_model(variable='GEMINI_MODEL', default='gemini-2.5-flash'):
     return model
 
 
-async def provider_tokens(req, client, provider):
-    history = [m.model_dump() for m in req.history] + [{'role':'user','content':req.message}]
-    if provider == 'gemini':
-        key = os.environ.get('GEMINI_API_KEY')
-        if not key:
-            raise ValueError('Not configured')
-        url = f'https://generativelanguage.googleapis.com/v1beta/models/{gemini_model()}:streamGenerateContent?alt=sse'
-        data = {'systemInstruction': {'parts':[{'text':SYSTEM}]},
-                'contents':[{'role':'model' if m['role']=='assistant' else 'user',
-                             'parts':[{'text':m['content']}]} for m in history],
-                'generationConfig':{'temperature':0.5,'maxOutputTokens':2048}}
-        headers = {'x-goog-api-key':key}
-    elif provider == 'openai':
-        base = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')
-        key = os.environ.get('OPENAI_API_KEY', '')
-        model = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
-        url = f'{base}/chat/completions'
-        data = {'model': model, 'messages': [{'role':'system','content':SYSTEM}]+history, 'stream': True}
-        headers = {'Authorization': f'Bearer {key}'} if key else {}
-    else:
-        url = private_server_url(os.environ.get('OLLAMA_URL','http://ollama:11434')) + '/api/chat'
-        data = {'model':os.environ.get('OLLAMA_MODEL','llama3.1:8b'),
-                'messages':[{'role':'system','content':SYSTEM}]+history,
-                'stream':True,'options':{'num_predict':700}}
-        headers = {}
+async def _one_provider(req, client, provider, url, headers, data):
     completed = False
     timeout_sec = 100 if provider == 'ollama' else 45
     async with asyncio.timeout(timeout_sec):
@@ -119,11 +105,51 @@ async def provider_tokens(req, client, provider):
         raise ValueError('Incomplete stream')
 
 
+async def provider_tokens(req, client, provider):
+    history = [m.model_dump() for m in req.history] + [{'role':'user','content':req.message}]
+    if provider == 'gemini':
+        key = os.environ.get('GEMINI_API_KEY')
+        if not key:
+            raise ValueError('Not configured')
+        model = gemini_model()
+        path = f'/v1beta/models/{model}:streamGenerateContent?alt=sse'
+        urls = [f'https://generativelanguage.googleapis.com{path}']
+        data = {'systemInstruction': {'parts':[{'text':SYSTEM}]},
+                'contents':[{'role':'model' if m['role']=='assistant' else 'user',
+                             'parts':[{'text':m['content']}]} for m in history],
+                'generationConfig':{'temperature':0.5,'maxOutputTokens':2048}}
+        headers = {'x-goog-api-key':key}
+    elif provider == 'openai':
+        base = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')
+        key = os.environ.get('OPENAI_API_KEY', '')
+        model = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        urls = [f'{base}/chat/completions']
+        data = {'model': model, 'messages': [{'role':'system','content':SYSTEM}]+history, 'stream': True}
+        headers = {'Authorization': f'Bearer {key}'} if key else {}
+    else:
+        urls = [base + '/api/chat' for base in ollama_base_urls()]
+        data = {'model':os.environ.get('OLLAMA_MODEL','llama3.1:8b'),
+                'messages':[{'role':'system','content':SYSTEM}]+history,
+                'stream':True,'options':{'num_predict':700}}
+        headers = {}
+    started = False
+    for index, url in enumerate(urls):
+        try:
+            async for token in _one_provider(req, client, provider, url, headers, data):
+                started = True
+                yield token
+            return
+        except _CONNECT_FAILURES:
+            # The Docker name or localhost did not answer. Try Ollama on the mini PC itself.
+            if started or provider != 'ollama' or index == len(urls) - 1:
+                raise
+
+
 async def stream_chat(req, client):
     if req.provider == 'auto':
         choices = []
         if os.environ.get('GEMINI_API_KEY'): choices.append('gemini')
-        if os.environ.get('OPENAI_API_KEY') or os.environ.get('OPENAI_BASE_URL'): choices.append('openai')
+        if os.environ.get('OPENAI_API_KEY'): choices.append('openai')
         choices.append('ollama')
     else:
         choices = [req.provider]

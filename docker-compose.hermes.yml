@@ -29,13 +29,16 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
       - REFRESH_HOURS=${REFRESH_HOURS:-24}
     # The host port comes from the shell or --env-file, not from env_file below.
     # hermes.env is invisible here unless the deploy script passes it.
     ports:
       - "${HERMES_BIND_IP:-127.0.0.1}:8787:8787"
+    # Ollama on this computer is not the Docker name "ollama" and not localhost inside Hermes.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - hermes-data:/data
       - ./voices:/voices:ro

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
@@ -34,6 +35,22 @@ def private_server_url(value: str) -> str:
     if not ok:
         raise ValueError(f"Media server must use a private address, Docker container name, or local domain (got '{host}')")
     return value.rstrip("/")
+
+
+def ollama_base_urls(value: str | None = None) -> list[str]:
+    """Where to ask Ollama. A container name or localhost is followed by the mini-PC host.
+
+    Hermes runs in Docker. Ollama on the same computer is not ``localhost`` inside that
+    container, and the compose service named ``ollama`` is not running unless it was started.
+    """
+    primary = (value if value is not None else os.environ.get("OLLAMA_URL", "http://ollama:11434")).rstrip("/")
+    urls = [private_server_url(primary)]
+    host = (urlparse(primary).hostname or "").lower()
+    if host in {"ollama", "localhost", "127.0.0.1", "::1"}:
+        host_url = private_server_url("http://host.docker.internal:11434")
+        if host_url not in urls:
+            urls.append(host_url)
+    return urls
 
 
 async def get_bytes(client: httpx.AsyncClient, url: str, **kwargs) -> bytes:

@@ -164,3 +164,57 @@ async def test_voice_stream_resilience_on_upstream_interruption(monkeypatch):
     assert "error" not in event_types
 
 
+def test_ollama_on_a_named_host_is_not_replaced(monkeypatch):
+    from hermes.providers import ollama_base_urls
+
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama-host.local:11434")
+    assert ollama_base_urls() == ["http://ollama-host.local:11434"]
+
+
+@pytest.mark.anyio
+async def test_gemini_failure_falls_back_to_ollama_on_the_mini_pc(monkeypatch):
+    import httpx
+
+    from hermes.conversation import ChatRequest, stream_chat
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k" * 20)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama:11434")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    class Response:
+        def __init__(self, line):
+            self._line = line
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield (self._line + "\n").encode()
+
+    class Client:
+        def __init__(self):
+            self.urls = []
+
+        def stream(self, method, url, **kwargs):
+            self.urls.append(url)
+            if "generativelanguage" in url or url.startswith("http://ollama:11434"):
+                raise httpx.ConnectError("down")
+            return Response('{"message":{"content":"From Ollama"},"done":true}')
+
+    client = Client()
+    events = [event async for event in stream_chat(ChatRequest(message="Hello"), client)]
+    text = "".join(event.get("text", "") for event in events if event["type"] == "delta")
+    assert text == "From Ollama"
+    assert events[-1] == {"type": "done", "provider": "ollama"}
+    assert any(event["type"] == "warning" and "Gemini" in event["message"] for event in events)
+    assert any(url.startswith("http://host.docker.internal:11434/") for url in client.urls)
+    assert not any("api.openai.com" in url for url in client.urls)
+
+

@@ -18,7 +18,13 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .conversation import ChatRequest, stream_chat
-from .providers import jellyfin_data, plex_data, private_server_url, tmdb_candidates
+from .providers import (
+    jellyfin_data,
+    ollama_base_urls,
+    plex_data,
+    private_server_url,
+    tmdb_candidates,
+)
 from .recommend import rank, reorder
 from .status import service_status
 from .streams import encode_events
@@ -93,13 +99,19 @@ async def gemini(client: httpx.AsyncClient, prompt: str, *, structured: bool = F
 
 
 async def ollama(client: httpx.AsyncClient, prompt: str) -> str:
-    base = private_server_url(os.environ.get("OLLAMA_URL", "http://ollama:11434"))
-    response = await client.post(base + "/api/generate", json={
-        "model": os.environ.get("OLLAMA_MODEL", "llama3.1:8b"), "prompt": prompt,
-        "stream": False, "options": {"num_predict": 350}},
-        timeout=httpx.Timeout(90.0), follow_redirects=False)
-    response.raise_for_status()
-    return str(response.json().get("response", ""))[:2000]
+    urls = ollama_base_urls()
+    for index, base in enumerate(urls):
+        try:
+            response = await client.post(base + "/api/generate", json={
+                "model": os.environ.get("OLLAMA_MODEL", "llama3.1:8b"), "prompt": prompt,
+                "stream": False, "options": {"num_predict": 350}},
+                timeout=httpx.Timeout(90.0), follow_redirects=False)
+            response.raise_for_status()
+            return str(response.json().get("response", ""))[:2000]
+        except httpx.ConnectError:
+            if index == len(urls) - 1:
+                raise
+    raise httpx.ConnectError("Ollama did not answer")
 
 
 async def refresh(*, force: bool = False) -> dict:

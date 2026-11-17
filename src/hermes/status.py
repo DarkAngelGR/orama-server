@@ -9,11 +9,20 @@ try:
 except ImportError:
     httpx = None
 
-from .providers import private_server_url
+from .providers import ollama_base_urls, private_server_url
 
 _cache = None
 _checked = 0
 _lock = asyncio.Lock()
+
+
+async def probe_first(client, bases, path, headers=None):
+    state = 'not_configured'
+    for base in bases:
+        state = await probe(client, base, path, headers)
+        if state == 'online':
+            return state
+    return state
 
 
 async def probe(client, base, path, headers=None):
@@ -36,7 +45,7 @@ async def service_status(client):
         jelly = os.environ.get('JELLYFIN_URL','') if os.environ.get('JELLYFIN_API_KEY') else ''
         orama_url = os.environ.get('ORAMA_URL', '')
         ollama, plex_state, jelly_state, nas, orama_state = await asyncio.gather(
-            probe(client,os.environ.get('OLLAMA_URL','http://ollama:11434'),'/api/tags'),
+            probe_first(client, ollama_base_urls(), '/api/tags'),
             probe(client,plex,'/identity',{'X-Plex-Token':os.environ.get('PLEX_TOKEN','')}),
             probe(client,jelly,'/System/Info',{'X-Emby-Token':os.environ.get('JELLYFIN_API_KEY','')}),
             probe(client,os.environ.get('NAS_HEALTH_URL',''),'/'),
