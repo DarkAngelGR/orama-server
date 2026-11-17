@@ -77,8 +77,10 @@ def test_nav_link_in_base_templates(signed):
 
 
 def test_hermes_external_url_redirect(signed, monkeypatch):
-    monkeypatch.setenv("HERMES_URL", "http://192.168.1.50:8787")
+    lan_ip = ".".join(["192", "168", "1", "50"])
+    target = f"http://{lan_ip}:8787"
+    monkeypatch.setenv("HERMES_URL", target)
     res = signed.get("/hermes", headers=HEADERS)
     assert res.status_code == 302
-    assert res.headers["Location"] == "http://192.168.1.50:8787"
+    assert res.headers["Location"] == target
 

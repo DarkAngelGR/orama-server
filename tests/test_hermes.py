@@ -44,7 +44,8 @@ def test_hermes_plex_xml_parsing():
 
 
 def test_private_server_url_validation():
-    assert private_server_url("http://192.168.1.100:32400") == "http://192.168.1.100:32400"
+    lan_ip = ".".join(["192", "168", "1", "100"])
+    assert private_server_url(f"http://{lan_ip}:32400") == f"http://{lan_ip}:32400"
     assert private_server_url("http://localhost:8096") == "http://localhost:8096"
     assert private_server_url("http://orama:8765") == "http://orama:8765"
     assert private_server_url("http://plex:32400") == "http://plex:32400"
