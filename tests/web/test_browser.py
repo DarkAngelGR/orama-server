@@ -69,6 +69,28 @@ class FakeAgent:
     def self_update(self):
         return True
 
+    def get_storage_candidates(self):
+        return [
+            {
+                "id": "cand_default",
+                "label": "Default storage (/srv/data)",
+                "default_app_folder": "apps",
+                "default_data_folder": "data",
+                "free_bytes": 500 * 1024**3,
+            }
+        ]
+
+    def validate_storage(self, app_candidate_id, app_folder_name, data_candidate_id, data_folder_name):
+        return {
+            "valid": True,
+            "hardlinks_supported": True,
+            "app_path": f"/srv/config/{app_folder_name}",
+            "data_path": f"/srv/data/{data_folder_name}",
+        }
+
+    def lock_storage(self):
+        return True
+
 
 class Served:
     def __init__(self, base: str, state_dir: Path, code: str, password: str) -> None:

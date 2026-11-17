@@ -9,21 +9,26 @@ add their steps by adding the page.
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 
 from flask import Blueprint, Flask, abort, current_app, redirect, render_template, request, url_for
 
 from orama import state
+from orama.agent_client import AgentError
 from orama.secrets import JELLYFIN_USER_NAME, PLEX_TOKEN_NAME, VPN_KEY_NAME
-from orama.setup_model import DesiredSetup
+from orama.setup_model import DesiredSetup, validate_folder_name
 from orama.web import auth, catalogue, draft, forms
 from orama.web.jobs import TEST_BUSY, apply_operation, poll_view
 from orama.wiring import jellyfin, prowlarr, sabnzbd
 
 SETUP_FILE = "setup.json"
 DRAFT_FILE = "setup.draft.json"
+log = logging.getLogger("orama.web.wizard")
 
 
 @dataclass(frozen=True)
@@ -128,12 +133,17 @@ def _promote(st, setup: DesiredSetup) -> None:
     if live is not None:
         setup = setup.model_copy(update={
             field: getattr(live, field)
-            for field in ("lan_address", "host_name", "extra_host_names", "ports", "data_root")
+            for field in ("lan_address", "host_name", "extra_host_names", "ports", "data_root", "app_config_root")
         })
     path = st.state_dir / SETUP_FILE
     before = path.read_bytes() if path.exists() else None
     changes = draft.promote_secrets(st.store)
     setup.save(path)  # atomic: temp file and rename
+    try:
+        if hasattr(st.agent, "lock_storage"):
+            st.agent.lock_storage()
+    except (AgentError, OSError) as e:
+        log.debug("could not lock storage during promote: %s", e)
     if changes:
         # The secrets typed into the draft become live in one write: all of them or none.
         try:
@@ -170,11 +180,34 @@ def _wizard_pages() -> Blueprint:
         step = next(s for s in STEPS if s.key == key)
         keys = [s.key for s in STEPS]
         first_time = key == "downloads" and _first_apply_due(st)
+        extra: dict[str, Any] = {}
+        if key == "folders":
+            read_only = not _first_apply_due(st)
+            extra["read_only"] = read_only
+            if not read_only:
+                try:
+                    candidates = st.agent.get_storage_candidates()
+                except (AgentError, OSError) as e:
+                    log.debug("could not load storage candidates: %s", e)
+                    candidates = []
+                if not candidates:
+                    candidates = [
+                        {
+                            "id": "cand_default",
+                            "label": f"Default storage ({values.get('data_root', '/srv/data')})",
+                            "default_app_folder": "apps",
+                            "default_data_folder": "data",
+                            "free_bytes": 0,
+                        }
+                    ]
+                extra["candidates"] = candidates
+                extra["candidate_options"] = [(c["id"], c["label"]) for c in candidates]
+                extra["candidates_json"] = json.dumps(candidates)
         return render_template(
             f"wizard/{key}.html",
             step=step, steps=step_list(key), position=keys.index(key) + 1,
             values=values, errors=errors, saved=request.args.get("saved") == "1",
-            back_url=_neighbour(key, -1), first_time=first_time,
+            back_url=_neighbour(key, -1), first_time=first_time, **extra,
         ), status
 
     def make_view(key: str):
@@ -192,6 +225,42 @@ def _wizard_pages() -> Blueprint:
                 ), 409
             if request.method == "GET":
                 return render_step(key, read(setup, draft.draft_store(st)), {}, 200)
+
+            if key == "folders" and _first_apply_due(st):
+                app_cand = request.form.get("app_candidate_id", "cand_default")
+                app_folder = request.form.get("app_folder_name", "apps")
+                data_cand = request.form.get("data_candidate_id", "cand_default")
+                data_folder = request.form.get("data_folder_name", "data")
+                folder_errors = {}
+                try:
+                    valid_app_folder = validate_folder_name(app_folder)
+                except ValueError as e:
+                    folder_errors["app_folder_name"] = str(e)
+                try:
+                    valid_data_folder = validate_folder_name(data_folder)
+                except ValueError as e:
+                    folder_errors["data_folder_name"] = str(e)
+
+                if not folder_errors:
+                    try:
+                        probe = st.agent.validate_storage(
+                            app_cand, valid_app_folder, data_cand, valid_data_folder
+                        )
+                        with state.locked(state.setup_lock(st.state_dir)):
+                            current = _working_setup(st) or setup
+                            updated = current.model_copy(update={
+                                "app_config_root": Path(probe["app_path"]),
+                                "data_root": Path(probe["data_path"]),
+                            })
+                            updated.save(st.state_dir / DRAFT_FILE)
+                        return redirect(_after(key), 303)
+                    except AgentError as e:
+                        folder_errors["app_folder_name"] = e.message
+
+                return render_step(
+                    key, echo(setup, request.form, draft.draft_store(st)), folder_errors, 400
+                )
+
             try:
                 with state.locked(state.setup_lock(st.state_dir)):
                     # Read again under the lock so a save made meanwhile is kept.

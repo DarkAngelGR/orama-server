@@ -191,6 +191,62 @@ def test_install_keeps_the_live_data_folder(app, signed):
     assert str(DesiredSetup.load(d / "setup.json").data_root) == "/srv/data"
 
 
+def test_folders_page_fresh_install_renders_selection_and_previews(app, first_time, signed):
+    fake_cands = [
+        {"id": "cand_ssd", "label": "Fast SSD (/mnt/ssd/orama)", "default_app_folder": "apps", "default_data_folder": "data", "free_bytes": 1000},
+        {"id": "cand_hdd", "label": "Mass HDD (/mnt/hdd/orama)", "default_app_folder": "apps", "default_data_folder": "data", "free_bytes": 5000},
+    ]
+    app.extensions["orama"].agent.get_storage_candidates = lambda: fake_cands
+
+    html = text(signed.get("/setup/folders"))
+    assert "Storage &amp; Folders" in html or "Storage & Folders" in html
+    assert 'id="app_candidate_id"' in html
+    assert 'id="data_candidate_id"' in html
+    assert 'id="app_folder_name"' in html
+    assert 'id="data_folder_name"' in html
+    assert 'id="app-path-preview"' in html
+    assert 'id="data-path-preview"' in html
+
+
+def test_folders_post_fresh_install_validates_and_saves_selection(app, first_time, signed):
+    def fake_validate(app_id, app_f, data_id, data_f):
+        return {
+            "valid": True,
+            "hardlinks_supported": True,
+            "app_path": f"/mnt/ssd/orama/{app_f}",
+            "data_path": f"/mnt/hdd/orama/{data_f}",
+        }
+    app.extensions["orama"].agent.validate_storage = fake_validate
+
+    response = post(
+        signed,
+        "/setup/folders",
+        app_candidate_id="cand_ssd",
+        app_folder_name="my_apps",
+        data_candidate_id="cand_hdd",
+        data_folder_name="my_media",
+    )
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/setup/downloads"
+    draft = draft_of(app)
+    assert str(draft.app_config_root) == "/mnt/ssd/orama/my_apps"
+    assert str(draft.data_root) == "/mnt/hdd/orama/my_media"
+
+
+def test_folders_post_fresh_install_rejects_bad_folder_names(app, first_time, signed):
+    response = post(
+        signed,
+        "/setup/folders",
+        app_candidate_id="cand_ssd",
+        app_folder_name="../bad_traversal",
+        data_candidate_id="cand_hdd",
+        data_folder_name="media",
+    )
+    assert response.status_code == 400
+    html = text(response)
+    assert "Folder names must be 1 to 64 letters, numbers, underscores, or hyphens." in html
+
+
 def test_wizard_keeps_answers_after_error(app, signed):
     response = post(signed, "/setup/downloads", usenet="on", torrent="on", vpn="on",
                     vpn_provider="mullvad", vpn_key="bad key", vpn_address=VPN_ADDRESS,

@@ -347,13 +347,30 @@ def apply_media(setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
 
 
 def read_folders(setup: DesiredSetup, store: SecretStore) -> dict[str, Any]:
-    return {"data_root": str(setup.data_root), "config_root": str(setup.config_root)}
+    return {
+        "data_root": str(setup.data_root),
+        "config_root": str(setup.config_root),
+        "app_config_root": str(setup.app_config_root or (setup.config_root / "config")),
+        "app_candidate_id": "cand_default",
+        "app_folder_name": setup.app_config_root.name if setup.app_config_root else "apps",
+        "data_candidate_id": "cand_default",
+        "data_folder_name": setup.data_root.name if setup.data_root else "data",
+    }
 
 
 def echo_folders(
     setup: DesiredSetup, form: Mapping[str, str], store: SecretStore
 ) -> dict[str, Any]:
-    return read_folders(setup, store)
+    values = read_folders(setup, store)
+    values.update(
+        {
+            "app_candidate_id": form.get("app_candidate_id", values["app_candidate_id"]),
+            "app_folder_name": form.get("app_folder_name", values["app_folder_name"]),
+            "data_candidate_id": form.get("data_candidate_id", values["data_candidate_id"]),
+            "data_folder_name": form.get("data_folder_name", values["data_folder_name"]),
+        }
+    )
+    return values
 
 
 def apply_folders(

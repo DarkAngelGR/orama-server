@@ -1,9 +1,91 @@
 {% extends "wizard/step.html" %}
-{% set heading = 'Your media folder' %}
-{% set intro = 'Movies, shows and downloads each get their own place inside one folder on this server.' %}
-{# Read-only: the folder is the one the installer gave Orama's Agent, so there is nothing to save in Settings. #}
-{% set read_only = true %}
+{% from "_macros.html" import field %}
+{% set heading = 'Storage & Folders' if not read_only else 'Your media folder' %}
+{% set intro = 'Choose where app configuration and your media downloads live.' if not read_only else 'Movies, shows and downloads each get their own place inside one folder on this server.' %}
 {% set submit_label = 'Continue' %}
+
 {% block fields %}
 <p class="folder-fixed">Your media folder is <code>{{ values.data_root }}</code>. It was chosen when Orama was installed. To use another folder, run the installer again with <code>ORAMA_DATA_ROOT</code> set to it.</p>
+
+{% if not read_only %}
+<div class="wizard-group">
+  <h2>App Settings &amp; Databases</h2>
+  <p class="field-help">Plex metadata, Sonarr/Radarr databases, and app caches. Fast NVMe or SSD storage is recommended.</p>
+  <div class="field">
+    <label for="app_candidate_id">Storage location</label>
+    <select id="app_candidate_id" name="app_candidate_id"{% if errors.app_candidate_id %} aria-invalid="true" aria-describedby="app_candidate_id-error"{% endif %}>
+      {% for opt_val, opt_label in candidate_options %}
+      <option value="{{ opt_val }}"{% if opt_val == values.app_candidate_id %} selected{% endif %}>{{ opt_label }}</option>
+      {% endfor %}
+    </select>
+    {% if errors.app_candidate_id %}<p class="field-error" id="app_candidate_id-error">{{ errors.app_candidate_id }}</p>{% endif %}
+  </div>
+  {{ field('app_folder_name', 'Folder name', values.app_folder_name|default('apps', true), errors.app_folder_name, 'Alphanumeric, dashes, or underscores only.') }}
+  <p class="field-help">Derived path: <code id="app-path-preview">{{ values.app_config_root|default('/data/apps', true) }}</code></p>
+</div>
+
+<div class="wizard-group">
+  <h2>Media &amp; Downloads Pool</h2>
+  <p class="field-help">Movies, TV shows, and incoming downloads. Both reside on this volume so imports are instant via hardlinks.</p>
+  <div class="field">
+    <label for="data_candidate_id">Storage location</label>
+    <select id="data_candidate_id" name="data_candidate_id"{% if errors.data_candidate_id %} aria-invalid="true" aria-describedby="data_candidate_id-error"{% endif %}>
+      {% for opt_val, opt_label in candidate_options %}
+      <option value="{{ opt_val }}"{% if opt_val == values.data_candidate_id %} selected{% endif %}>{{ opt_label }}</option>
+      {% endfor %}
+    </select>
+    {% if errors.data_candidate_id %}<p class="field-error" id="data_candidate_id-error">{{ errors.data_candidate_id }}</p>{% endif %}
+  </div>
+  {{ field('data_folder_name', 'Folder name', values.data_folder_name|default('data', true), errors.data_folder_name, 'Dedicated folder for media and downloads.') }}
+  <p class="field-help">Derived path: <code id="data-path-preview">{{ values.data_root|default('/data', true) }}</code></p>
+</div>
+
+<script>
+(function() {
+  var candidates = {{ candidates_json|default('[]', true)|safe }};
+  var appSelect = document.getElementById('app_candidate_id');
+  var appInput = document.getElementById('app_folder_name');
+  var appPreview = document.getElementById('app-path-preview');
+
+  var dataSelect = document.getElementById('data_candidate_id');
+  var dataInput = document.getElementById('data_folder_name');
+  var dataPreview = document.getElementById('data-path-preview');
+
+  function getBase(selectEl) {
+    if (!selectEl) return '/srv';
+    var cand = null;
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i].id === selectEl.value) {
+        cand = candidates[i];
+        break;
+      }
+    }
+    if (!cand) cand = candidates[0];
+    if (cand && cand.label && cand.label.indexOf('(') !== -1) {
+      return cand.label.split('(')[1].split(')')[0];
+    }
+    return cand ? cand.label : '/srv';
+  }
+
+  function update() {
+    if (appInput && appPreview) {
+      var appBase = getBase(appSelect);
+      var appFolder = (appInput.value || '').trim() || 'apps';
+      appPreview.textContent = appBase.replace(/\/+$/, '') + '/' + appFolder.replace(/^\/+/, '');
+    }
+    if (dataInput && dataPreview) {
+      var dataBase = getBase(dataSelect);
+      var dataFolder = (dataInput.value || '').trim() || 'data';
+      dataPreview.textContent = dataBase.replace(/\/+$/, '') + '/' + dataFolder.replace(/^\/+/, '');
+    }
+  }
+
+  if (appSelect) appSelect.addEventListener('change', update);
+  if (appInput) appInput.addEventListener('input', update);
+  if (dataSelect) dataSelect.addEventListener('change', update);
+  if (dataInput) dataInput.addEventListener('input', update);
+  update();
+})();
+</script>
+{% endif %}
 {% endblock %}
