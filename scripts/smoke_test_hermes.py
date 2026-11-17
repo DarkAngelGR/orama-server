@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Hermes Assistant & Service Smoke Test Script.
 
 Validates Hermes FastAPI server endpoints, interactive chat/voice pipelines,

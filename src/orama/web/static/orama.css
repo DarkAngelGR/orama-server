@@ -857,6 +857,10 @@ a.app-name:hover, a.app-name:focus-visible { text-decoration: underline; }
   color: var(--muted);
   font-size: .8125rem;
 }
+.sett-footer .footer-brand {
+  font-weight: 700;
+  color: var(--ink);
+}
 
 @media (max-width: 760px) {
   .hero-section {
