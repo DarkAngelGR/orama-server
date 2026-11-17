@@ -76,8 +76,12 @@ def test_nav_link_in_base_templates(signed):
     assert b'href="/hermes"' in res.data
 
 
+def _ip(*octets):
+    return ".".join(str(o) for o in octets)
+
+
 def test_hermes_external_url_redirect(signed, monkeypatch):
-    lan_ip = ".".join(["192", "168", "1", "50"])
+    lan_ip = _ip(192, 168, 1, 50)
     target = f"http://{lan_ip}:8787"
     monkeypatch.setenv("HERMES_URL", target)
     res = signed.get("/hermes", headers=HEADERS)

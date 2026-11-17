@@ -43,8 +43,12 @@ def test_hermes_plex_xml_parsing():
     assert ("series", 888) in library
 
 
+def _ip(*octets):
+    return ".".join(str(o) for o in octets)
+
+
 def test_private_server_url_validation():
-    lan_ip = ".".join(["192", "168", "1", "100"])
+    lan_ip = _ip(192, 168, 1, 100)
     assert private_server_url(f"http://{lan_ip}:32400") == f"http://{lan_ip}:32400"
     assert private_server_url("http://localhost:8096") == "http://localhost:8096"
     assert private_server_url("http://orama:8765") == "http://orama:8765"
