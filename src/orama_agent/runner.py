@@ -42,7 +42,7 @@ import yaml
 from orama.catalog import CATALOG
 from orama.layout import app_config_dir, app_env_dir
 from orama_agent.recyclarr import CONTAINER_CONFIG
-from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots
+from orama_agent.validate import PROJECT_NAME, SHARED_NETWORK, Refused, Roots, app_config_root
 
 COMPOSE_FILE = "compose.yaml"
 CORE_PROJECT_NAME = "orama-core"
@@ -432,7 +432,7 @@ class ComposeRunner:
 
     def recyclarr_sync(self) -> None:
         """Run Recyclarr once on the config the Agent wrote, as PUID:PGID on orama-net."""
-        folder = app_config_dir(PurePosixPath(self._roots.config), "recyclarr")
+        folder = app_config_dir(app_config_root(self._roots), "recyclarr")
         argv = [
             "docker", "run", "--rm",
             "--name", RECYCLARR_CONTAINER,

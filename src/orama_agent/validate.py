@@ -13,6 +13,7 @@ show untrusted names only through ``_show`` (repr, truncated).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -276,11 +277,23 @@ def _validate_ports(name: str, spec: ServiceSpec, ports: Any) -> None:
         raise Refused(f"{name} has a host port outside 1-65535.")
 
 
+def app_config_root(roots: Roots) -> PurePosixPath:
+    journal_path = roots.config / "activation_journal.json"
+    if journal_path.is_file():
+        try:
+            doc = json.loads(journal_path.read_text(encoding="utf-8"))
+            if doc.get("app_path"):
+                return PurePosixPath(doc["app_path"])
+        except (OSError, json.JSONDecodeError):
+            pass
+    return PurePosixPath(roots.config) / "config"
+
+
 def _expected_volumes(name: str, spec: ServiceSpec, roots: Roots) -> list[dict[str, str]]:
     """Exactly the binds the builder emits, computed from the Agent's own roots."""
     volumes = []
     if spec.config_mount:
-        source = app_config_dir(PurePosixPath(roots.config), name)
+        source = app_config_dir(app_config_root(roots), name)
         volumes.append({"type": "bind", "source": str(source), "target": spec.config_mount})
     if spec.mounts_data:
         volumes.append({"type": "bind", "source": str(roots.data), "target": "/data"})

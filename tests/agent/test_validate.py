@@ -1128,8 +1128,9 @@ def test_refuses_deeply_nested_doc(roots):
 
 
 def ensure_folders(roots, setup):
+    app_root = roots.config / "config"
     for app in enabled_apps(setup):
-        app_config_dir(roots.config, app).mkdir(parents=True, exist_ok=True)
+        app_config_dir(app_root, app).mkdir(parents=True, exist_ok=True)
     app_env_dir(roots.config).mkdir(exist_ok=True)
 
 

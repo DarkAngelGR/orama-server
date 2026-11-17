@@ -135,7 +135,8 @@ def doc_and_env(roots):
 
 def all_folders(roots, doc):
     folders = [str(p) for p in data_folders(PurePosixPath(roots.data))]
-    folders += [str(app_config_dir(PurePosixPath(roots.config), a)) for a in doc["services"]]
+    app_root = PurePosixPath(roots.config) / "config"
+    folders += [str(app_config_dir(app_root, a)) for a in doc["services"]]
     return folders
 
 def prepared(agent, roots):
@@ -815,7 +816,7 @@ def test_seed_config_creates_qbittorrent_subfolder_owned_by_app_user(agent, root
 
 
 def test_seed_config_keeps_the_apps_own_lines(agent, roots):
-    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config) / "config", "sabnzbd"))])
     original = "__version__ = 19\n[misc]\nport = 8080\n\n[servers]\n"
     sab_ini(roots).write_text(original)
     agent.client.seed_config("sabnzbd", sab_values())
@@ -899,7 +900,7 @@ def test_seed_config_starts_the_app_again_when_the_write_fails(agent, roots, mon
 
 
 def test_seed_config_refuses_symlink_at_config_file(agent, roots, tmp_path):
-    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config) / "config", "sabnzbd"))])
     target = tmp_path / "victim"
     target.write_text("keep me\n")
     sab_ini(roots).symlink_to(target)
@@ -911,7 +912,7 @@ def test_seed_config_refuses_symlink_at_config_file(agent, roots, tmp_path):
 
 def test_seed_config_refuses_symlink_at_qbittorrent_folder(agent, roots, tmp_path):
     agent.client.ensure_folders(
-        [str(app_config_dir(PurePosixPath(roots.config), "qbittorrent"))])
+        [str(app_config_dir(PurePosixPath(roots.config) / "config", "qbittorrent"))])
     target = tmp_path / "elsewhere"
     target.mkdir()
     qbt_conf(roots).parent.symlink_to(target)
@@ -923,7 +924,7 @@ def test_seed_config_refuses_symlink_at_qbittorrent_folder(agent, roots, tmp_pat
 
 @pytest.mark.parametrize("kind", ["fifo", "folder", "too_big"])
 def test_seed_config_refuses_non_regular_or_huge_file(agent, roots, kind):
-    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config), "sabnzbd"))])
+    agent.client.ensure_folders([str(app_config_dir(PurePosixPath(roots.config) / "config", "sabnzbd"))])
     path = sab_ini(roots)
     if kind == "fifo":
         os.mkfifo(path)

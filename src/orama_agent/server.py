@@ -50,6 +50,7 @@ from orama_agent.storage import (
 from orama_agent.validate import (
     Refused,
     Roots,
+    app_config_root,
     check_host_paths,
     validate_compose,
     validate_env_files,
@@ -265,8 +266,9 @@ class Agent:
         # One update step at a time. Separate from ``_lock`` because the download can take
         # many minutes and must not make ``status``, ``ensure-folders`` or an apply wait.
         self._update_lock = threading.Lock()
+        app_root = app_config_root(roots)
         self._shared = {str(p) for p in data_folders(PurePosixPath(roots.data))} | {
-            str(app_config_dir(PurePosixPath(roots.config), app)) for app in CATALOG
+            str(app_config_dir(app_root, app)) for app in CATALOG
         }
 
     def handle(self, cmd: str, args: dict[str, Any]) -> Any:
@@ -587,7 +589,7 @@ class Agent:
         app, values = args["app"], args["values"]
         seed.check(app, values)
         *folders, name = seed.config_file(app)
-        app_dir = Path(app_config_dir(PurePosixPath(self.roots.config), app))
+        app_dir = Path(app_config_dir(app_config_root(self.roots), app))
         folder = app_dir.joinpath(*folders)
         shared = self._shared | {str(app_dir.joinpath(*folders[: i + 1]))
                                  for i in range(len(folders))}
@@ -637,7 +639,7 @@ class Agent:
             text = yaml.safe_dump(recyclarr.render(apps, self._arr_keys(env_fd, apps)),
                                   sort_keys=False).encode()
             _unlink(env_fd, recyclarr.STATE_FILE)  # a failed run must not count as done
-            folder = Path(app_config_dir(PurePosixPath(self.roots.config), "recyclarr"))
+            folder = Path(app_config_dir(app_config_root(self.roots), "recyclarr"))
             dir_fd, _ = self._open_dirs(folder, self._shared)
             def owned(fd: int) -> None:
                 self._chown(fd, self.roots.puid, self.roots.pgid)

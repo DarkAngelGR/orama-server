@@ -3,6 +3,9 @@ import sys
 import unittest.mock
 
 if sys.platform == "win32":
+    import socket
+    if not hasattr(socket, "AF_UNIX"):
+        socket.AF_UNIX = 1
     sys.modules.setdefault("fcntl", unittest.mock.MagicMock())
     for flag in ("O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY", "O_NONBLOCK"):
         if not hasattr(os, flag):

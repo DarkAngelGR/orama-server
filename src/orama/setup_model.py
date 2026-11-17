@@ -102,7 +102,7 @@ RESERVED_FOLDER_NAMES = frozenset({"orama", "app-env", "lost+found"})
 def validate_folder_name(name: str) -> str:
     if not isinstance(name, str) or not _FOLDER_NAME_RE.fullmatch(name):
         raise ValueError(
-            "folder name must be 1 to 64 characters containing only letters, numbers, underscores, or hyphens"
+            "Folder names must be 1 to 64 letters, numbers, underscores, or hyphens."
         )
     if name.lower() in RESERVED_FOLDER_NAMES:
         raise ValueError(f"folder name '{name}' is reserved by Orama")

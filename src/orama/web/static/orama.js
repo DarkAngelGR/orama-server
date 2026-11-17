@@ -196,3 +196,68 @@ document.addEventListener("error", function (event) {
   var img = event.target;
   if (img && img.classList && img.classList.contains("app-logo")) img.remove();
 }, true);
+
+// Dynamic path preview for wizard folders storage selection
+(() => {
+  const initStoragePreview = () => {
+    const group = document.getElementById("storage-candidates-group");
+    if (!group) return;
+
+    let candidates = [];
+    try {
+      candidates = JSON.parse(group.dataset.candidates || "[]");
+    } catch (e) {
+      candidates = [];
+    }
+
+    const appSelect = document.getElementById("app_candidate_id");
+    const appInput = document.getElementById("app_folder_name");
+    const appPreview = document.getElementById("app-path-preview");
+
+    const dataSelect = document.getElementById("data_candidate_id");
+    const dataInput = document.getElementById("data_folder_name");
+    const dataPreview = document.getElementById("data-path-preview");
+
+    const getBase = (selectEl) => {
+      if (!selectEl) return "/srv";
+      let cand = null;
+      for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].id === selectEl.value) {
+          cand = candidates[i];
+          break;
+        }
+      }
+      if (!cand && candidates.length > 0) cand = candidates[0];
+      if (cand && cand.label && cand.label.indexOf("(") !== -1) {
+        return cand.label.split("(")[1].split(")")[0];
+      }
+      return cand ? cand.label : "/srv";
+    };
+
+    const update = () => {
+      if (appInput && appPreview) {
+        const appBase = getBase(appSelect);
+        const appFolder = (appInput.value || "").trim() || "apps";
+        appPreview.textContent = appBase.replace(/\/+$/, "") + "/" + appFolder.replace(/^\/+/, "");
+      }
+      if (dataInput && dataPreview) {
+        const dataBase = getBase(dataSelect);
+        const dataFolder = (dataInput.value || "").trim() || "data";
+        dataPreview.textContent = dataBase.replace(/\/+$/, "") + "/" + dataFolder.replace(/^\/+/, "");
+      }
+    };
+
+    if (appSelect) appSelect.addEventListener("change", update);
+    if (appInput) appInput.addEventListener("input", update);
+    if (dataSelect) dataSelect.addEventListener("change", update);
+    if (dataInput) dataInput.addEventListener("input", update);
+    update();
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initStoragePreview);
+  } else {
+    initStoragePreview();
+  }
+})();
+

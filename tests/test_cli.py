@@ -524,7 +524,7 @@ def test_apply_creates_folders_sends_compose_prints_checklist(capsys, caplog, ro
     for folder in data_folders(PurePosixPath(data)):
         assert Path(folder).is_dir()
     for app in enabled_apps(setup):
-        assert Path(app_config_dir(PurePosixPath(cfg), app)).is_dir()
+        assert Path(app_config_dir(PurePosixPath(cfg) / "config", app)).is_dir()
     assert agent.up_calls == 1
     sent = yaml.safe_load((cfg / "compose.yaml").read_text())
     assert sorted(sent["services"]) == sorted(enabled_apps(setup))
@@ -556,7 +556,7 @@ def test_apply_warns_about_unwritable_folder(capsys, roots, agent, monkeypatch):
     for folder in others:
         os.chmod(folder, 0o2777)
     for app in enabled_apps(DesiredSetup.load(path)):
-        os.chmod(app_config_dir(PurePosixPath(cfg), app), 0o2777)
+        os.chmod(app_config_dir(PurePosixPath(cfg) / "config", app), 0o2777)
     code = cli.main(["apply", "--setup", str(path)])
     out = capsys.readouterr().out.splitlines()
     assert code == 0
