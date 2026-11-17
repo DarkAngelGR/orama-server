@@ -68,3 +68,59 @@ def test_hermes_chat_request_providers():
     assert req.provider == "openai"
     req_auto = ChatRequest(message="Hello")
     assert req_auto.provider == "auto"
+
+
+try:
+    import httpx
+    from httpx import ASGITransport
+
+    from hermes.app import app
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
+
+
+@pytest.mark.skipif(not HAS_FASTAPI, reason="fastapi/httpx not installed in environment")
+@pytest.mark.anyio
+async def test_hermes_fastapi_app_endpoints():
+    token = "h" * 64
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Health check
+        res = await client.get("/healthz")
+        assert res.status_code == 200
+        assert res.json() == {"status": "ok"}
+
+        # 2. Public config
+        res = await client.get("/v1/config")
+        assert res.status_code == 200
+        cfg = res.json()
+        assert "orama_url" in cfg and "node_name" in cfg
+
+        # 3. Static landing page
+        res = await client.get("/")
+        assert res.status_code == 200
+        assert "Hermes" in res.text
+
+        # 4. Auth required routes
+        res = await client.get("/v1/voices")
+        assert res.status_code == 401
+
+        # 5. Voices catalog with auth
+        auth_header = {"Authorization": f"Bearer {token}"}
+        res = await client.get("/v1/voices", headers=auth_header)
+        assert res.status_code == 200
+        voices = res.json()
+        assert "voices" in voices and "languages" in voices
+
+        # 6. Local chat query
+        res = await client.post(
+            "/v1/chat",
+            json={"message": "recommend something to watch"},
+            headers=auth_header,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert "reply" in data
+        assert data.get("provider") == "local"
+

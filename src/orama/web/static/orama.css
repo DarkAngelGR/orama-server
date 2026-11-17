@@ -499,3 +499,368 @@ a.app-name:hover, a.app-name:focus-visible { text-decoration: underline; }
 /* The app's own logo, when Orama could fetch it, sits over the shipped icon or letter. */
 .app-mark { position: relative; overflow: hidden; }
 .app-logo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--glass-solid); }
+
+/* ------------------------------------------------------------------ Settigation UI Revamp */
+
+:root {
+  --grad-text: linear-gradient(90deg, #f5c6b8, #e8b4c8 40%, #c9b4e0 70%, #b4c4e8);
+  --code-bg: #141414;
+  --purple: #c4b5fd;
+  --blue: #93c5fd;
+  --green: #86efac;
+  --amber: #fcd34d;
+}
+
+/* Floating Pill Nav */
+.header-inner {
+  border-radius: 100px;
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+}
+.nav-btn-pill {
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: .35rem 1rem;
+  border-radius: 100px;
+  font-size: .8125rem;
+  font-weight: 650;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--glass-edge);
+}
+.nav-btn-pill:hover {
+  background: var(--primary-hover);
+  color: var(--on-primary);
+  border-color: var(--selected-edge);
+}
+
+/* Hero Section with Settigation Typography */
+.hero-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
+  gap: var(--s4);
+  align-items: end;
+  margin-bottom: var(--s4);
+}
+.hero-left .ex-label, .ex-label {
+  color: var(--muted);
+  font-size: .6875rem;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  margin-bottom: var(--s1);
+  display: block;
+}
+.hero-left h1 {
+  font-size: clamp(2rem, 4.5vw, 3.25rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  margin-bottom: var(--s2);
+}
+.hero-left em {
+  font-style: italic;
+  font-weight: 600;
+  background: var(--grad-text);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-left p {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+  max-width: 48ch;
+  margin-bottom: var(--s3);
+}
+.hero-pills {
+  display: flex;
+  gap: var(--s1);
+  flex-wrap: wrap;
+}
+.hero-pills a {
+  padding: 6px 14px;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+}
+.hero-pills a:hover,
+.hero-pills a.active {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: var(--primary);
+}
+
+/* Hero Stats Cards */
+.hero-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.stat-card {
+  background: var(--well);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-panel);
+  padding: var(--s2) var(--s3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: inset 0 1px 0 var(--glass-shine);
+}
+.stat-card b {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  line-height: 1.1;
+  display: block;
+}
+.stat-card span {
+  color: var(--muted);
+  font-size: .8125rem;
+  display: block;
+  margin-top: 2px;
+}
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 700;
+}
+.stat-pill.online {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.stat-pill.warn {
+  color: var(--wait);
+  background: var(--wait-bg);
+}
+.stat-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Settigation Codebox / Live Pipeline Terminal */
+.codebox-section {
+  width: 100%;
+  margin-bottom: var(--s4);
+}
+.codebox {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), var(--shadow);
+}
+.codebox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .8125rem;
+}
+.codebox-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  color: var(--ink);
+  font-family: ui-monospace, monospace;
+}
+.codebox-meta {
+  font-size: .75rem;
+  color: var(--muted);
+}
+.codebox-pre {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: .8125rem;
+  line-height: 1.6;
+  color: #e4e4e7;
+  overflow-x: auto;
+}
+.cb-kw { color: var(--purple); font-weight: 600; }
+.cb-fn { color: var(--blue); }
+.cb-str { color: var(--green); }
+.cb-cm { color: #71717a; }
+.cb-cursor {
+  display: inline-block;
+  color: #a78bfa;
+  animation: cbblink 1s step-end infinite;
+  margin-left: 2px;
+}
+@keyframes cbblink { 50% { opacity: 0; } }
+
+/* Settigation Services Grid */
+.services-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+.service-tile {
+  background: var(--well);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-panel);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.service-tile:hover {
+  background: var(--glass);
+  border-color: var(--selected-edge);
+}
+.service-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.service-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+.service-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--selected);
+  display: grid;
+  place-items: center;
+  font-size: .875rem;
+}
+.service-desc {
+  color: var(--muted);
+  font-size: .8125rem;
+  line-height: 1.45;
+}
+.service-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+  font-size: .75rem;
+  margin-top: auto;
+}
+.service-footer a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+.service-footer a:hover {
+  color: var(--accent);
+}
+
+/* Settigation Media Grid Cards */
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+.media-card {
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-panel);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 150ms ease;
+}
+.media-card:hover {
+  border-color: var(--selected-edge);
+}
+.media-thumb {
+  height: 90px;
+  background: linear-gradient(180deg, rgba(31,31,35,0.8) 0%, rgba(20,20,20,0.95) 100%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+.media-tag {
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #fff;
+}
+.media-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.media-body h3 {
+  font-size: .9375rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.media-body p {
+  color: var(--muted);
+  font-size: .8125rem;
+  line-height: 1.4;
+  flex: 1;
+}
+.media-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: var(--r-small);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: .8125rem;
+  font-weight: 650;
+  text-decoration: none;
+  margin-top: 6px;
+}
+.media-cta:hover {
+  background: var(--primary-hover);
+  color: var(--on-primary);
+}
+
+/* Settigation Minimalist Footer */
+.sett-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  border-top: 1px solid var(--line);
+}
+.sett-footer .footer-sub {
+  color: var(--muted);
+  font-size: .8125rem;
+}
+
+@media (max-width: 760px) {
+  .hero-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+

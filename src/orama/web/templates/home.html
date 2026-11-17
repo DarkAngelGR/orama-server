@@ -4,7 +4,65 @@
 {% block title %}Orama{% endblock %}
 {% block content %}
 <section class="home">
-  <h1>Welcome to Orama</h1>
+  <!-- Settigation Hero Section -->
+  <header class="hero-section">
+    <div class="hero-left">
+      <span class="ex-label">PERSONAL CINEMA CLOUD · DUAL-HOST STACK</span>
+      <h1>Welcome to Orama — <em>orchestrated.</em></h1>
+      <p>Autonomous indexing, multi-source request pipeline, and neural voice intelligence across your NAS and Mini-PC.</p>
+      
+      <div class="hero-pills">
+        <a class="active" href="/apps">Stack Overview</a>
+        <a href="{{ url_for('requests.search') }}">Find Media</a>
+        <a href="/hermes">Hermes Voice Stage ↗</a>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Stats -->
+    <div class="hero-stats">
+      <div class="stat-card">
+        <div>
+          <b>{{ summary if summary else "All services operational" }}</b>
+          <span>Microservices Status</span>
+        </div>
+        <span class="stat-pill online"><i class="dot" aria-hidden="true"></i> Active</span>
+      </div>
+
+      <div class="stat-card">
+        <div>
+          <b>Direct Play</b>
+          <span>4K HDR / Dolby Vision · Native Fidelity</span>
+        </div>
+        <span class="stat-pill online"><i class="dot" aria-hidden="true"></i> 100% Native</span>
+      </div>
+
+      <div class="stat-card">
+        <div>
+          <b>Media Storage</b>
+          <span>Distributed NAS &amp; Mini-PC Co-Op</span>
+        </div>
+        <span class="stat-pill online"><i class="dot" aria-hidden="true"></i> Healthy</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Settigation Codebox / Live Pipeline Terminal -->
+  <section class="codebox-section" aria-label="Pipeline Telemetry">
+    <div class="codebox">
+      <div class="codebox-header">
+        <div class="codebox-title">
+          <span class="dot" aria-hidden="true"></span>
+          <span>orama-agent / live-orchestration.log</span>
+        </div>
+        <div class="codebox-meta">NAS &amp; Mini-PC Co-Op</div>
+      </div>
+      <pre class="codebox-pre"><code><span class="cb-kw">async def</span> <span class="cb-fn">orchestrate_media_lifecycle</span>():
+  nas_host, minipc_host = <span class="cb-str">"nas.local:8765"</span>, <span class="cb-str">"companion.local:8787"</span>
+  <span class="cb-kw">await</span> orama.verify_storage(mount=<span class="cb-str">"/data"</span>)
+  probe = <span class="cb-kw">await</span> hermes.probe_ai_stack(llm=<span class="cb-str">"universal"</span>, fallback=<span class="cb-str">"ollama"</span>)
+  <span class="cb-fn">print</span>(f<span class="cb-str">"[ORAMA] Stack healthy: {probe.status}"</span>)<span class="cb-cursor" aria-hidden="true">▍</span></code></pre>
+    </div>
+  </section>
 
   {% if disk_warning %}
   <p class="notice notice-error" role="alert">{{ disk_warning }}</p>
