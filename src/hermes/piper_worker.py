@@ -2,9 +2,9 @@
 
 import io
 import json
-from pathlib import Path
 import sys
 import wave
+from pathlib import Path
 
 
 def main():

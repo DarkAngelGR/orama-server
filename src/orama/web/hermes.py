@@ -10,8 +10,8 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 import secrets
+from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, Flask, Response, g, jsonify, redirect, request, send_from_directory
@@ -20,6 +20,7 @@ from orama.web import auth
 
 try:
     import httpx
+
     from hermes.conversation import ChatRequest, stream_chat
     from hermes.recommend import reorder
     from hermes.status import service_status

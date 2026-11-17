@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 try:
     import httpx
@@ -11,6 +11,8 @@ try:
 except ImportError:
     httpx = None
     TIMEOUT = None
+
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 def private_server_url(value: str) -> str:
