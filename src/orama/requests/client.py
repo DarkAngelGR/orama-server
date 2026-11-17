@@ -10,6 +10,7 @@ from typing import Any
 
 from orama.requests.models import RequestKind
 from orama.secrets import SecretStore
+from orama.wiring.engine import app_host_and_port
 from orama.wiring.http import Http, Unreachable
 
 _LOG = logging.getLogger("orama.requests")
@@ -137,8 +138,9 @@ class MediaClient:
         key = self.store.get(f"apikey:{app_name}") or self.store.get(app_name)
         if not key:
             raise RequestError(f"{app_name.capitalize()} is not configured or key missing")
-        if self.use_service_hosts:
-            return f"http://{app_name}:{default_ports.get(app_name, 8989)}", key
+        if self.use_service_hosts or app_name in (getattr(self.setup, "adopted_apps", ()) or ()):
+            host, port = app_host_and_port(app_name, self.setup, default_ports.get(app_name, 8989))
+            return f"http://{host}:{port}", key
         ports = getattr(self.setup, "ports", {}) or {}
         port = ports.get(app_name, default_ports.get(app_name, 8989))
         return f"http://127.0.0.1:{port}", key
@@ -171,7 +173,11 @@ class MediaClient:
         try:
             resp = self.http.request(method, url, headers=headers, json=json_body)
         except Unreachable:
-            if not self.use_service_hosts and type(self.http).__name__ == "Http":
+            if (
+                not self.use_service_hosts
+                and app_name not in (getattr(self.setup, "adopted_apps", ()) or ())
+                and type(self.http).__name__ == "Http"
+            ):
                 default_ports = {"radarr": 7878, "sonarr": 8989, "bazarr": 6767}
                 svc_url = f"http://{app_name}:{default_ports.get(app_name, 8989)}{rel}"
                 try:

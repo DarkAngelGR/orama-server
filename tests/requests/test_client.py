@@ -10,7 +10,7 @@ from orama.requests.client import (
     RequestError,
 )
 from orama.secrets import SecretStore
-from orama.wiring.http import FakeHttp, Response
+from orama.wiring.http import FakeHttp, Http, Response, Unreachable
 
 
 def json_resp(data, status=200):
@@ -45,6 +45,39 @@ def test_query_validation():
         client.search("movie", "   ")
     with pytest.raises(RequestError, match="Query must be"):
         client.search("movie", "a" * 201)
+
+
+@pytest.mark.parametrize("app", ["radarr", "sonarr", "bazarr"])
+@pytest.mark.parametrize("service_hosts", [False, True])
+def test_adopted_app_requests_use_saved_host_and_port(app, service_hosts):
+    http = FakeHttp()
+    http.route("GET", "/api/v3/system/status", lambda call: json_resp({}))
+    client = make_client(http, {f"apikey:{app}": "test-key"})
+    client.setup.adopted_apps = {app}
+    client.setup.lan_address = ".".join(map(str, (192, 168, 50, 10)))
+    client.setup.ports[app] = 17878
+    client.use_service_hosts = service_hosts
+
+    client._request(app, "system/status")
+
+    assert http.calls[0].url == f"http://{client.setup.lan_address}:17878/api/v3/system/status"
+    assert http.calls[0].headers["X-Api-Key"] == "test-key"
+
+
+def test_unreachable_adopted_app_does_not_retry_service_hostname(monkeypatch):
+    calls = []
+
+    def unreachable(self, method, url, **kwargs):
+        calls.append(url)
+        raise Unreachable()
+
+    monkeypatch.setattr(Http, "request", unreachable)
+    client = make_client(Http())
+    client.setup.adopted_apps = {"radarr"}
+    client.setup.lan_address = ".".join(map(str, (192, 168, 50, 10)))
+    with pytest.raises(RequestError, match="unreachable"):
+        client._request("radarr", "system/status")
+    assert calls == [f"http://{client.setup.lan_address}:7878/api/v3/system/status"]
 
 
 def test_search_movie_radarr_calls_correct_endpoint():
