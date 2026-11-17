@@ -495,3 +495,90 @@ def test_bad_request_wait_or_disk_warning_refused(kw):
     with pytest.raises(ValidationError):
         make_setup(**kw)
 
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "apps",
+        "data",
+        "my-media_01",
+        "A",
+        "z" * 64,
+        "media-downloads_2026",
+    ],
+)
+def test_folder_name_valid(name):
+    from orama.setup_model import validate_folder_name
+
+    assert validate_folder_name(name) == name
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "a" * 65,
+        "has space",
+        "has/slash",
+        "has\\backslash",
+        "..",
+        ".",
+        "sub/dir",
+        "name:colon",
+        "null\x00byte",
+        "orama",
+        "app-env",
+        "lost+found",
+        " leading",
+        "trailing ",
+        "@special!",
+    ],
+)
+def test_folder_name_invalid(bad):
+    from orama.setup_model import validate_folder_name
+
+    with pytest.raises(ValueError):
+        validate_folder_name(bad)
+
+
+def test_app_config_root_defaults_to_config_root_subfolder():
+    s = make_setup(config_root="/srv/orama")
+    assert str(s.app_config_root) == "/srv/orama/config"
+
+
+def test_app_config_root_backward_compatible_when_missing_from_json(tmp_path):
+    data = make_setup(config_root="/srv/legacy").to_json_dict()
+    data.pop("app_config_root", None)
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(data))
+    loaded = DesiredSetup.load(path)
+    assert str(loaded.app_config_root) == "/srv/legacy/config"
+
+
+def test_app_config_root_custom_valid():
+    s = make_setup(config_root="/srv/orama", app_config_root="/volume2/custom_apps")
+    assert str(s.app_config_root) == "/volume2/custom_apps"
+
+
+@pytest.mark.parametrize(
+    "cfg,app_cfg,data",
+    [
+        ("/srv/orama", "/srv/orama", "/srv/data"),  # app_config_root == config_root
+        ("/srv/orama", "/srv/orama/other", "/srv/data"),  # custom nesting inside config_root
+        ("/srv/orama/sub", "/srv/orama", "/srv/data"),  # config_root inside app_config_root
+        ("/srv/orama", "/srv/data", "/srv/data"),  # app_config_root == data_root
+        ("/srv/orama", "/srv/data/apps", "/srv/data"),  # app_config_root inside data_root
+        ("/srv/orama", "/volume2/apps", "/volume2/apps/media"),  # data_root inside app_config_root
+        ("/srv/orama", "/srv/orama/orama", "/srv/data"),  # collides with orama_state_dir
+        ("/srv/orama", "/srv/orama/app-env", "/srv/data"),  # collides with app_env_dir
+        ("/srv/orama", "relative/path", "/srv/data"),  # relative path
+        ("/srv/orama", "/bad:colon", "/srv/data"),  # colon in path
+        ("/srv/orama", "/srv/orama/..", "/srv/data"),  # .. in path
+        ("/srv/orama", "/", "/srv/data"),  # root of disk
+    ],
+)
+def test_app_config_root_invalid_refused(cfg, app_cfg, data):
+    with pytest.raises(ValidationError):
+        make_setup(config_root=cfg, app_config_root=app_cfg, data_root=data)
+
+

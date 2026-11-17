@@ -597,7 +597,8 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
             store, apps, gluetun_proxy=setup.vpn is not None and setup.vpn.route_prowlarr
         )
         folders = [str(p) for p in data_folders(setup.data_root)]
-        folders += [str(app_config_dir(setup.config_root, a)) for a in apps]
+        app_root = setup.app_config_root if setup.app_config_root is not None else (setup.config_root / "config")
+        folders += [str(app_config_dir(app_root, a)) for a in apps]
         try:
             result = client.ensure_folders(folders)
         except AgentError as e:

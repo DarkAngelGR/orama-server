@@ -91,7 +91,8 @@ def _service(spec: ServiceSpec, setup: DesiredSetup, vpn_on: bool) -> dict[str, 
 
     volumes = []
     if spec.config_mount:
-        volumes.append(_bind(app_config_dir(setup.config_root, spec.name), spec.config_mount))
+        app_root = setup.app_config_root if setup.app_config_root is not None else (setup.config_root / "config")
+        volumes.append(_bind(app_config_dir(app_root, spec.name), spec.config_mount))
     if spec.mounts_data:
         volumes.append(_bind(setup.data_root, "/data"))
     if volumes:

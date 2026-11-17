@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 from ipaddress import IPv4Address, IPv4Interface
 from pathlib import Path, PurePath, PurePosixPath
@@ -93,6 +94,23 @@ def _validate_root(value: Any) -> PurePosixPath:
 
 Root = Annotated[PurePosixPath, PlainValidator(_validate_root), PlainSerializer(str)]
 
+FOLDER_NAME_PATTERN = r"^[a-zA-Z0-9_-]{1,64}$"
+_FOLDER_NAME_RE = re.compile(FOLDER_NAME_PATTERN)
+RESERVED_FOLDER_NAMES = frozenset({"orama", "app-env", "lost+found"})
+
+
+def validate_folder_name(name: str) -> str:
+    if not isinstance(name, str) or not _FOLDER_NAME_RE.fullmatch(name):
+        raise ValueError(
+            "folder name must be 1 to 64 characters containing only letters, numbers, underscores, or hyphens"
+        )
+    if name.lower() in RESERVED_FOLDER_NAMES:
+        raise ValueError(f"folder name '{name}' is reserved by Orama")
+    return name
+
+
+FolderName = Annotated[str, AfterValidator(validate_folder_name)]
+
 MAX_FIELDS = 40
 MAX_FIELD_VALUE_LEN = 512
 
@@ -173,6 +191,7 @@ class DesiredSetup(BaseModel):
     vpn: VpnConfig | None = None
     data_root: Root
     config_root: Root
+    app_config_root: Root | None = None
     puid: int = Field(ge=0)
     pgid: int = Field(ge=0)
     render_gid: int | None = None
@@ -260,9 +279,21 @@ class DesiredSetup(BaseModel):
             raise ValueError("indexer names must be unique")
         if self.usenet_servers and "usenet" not in self.download_methods:
             raise ValueError("usenet servers require the usenet download method")
-        d, c = self.data_root, self.config_root
+        if self.app_config_root is None:
+            self.app_config_root = self.config_root / "config"
+        d, c, a = self.data_root, self.config_root, self.app_config_root
         if d == c or d.is_relative_to(c) or c.is_relative_to(d):
             raise ValueError("data_root and config_root must not be the same or nested")
+        if a == d or a.is_relative_to(d) or d.is_relative_to(a):
+            raise ValueError("app_config_root and data_root must not be the same or nested")
+        if a == c:
+            raise ValueError("app_config_root must not be the same as config_root")
+        if a != c / "config" and (a.is_relative_to(c) or c.is_relative_to(a)):
+            raise ValueError("custom app_config_root must not be nested within or contain config_root")
+        if a == c / "orama" or a.is_relative_to(c / "orama") or (c / "orama").is_relative_to(a):
+            raise ValueError("app_config_root must not overlap with orama state folder")
+        if a == c / "app-env" or a.is_relative_to(c / "app-env") or (c / "app-env").is_relative_to(a):
+            raise ValueError("app_config_root must not overlap with app environment folder")
         return self
 
     def to_json_dict(self) -> dict[str, Any]:

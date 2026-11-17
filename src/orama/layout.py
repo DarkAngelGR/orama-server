@@ -26,8 +26,8 @@ def data_folders(data_root: PurePosixPath) -> list[PurePosixPath]:
     return [data_root / sub for sub in _DATA_SUBFOLDERS]
 
 
-def app_config_dir(config_root: PurePosixPath, app: str) -> PurePosixPath:
-    return config_root / "config" / app
+def app_config_dir(app_config_root: PurePosixPath, app: str) -> PurePosixPath:
+    return app_config_root / app
 
 
 def app_env_dir(config_root: PurePosixPath) -> PurePosixPath:
@@ -51,7 +51,8 @@ def orama_state_dir(config_root: PurePosixPath) -> PurePosixPath:
 
 
 def config_folders(setup: DesiredSetup) -> list[PurePosixPath]:
-    folders = [app_config_dir(setup.config_root, app) for app in enabled_apps(setup)]
+    app_root = setup.app_config_root if setup.app_config_root is not None else (setup.config_root / "config")
+    folders = [app_config_dir(app_root, app) for app in enabled_apps(setup)]
     folders.append(orama_state_dir(setup.config_root))
     return folders
 

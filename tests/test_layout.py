@@ -2,7 +2,15 @@ from pathlib import PurePosixPath as P
 
 from conftest import make_setup
 
-from orama.layout import app_env_dir, app_env_file, config_folders, data_folders, env_file_path
+from orama.layout import (
+    app_config_dir,
+    app_env_dir,
+    app_env_file,
+    config_folders,
+    data_folders,
+    env_file_path,
+    orama_state_dir,
+)
 
 
 def test_data_folders_exact_list():
@@ -36,3 +44,23 @@ def test_config_folders_never_contain_app_env_dir():
     for folder in config_folders(s):
         assert not folder.is_relative_to(env_dir)
         assert not env_dir.is_relative_to(folder)
+
+
+def test_app_config_dir_maps_to_app_config_root_subfolder():
+    assert app_config_dir(P("/volume2/apps"), "sonarr") == P("/volume2/apps/sonarr")
+
+
+def test_config_folders_uses_app_config_root():
+    s = make_setup(config_root="/srv/control", app_config_root="/volume2/apps")
+    folders = config_folders(s)
+    assert P("/volume2/apps/plex") in folders
+    assert P("/srv/control/config/plex") not in folders
+    assert folders[-1] == P("/srv/control/orama")
+
+
+def test_config_root_retains_exclusive_ownership_of_state_and_env():
+    s = make_setup(config_root="/srv/control", app_config_root="/volume2/apps")
+    assert orama_state_dir(s.config_root) == P("/srv/control/orama")
+    assert app_env_dir(s.config_root) == P("/srv/control/app-env")
+    assert app_env_file(s.config_root, "plex") == P("/srv/control/app-env/plex.env")
+
