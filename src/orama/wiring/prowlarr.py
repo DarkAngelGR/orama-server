@@ -17,7 +17,14 @@ from orama.catalog import GLUETUN_PROXY_USER
 from orama.secrets import GLUETUN_PROXY_PASSWORD_NAME
 from orama.setup_model import DesiredSetup, IndexerChoice, enabled_apps
 from orama.wiring.arr import MASK, SPECS
-from orama.wiring.engine import Step, StepError, display_name, run_steps, wait_until
+from orama.wiring.engine import (
+    Step,
+    StepError,
+    app_host_and_port,
+    display_name,
+    run_steps,
+    wait_until,
+)
 from orama.wiring.http import Http, Response, Unreachable
 
 START_TIMEOUT = 600.0
@@ -70,6 +77,10 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     if "prowlarr" not in apps:
         return []
 
+    prowlarr_h, prowlarr_p = app_host_and_port("prowlarr", setup, 9696)
+    base = f"http://{prowlarr_h}:{prowlarr_p}/api/v1"
+    prowlarr_url = f"http://{prowlarr_h}:{prowlarr_p}"
+
     def key() -> str:
         value = store.get("apikey:prowlarr")
         if value is None:
@@ -82,7 +93,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     ) -> Response:
         try:
             resp = http.request(
-                method, f"{BASE}/{path}", headers={"X-Api-Key": key()}, json=json, params=params
+                method, f"{base}/{path}", headers={"X-Api-Key": key()}, json=json, params=params
             )
         except Unreachable:
             raise StepError("Prowlarr could not be reached — run apply again.") from None
@@ -109,7 +120,7 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         def ready() -> bool:
             try:
                 resp = http.request(
-                    "GET", f"{BASE}/system/status", headers={"X-Api-Key": key()}
+                    "GET", f"{base}/system/status", headers={"X-Api-Key": key()}
                 )
             except Unreachable:
                 return False
@@ -217,10 +228,11 @@ def prowlarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
             apikey = store.get(f"apikey:{app}")
             if apikey is None:
                 raise StepError(f"{display_name(app)}'s API key is missing — run apply again.")
+            target_h, target_p = app_host_and_port(app, setup, spec.port)
             _, message, _ = upsert(
                 resource="applications", label=f"the {display_name(app)} connection", name=label,
                 pick=lambda s: s.get("implementation") == display_name(app),
-                want={"prowlarrUrl": PROWLARR_URL, "baseUrl": f"http://{app}:{spec.port}",
+                want={"prowlarrUrl": prowlarr_url, "baseUrl": f"http://{target_h}:{target_p}",
                       "apiKey": apikey},
                 secret=apikey, secret_names=frozenset({"apiKey"}),
                 marker=sent_marker_name(f"app:{app}"),

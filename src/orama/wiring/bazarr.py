@@ -12,7 +12,7 @@ import json
 from typing import Any
 
 from orama.setup_model import DesiredSetup, enabled_apps
-from orama.wiring.engine import Step, StepError, wait_until
+from orama.wiring.engine import Step, StepError, app_host_and_port, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 BASE = "http://bazarr:6767/api/system"
@@ -55,6 +55,8 @@ def _same_path(have: object, want: object) -> bool:
 
 def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     present = set(enabled_apps(setup))
+    bazarr_h, bazarr_p = app_host_and_port("bazarr", setup, 6767)
+    base = f"http://{bazarr_h}:{bazarr_p}/api/system"
 
     def key() -> str:
         value = store.get("apikey:bazarr")
@@ -65,7 +67,7 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
     def call(method: str, path: str, *, form: dict[str, Any] | None = None) -> Response:
         try:
             resp = http.request(
-                method, f"{BASE}/{path}", headers={"X-API-KEY": key()}, form=form
+                method, f"{base}/{path}", headers={"X-API-KEY": key()}, form=form
             )
         except Unreachable:
             raise StepError("Bazarr could not be reached — run apply again.") from None
@@ -98,7 +100,7 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
         key()  # fail early and plainly when the key is missing
 
         def ready() -> bool:
-            resp = http.request("GET", f"{BASE}/status", headers={"X-API-KEY": key()})
+            resp = http.request("GET", f"{base}/status", headers={"X-API-KEY": key()})
             if resp.status in (401, 403):
                 raise StepError("Bazarr did not accept Orama's API key — run apply again.")
             return resp.status == 200
@@ -119,7 +121,8 @@ def bazarr_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
                 arr_key = store.get(f"apikey:{app}")
                 if arr_key is None:
                     raise StepError(f"The {app.title()} API key is missing — run apply again.")
-                wanted = {"ip": app, "port": port, "base_url": "/", "apikey": arr_key,
+                arr_h, arr_p = app_host_and_port(app, setup, port)
+                wanted = {"ip": arr_h, "port": arr_p, "base_url": "/", "apikey": arr_key,
                           "ssl": False}
                 if not _same(general.get(f"use_{app}"), True):
                     form[f"settings-general-use_{app}"] = "true"

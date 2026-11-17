@@ -1,4 +1,12 @@
 import os
+import sys
+import unittest.mock
+
+if sys.platform == "win32":
+    sys.modules.setdefault("fcntl", unittest.mock.MagicMock())
+    for flag in ("O_NOFOLLOW", "O_CLOEXEC", "O_DIRECTORY", "O_NONBLOCK"):
+        if not hasattr(os, flag):
+            setattr(os, flag, 0)
 
 import pytest  # noqa: F401
 

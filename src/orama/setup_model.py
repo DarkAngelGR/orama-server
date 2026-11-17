@@ -199,6 +199,7 @@ class DesiredSetup(BaseModel):
     timezone: str = "Etc/UTC"
     ports: dict[str, int] = {}
     removed_apps: frozenset[str] = frozenset()
+    adopted_apps: frozenset[str] = frozenset()
     indexers: tuple[IndexerChoice, ...] = ()
     usenet_servers: tuple[UsenetServer, ...] = ()
     subtitle_languages: tuple[LanguageCode, ...] = ("el", "en")
@@ -298,7 +299,7 @@ class DesiredSetup(BaseModel):
 
     def to_json_dict(self) -> dict[str, Any]:
         data = self.model_dump(mode="json")
-        for key in ("media_servers", "download_methods", "removed_apps"):
+        for key in ("media_servers", "download_methods", "removed_apps", "adopted_apps"):
             data[key] = sorted(data[key])
         return data
 
@@ -333,3 +334,9 @@ def enabled_apps(setup: DesiredSetup) -> list[str]:
             apps.append("gluetun")
         apps.append("qbittorrent")
     return [a for a in apps if a not in setup.removed_apps]
+
+
+def managed_apps(setup: DesiredSetup) -> list[str]:
+    """Apps Orama manages directly (starting containers in compose), excluding adopted apps."""
+    return [a for a in enabled_apps(setup) if a not in setup.adopted_apps]
+

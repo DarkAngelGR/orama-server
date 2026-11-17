@@ -4,7 +4,14 @@ import pytest
 from conftest import make_setup
 from pydantic import ValidationError
 
-from orama.setup_model import DesiredSetup, IndexerChoice, UsenetServer, VpnConfig, enabled_apps
+from orama.setup_model import (
+    DesiredSetup,
+    IndexerChoice,
+    UsenetServer,
+    VpnConfig,
+    enabled_apps,
+    managed_apps,
+)
 
 
 def test_vpn_requires_torrent():
@@ -580,5 +587,21 @@ def test_app_config_root_custom_valid():
 def test_app_config_root_invalid_refused(cfg, app_cfg, data):
     with pytest.raises(ValidationError):
         make_setup(config_root=cfg, app_config_root=app_cfg, data_root=data)
+
+
+def test_managed_apps_excludes_adopted_apps():
+    s = make_setup(
+        media_servers={"plex"},
+        download_methods={"torrent"},
+        adopted_apps={"plex", "qbittorrent"},
+    )
+    all_enabled = enabled_apps(s)
+    assert "plex" in all_enabled
+    assert "qbittorrent" in all_enabled
+    managed = managed_apps(s)
+    assert "plex" not in managed
+    assert "qbittorrent" not in managed
+    assert "sonarr" in managed
+
 
 

@@ -92,6 +92,7 @@ _WHAT = {
     "recyclarr": "Updating the quality profiles",
     "self-update-pull": "Downloading the Orama update",
     "self-update": "Updating Orama",
+    "existing-apps": "Checking existing apps",
 }
 _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _TRANSIENT_PULL_MARKERS = (
@@ -278,6 +279,35 @@ class ComposeRunner:
             for c in self._containers(str(project_file(self._roots)))
             if isinstance(c.get("Service"), str)
         }
+
+    def existing_apps(self) -> list[dict[str, Any]]:
+        from orama.discovery import extract_host_port, identify_app
+        try:
+            out = self._exec(
+                ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}"],
+                _WHAT.get("existing-apps", "Checking existing apps"),
+                CALL_TIMEOUT,
+            )
+        except RunnerError:
+            return []
+        discovered = []
+        for line in out.splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) < 3:
+                continue
+            name, img = parts[1].lstrip("/"), parts[2]
+            ports_str = parts[3] if len(parts) > 3 else ""
+            app = identify_app(name, img)
+            if app:
+                port = extract_host_port(ports_str, CATALOG[app].container_port) or CATALOG[app].default_host_port
+                discovered.append({
+                    "name": app,
+                    "container_name": name,
+                    "image": img,
+                    "host_port": port,
+                    "source": "docker",
+                })
+        return discovered
 
     def restart(self, app: str) -> None:
         self._one_app("restart", app)
@@ -529,3 +559,7 @@ class FakeRunner:
         if self.fail_next_recyclarr:
             self.fail_next_recyclarr = False
             raise RunnerError(f"{_WHAT['recyclarr']} failed. {LOG_HINT}", "exit code 1")
+
+    def existing_apps(self) -> list[dict[str, Any]]:
+        return getattr(self, "discovered_apps", [])
+

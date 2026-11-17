@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 
 from orama.setup_model import DesiredSetup, UsenetServer
-from orama.wiring.engine import Step, StepError, run_steps, wait_until
+from orama.wiring.engine import Step, StepError, app_host_and_port, run_steps, wait_until
 from orama.wiring.http import Http, Unreachable
 
 REMOVE_PREFIX = "remove:usenet:"
@@ -34,14 +34,15 @@ def _digest(value: str) -> str:
 
 
 class _Api:
-    def __init__(self, http: Http, apikey: str) -> None:
+    def __init__(self, http: Http, apikey: str, base: str = BASE) -> None:
         self.http = http
         self.apikey = apikey
+        self.base = base
 
     def call(self, **params: Any) -> Any:
         query = {"apikey": self.apikey, "output": "json", **params}
         try:
-            resp = self.http.request("POST", BASE, form=query)
+            resp = self.http.request("POST", self.base, form=query)
         except Unreachable:
             raise StepError("SABnzbd could not be reached — run apply again.") from None
         if resp.status != 200:
@@ -76,17 +77,20 @@ def _server_values(server: UsenetServer, password: str) -> dict[str, Any]:
 
 
 def sabnzbd_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
+    sab_h, sab_p = app_host_and_port("sabnzbd", setup, 8080)
+    base = f"http://{sab_h}:{sab_p}/api"
+
     def api() -> _Api:
         key = store.get("apikey:sabnzbd")
         if key is None:
             raise StepError("The API key is missing — run apply again.")
-        return _Api(http, key)
+        return _Api(http, key, base=base)
 
     def wait() -> str | None:
         client = api()
 
         def ready() -> bool:
-            return http.request("POST", BASE, form={"mode": "version", "apikey": client.apikey,
+            return http.request("POST", base, form={"mode": "version", "apikey": client.apikey,
                                                      "output": "json"}).status == 200
 
         wait_until(ready, app="sabnzbd", timeout=START_TIMEOUT)

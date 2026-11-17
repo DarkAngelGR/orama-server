@@ -7,13 +7,19 @@ from orama.catalog import CATALOG, CORE, UGOS_RESERVED_PORTS
 _MAX_PORT = 65535
 
 
-def assign_ports(apps: list[str], previous: dict[str, int], taken: set[int]) -> dict[str, int]:
+def assign_ports(
+    apps: list[str],
+    previous: dict[str, int],
+    taken: set[int],
+    adopted: set[str] | frozenset[str] = frozenset(),
+) -> dict[str, int]:
     """Assign one host port per app that has one.
 
     Previous assignments are kept as-is (they may show up in `taken` because
-    our own containers hold them). Otherwise the default port is used when
-    free; if not, scan upward for a port that is not taken, reserved, any
-    service's default, or already assigned.
+    our own containers hold them). For adopted apps, their default port (even
+    if in `taken`, since they are the ones listening on it) is assigned.
+    Otherwise the default port is used when free; if not, scan upward for a
+    port that is not taken, reserved, any service's default, or already assigned.
     """
     specs = {**CATALOG, **CORE}
     unknown = [a for a in apps if a not in specs]
@@ -25,10 +31,12 @@ def assign_ports(apps: list[str], previous: dict[str, int], taken: set[int]) -> 
     assigned: dict[str, int] = {}
 
     wanted = [a for a in apps if specs[a].default_host_port]
-    # Pass 1: previous assignments are fixed points.
+    # Pass 1: previous assignments and adopted apps are fixed points.
     for app in wanted:
         if app in previous:
             assigned[app] = previous[app]
+        elif app in adopted:
+            assigned[app] = specs[app].default_host_port
     used = set(assigned.values())
 
     for app in wanted:

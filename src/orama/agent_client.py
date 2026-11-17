@@ -95,6 +95,11 @@ class AgentClient:
         """Lock the storage configuration so it cannot be altered by future wizard requests."""
         return bool(self._call("storage-lock", {})["locked"])
 
+    def existing_apps(self) -> list[dict[str, Any]]:
+        """List existing apps/containers running on the host detected by the Agent."""
+        result = self._call("existing-apps", {})
+        return result if isinstance(result, list) else []
+
     def self_update_pull(self) -> bool:
         """Download the newest Orama and Agent images; nothing is restarted.
 

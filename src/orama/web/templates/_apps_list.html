@@ -8,6 +8,7 @@
     <span class="app-mark{% if row.key in app_icons %} app-mark-icon{% endif %}" aria-hidden="true">{% if row.key in app_icons %}{% include "icons/" ~ row.key ~ ".svg" %}{% else %}{{ row.name[:1] }}{% endif %}{% if row.key in logos %}<img class="app-logo" src="/apps/icon/{{ row.key }}" alt="" width="42" height="42" decoding="async">{% endif %}</span>
     <span class="app-text">
       <span class="app-name">{{ row.name }}</span>
+      {% if row.adopted %}<span class="app-badge app-badge-adopted" style="font-size:0.75rem;padding:2px 6px;border-radius:4px;background:rgba(59,130,246,0.15);color:#60a5fa;margin-left:6px;border:1px solid rgba(59,130,246,0.3)">Adopted</span>{% endif %}
       {% if row.state %}<span class="app-state app-state-{{ row.state|lower|replace(' ', '-') }}">{{ row.state }}</span>{% endif %}
     </span>
     {% if row.url %}<a class="button button-secondary" id="app-open-{{ row.key }}" href="{{ row.url }}" target="_blank" rel="noopener noreferrer" aria-label="Open {{ row.name }} in a new tab">Open</a>{% endif %}

@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 from orama.secrets import PLEX_CLIENT_ID_NAME, PLEX_TOKEN_NAME
 from orama.setup_model import DesiredSetup
-from orama.wiring.engine import Step, StepError, StepSkipped, wait_until
+from orama.wiring.engine import Step, StepError, StepSkipped, app_host_and_port, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 PLEX_TV = "https://plex.tv"
@@ -178,6 +178,9 @@ def poll_sign_in(store: Any, http: Http, pin_id: int) -> Literal["waiting", "don
 def plex_steps(
     setup: DesiredSetup, store: Any, http: Http, *, timeout: float = START_TIMEOUT
 ) -> list[Step]:
+    plex_h, plex_p = app_host_and_port("plex", setup, 32400)
+    base = f"http://{plex_h}:{plex_p}"
+
     def token() -> str:
         value = store.get(PLEX_TOKEN_NAME)
         if not value:
@@ -203,7 +206,7 @@ def plex_steps(
         if signed:
             headers["X-Plex-Token"] = token()
         try:
-            resp = http.request(method, f"{BASE}{path}", headers=headers)
+            resp = http.request(method, f"{base}{path}", headers=headers)
         except Unreachable:
             raise StepError("Plex could not be reached — run apply again.") from None
         if resp.status in (401, 403):
@@ -240,7 +243,7 @@ def plex_steps(
 
     def wait() -> str | None:
         def ready() -> bool:
-            resp = http.request("GET", f"{BASE}/identity", headers={"Accept": "application/json"})
+            resp = http.request("GET", f"{base}/identity", headers={"Accept": "application/json"})
             return resp.status == 200
 
         wait_until(ready, app="plex", timeout=timeout)

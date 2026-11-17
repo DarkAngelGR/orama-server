@@ -54,3 +54,10 @@ def test_assigned_ports_unique_when_defaults_collide():
 def test_overflow_raises():
     with pytest.raises(ValueError):
         assign_ports(["sabnzbd"], {}, taken=set(range(8080, 65536)))
+
+
+def test_adopted_apps_keep_default_port_even_when_taken():
+    got = assign_ports(["sonarr", "radarr"], {}, taken={8989}, adopted={"sonarr"})
+    assert got["sonarr"] == 8989
+    assert got["radarr"] == 7878
+

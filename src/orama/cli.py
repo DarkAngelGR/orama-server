@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -60,7 +61,7 @@ from orama.secrets import (
     install_redaction,
     qbittorrent_pbkdf2,
 )
-from orama.setup_model import DesiredSetup, enabled_apps
+from orama.setup_model import DesiredSetup, enabled_apps, managed_apps
 from orama.wiring.engine import display_name, format_checklist, run_steps
 from orama.wiring.http import Http
 from orama.wiring.plan import build_steps
@@ -73,6 +74,7 @@ SECRETS_FILE = "secrets.bin"
 AUTH_FILE = "auth.json"
 FIRST_RUN_CODE_FILE = "first-run.code"
 HARDWARE_FILE = "hardware.json"
+DISCOVERED_APPS_FILE = "discovered_apps.json"
 NO_CODE = "-"
 DATA_ROOT_MOVED = ("The media folder in your setup is not the one the installer gave Orama. "
                    "Run the installer again, or put the folder back.")
@@ -285,14 +287,48 @@ def bootstrap(args: argparse.Namespace, chown: Chown) -> tuple[int, str | None]:
                     found = getattr(draft, field)
                     if found is not None and getattr(setup, field) != found:
                         setup = setup.model_copy(update={field: found})
+                discovered = _read_discovered_apps(state_fd)
+                kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
+                if discovered and not existing:
+                    adopted_set = set(setup.adopted_apps)
+                    for item in discovered:
+                        app_n = item.get("name")
+                        if app_n in CATALOG:
+                            adopted_set.add(app_n)
+                            if item.get("host_port"):
+                                kept[app_n] = int(item["host_port"])
+                    media = set(setup.media_servers)
+                    methods = set(setup.download_methods)
+                    if "plex" in adopted_set:
+                        media.add("plex")
+                    if "jellyfin" in adopted_set:
+                        media.add("jellyfin")
+                    if "sabnzbd" in adopted_set:
+                        methods.add("usenet")
+                    if "qbittorrent" in adopted_set:
+                        methods.add("torrent")
+                    setup = setup.model_copy(update={
+                        "adopted_apps": frozenset(adopted_set),
+                        "media_servers": frozenset(media),
+                        "download_methods": frozenset(methods),
+                    })
                 # A kept setup is Orama-writable: only sane ports survive, the rest are
                 # reassigned.
-                kept = {a: p for a, p in setup.ports.items() if _usable_port(p)}
                 apps = [a for a, s in CATALOG.items() if s.default_host_port] + ["orama"]
-                ports = assign_ports(apps, previous=kept, taken=args.taken_ports)
+                ports = assign_ports(apps, previous=kept, taken=args.taken_ports, adopted=setup.adopted_apps)
                 setup = setup.model_copy(update={"ports": {**kept, **ports}})
                 text = _setup_text(setup)
                 _write_atomic(state_fd, name, text, 0o600, owner=owner, chown=chown)
+                if discovered:
+                    try:
+                        secrets_store = SecretStore(Path(orama_state_dir(setup.config_root)) / SECRETS_FILE)
+                        for item in discovered:
+                            app_n = item.get("name")
+                            api_key = item.get("api_key")
+                            if app_n and api_key and not secrets_store.get(f"apikey:{app_n}"):
+                                secrets_store.set(f"apikey:{app_n}", api_key)
+                    except (OSError, ValueError, KeyError):
+                        pass
                 hardware = {"render_gid": args.render_gid, "nvidia": args.nvidia}
                 _write_atomic(state_fd, HARDWARE_FILE, _json_text(hardware), 0o644,
                               owner=owner, chown=chown)
@@ -474,6 +510,22 @@ def _lock_within(fd: int, seconds: float) -> None:
             time.sleep(0.1)
 
 
+def _read_discovered_apps(state_fd: int) -> list[dict[str, Any]]:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        fd = os.open(DISCOVERED_APPS_FILE, flags, dir_fd=state_fd)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return []
+    with os.fdopen(fd, "rb") as f:
+        try:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return []
+
+
 def _existing_setup(state_fd: int, shown: PurePosixPath) -> tuple[str, DesiredSetup | None]:
     """The saved setup, else the earlier draft, else nothing (the draft name)."""
     for name in (SETUP_FILE, DRAFT_FILE):
@@ -591,14 +643,15 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
     client = AgentClient(os.environ.get("ORAMA_AGENT_SOCKET", DEFAULT_SOCKET))
     try:
         others = {p for a, p in setup.ports.items() if a not in apps}
-        ports = assign_ports(apps, previous=setup.ports, taken=others)
+        ports = assign_ports(apps, previous=setup.ports, taken=others, adopted=setup.adopted_apps)
         setup = setup.model_copy(update={"ports": {**setup.ports, **ports}})
         ensure_app_keys(
             store, apps, gluetun_proxy=setup.vpn is not None and setup.vpn.route_prowlarr
         )
         folders = [str(p) for p in data_folders(setup.data_root)]
         app_root = setup.app_config_root if setup.app_config_root is not None else (setup.config_root / "config")
-        folders += [str(app_config_dir(app_root, a)) for a in apps]
+        managed = managed_apps(setup)
+        folders += [str(app_config_dir(app_root, a)) for a in managed]
         try:
             result = client.ensure_folders(folders)
         except AgentError as e:
@@ -619,7 +672,7 @@ def _apply_locked(setup_path: Path, setup: DesiredSetup) -> int:
         for app in changed:
             print(f"✓ {app} started", flush=True)
         # After the deploy: the apps first write their own default config files.
-        seeded = _seed_logins(client, store, apps)
+        seeded = _seed_logins(client, store, managed)
         for app in seeded:
             print(f"✓ {display_name(app)}: login details set", flush=True)
         forwarding = setup.vpn is not None and setup.vpn.port_forwarding

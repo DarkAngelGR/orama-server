@@ -32,6 +32,7 @@ class AppRow:
     name: str
     state: str | None
     url: str | None
+    adopted: bool = False
 
 
 def state_word(raw: object) -> str:
@@ -61,8 +62,14 @@ def app_rows(setup: DesiredSetup, states: dict[str, str] | None) -> list[AppRow]
     for app in apps:
         port = setup.ports.get(app)
         url = f"http://{host}:{port}/" if port and app not in NO_LINK else None
-        rows.append(AppRow(app, display_name(app),
-                           None if states is None else state_word(states.get(app)), url))
+        is_adopted = hasattr(setup, "adopted_apps") and app in setup.adopted_apps
+        if is_adopted:
+            state_val = "Adopted"
+        elif states is None:
+            state_val = None
+        else:
+            state_val = state_word(states.get(app))
+        rows.append(AppRow(app, display_name(app), state_val, url, adopted=is_adopted))
     return rows
 
 
@@ -71,7 +78,10 @@ def running_summary(setup: DesiredSetup) -> str | None:
     if states is None:
         return None
     apps = enabled_apps(setup)
-    up = sum(1 for a in apps if state_word(states.get(a)) == "Running")
+    up = sum(
+        1 for a in apps
+        if ((hasattr(setup, "adopted_apps") and a in setup.adopted_apps) or state_word(states.get(a)) == "Running")
+    )
     return f"{up} of {len(apps)} apps running"
 
 

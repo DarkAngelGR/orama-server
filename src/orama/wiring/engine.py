@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from orama.wiring.http import Unreachable
 
@@ -25,6 +25,21 @@ APP_NAMES = {
 
 def display_name(app: str) -> str:
     return APP_NAMES.get(app, app)
+
+
+def app_host_and_port(app: str, setup: Any, default_port: int) -> tuple[str, int]:
+    """Host and port to reach `app` from Orama or another container.
+
+    Adopted apps are reached on the host via LAN address or localhost, on their
+    assigned host port. Managed apps are reached by container service name and port.
+    """
+    if hasattr(setup, "adopted_apps") and app in setup.adopted_apps:
+        host = str(setup.lan_address) if getattr(setup, "lan_address", None) else "127.0.0.1"
+        port = setup.ports.get(app, default_port) if hasattr(setup, "ports") else default_port
+        return host, port
+    if app == "qbittorrent" and getattr(setup, "vpn", None) is not None:
+        return "gluetun", default_port
+    return app, default_port
 
 
 class StepError(Exception):

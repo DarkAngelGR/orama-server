@@ -549,3 +549,14 @@ def test_wireguard_address_in_gluetun_env():
 
 def test_core_compose_passes_state_dir():
     assert core()["services"]["orama"]["environment"] == {"ORAMA_STATE_DIR": "/srv/orama/orama"}
+
+
+def test_build_apps_compose_omits_adopted_apps():
+    s = full(adopted_apps={"plex", "qbittorrent"})
+    doc = build_apps_compose(s)
+    assert "plex" not in doc["services"]
+    assert "qbittorrent" not in doc["services"]
+    assert "sonarr" in doc["services"]
+    assert "ports" not in doc["services"]["gluetun"]
+
+

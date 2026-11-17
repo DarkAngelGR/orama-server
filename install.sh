@@ -426,6 +426,109 @@ JSONEOF
   mv -f "$tmp_manifest" "$manifest"
 }
 
+# shellcheck disable=SC2016  # Python source, not shell
+APP_DISCOVERY_PY='
+import json, re, sys
+
+DOCKER_CATALOG = {
+    "plex": ("plexinc/pms-docker", "linuxserver/plex", "binhex/arch-plex"),
+    "jellyfin": ("jellyfin/jellyfin", "linuxserver/jellyfin"),
+    "sonarr": ("linuxserver/sonarr", "binhex/arch-sonarr", "hotio/sonarr"),
+    "radarr": ("linuxserver/radarr", "binhex/arch-radarr", "hotio/radarr"),
+    "prowlarr": ("linuxserver/prowlarr", "hotio/prowlarr"),
+    "bazarr": ("linuxserver/bazarr", "hotio/bazarr"),
+    "sabnzbd": ("linuxserver/sabnzbd", "binhex/arch-sabnzbd"),
+    "qbittorrent": ("linuxserver/qbittorrent", "binhex/arch-qbittorrent", "markusmcnubs/qbittorrent"),
+}
+
+DEFAULT_PORTS = {
+    "plex": 32400, "jellyfin": 8096, "sonarr": 8989, "radarr": 7878,
+    "prowlarr": 9696, "bazarr": 6767, "sabnzbd": 8080, "qbittorrent": 8090,
+}
+PORT_TO_APP = {p: a for a, p in DEFAULT_PORTS.items()}
+
+taken = [int(p) for p in sys.argv[1].split(",") if p.isdigit()]
+docker_lines = sys.argv[2].splitlines() if len(sys.argv) > 2 else []
+out_path = sys.argv[3]
+
+discovered = {}
+
+for line in docker_lines:
+    parts = line.strip().split("\t")
+    if len(parts) < 3:
+        continue
+    cid, name, img = parts[0], parts[1].lstrip("/"), parts[2]
+    ports_str = parts[3] if len(parts) > 3 else ""
+    if name.startswith("orama-") or name in ("orama", "orama-server", "orama-server-agent"):
+        continue
+    matched = None
+    for app, pats in DOCKER_CATALOG.items():
+        if any(p in img.lower() for p in pats):
+            matched = app
+            break
+    if not matched:
+        for app in DEFAULT_PORTS:
+            if re.search(rf"(^|[^a-z0-9]){app}([^a-z0-9]|$)", name.lower()):
+                matched = app
+                break
+    if matched:
+        port = DEFAULT_PORTS[matched]
+        m = re.findall(r"(?:0\.0\.0\.0|\[::\]|127\.0\.0\.1):(\d+)->(\d+)/tcp", ports_str)
+        if m:
+            port = int(m[0][0])
+        discovered[matched] = {
+            "name": matched,
+            "container_name": name,
+            "image": img,
+            "host_port": port,
+            "source": "docker",
+        }
+
+for p in taken:
+    if p in PORT_TO_APP:
+        app = PORT_TO_APP[p]
+        if app not in discovered:
+            discovered[app] = {
+                "name": app,
+                "container_name": None,
+                "image": None,
+                "host_port": p,
+                "source": "port",
+            }
+
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(list(discovered.values()), f, indent=2)
+    f.write("\n")
+'
+
+prepare_discovered_apps() {
+  local state="$CONFIG_ROOT/orama"
+  local manifest="$state/discovered_apps.json"
+  if is_dry_run; then
+    say "+ discover existing apps -> $manifest"
+    return 0
+  fi
+
+  [[ -d "$state" ]] || mkdir -p "$state"
+
+  local docker_ps_out=""
+  if "$DOCKER_BIN" info > /dev/null 2>&1; then
+    docker_ps_out=$("$DOCKER_BIN" ps --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null || true)
+  fi
+
+  local tmp_manifest
+  tmp_manifest=$(mktemp "$state/.discovered_apps.XXXXXX")
+
+  if command -v "$PYTHON_BIN" > /dev/null 2>&1 && "$PYTHON_BIN" -c "import sys" > /dev/null 2>&1; then
+    "$PYTHON_BIN" -c "$APP_DISCOVERY_PY" "$taken" "$docker_ps_out" "$tmp_manifest"
+  else
+    printf '[]\n' > "$tmp_manifest"
+  fi
+
+  chmod 0600 "$tmp_manifest"
+  mv -f "$tmp_manifest" "$manifest"
+}
+
 # Create the data folder only if it is missing; an existing one is never changed.
 prepare_data_root() {
   if [[ -e "$DATA_ROOT" || -L "$DATA_ROOT" ]]; then
@@ -731,6 +834,7 @@ main() {
 
   prepare_config_root
   prepare_storage_candidates
+  prepare_discovered_apps
   run_bootstrap "$platform" "$docker_gid" "$render_gid" "$nvidia" "$taken"
   prepare_data_root
   start_core

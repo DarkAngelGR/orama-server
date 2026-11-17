@@ -72,7 +72,8 @@ APPLY_MARKER = ".apply-incomplete"  # in app-env while an up is running or after
 _ID_MAX = 128
 COMMANDS = frozenset({"ensure-folders", "apply", "status", "restart", "seed-config",
                       "recyclarr-sync", "data-space", "self-update-pull", "self-update",
-                      "storage-candidates", "storage-validate", "storage-lock"})
+                      "storage-candidates", "storage-validate", "storage-lock",
+                      "existing-apps"})
 UPDATE_BUSY = "Orama is already downloading or starting an update. Try again in a few minutes."
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -282,12 +283,17 @@ class Agent:
             "storage-candidates": self.storage_candidates,
             "storage-validate": self.storage_validate,
             "storage-lock": self.storage_lock,
+            "existing-apps": self.existing_apps,
         }[cmd]
         if cmd == "self-update-pull":
             # Only downloads images (see self_update_pull): it takes the update lock alone.
             return handler(args)
         with self._lock:
             return handler(args)
+
+    def existing_apps(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+        _expect_keys(args, set())
+        return self._runner.existing_apps()
 
     # ------------------------------------------------------------ ensure-folders
 

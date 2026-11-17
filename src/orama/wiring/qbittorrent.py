@@ -7,7 +7,7 @@ from typing import Any
 
 from orama.catalog import QBITTORRENT_WEBUI_USER
 from orama.setup_model import DesiredSetup
-from orama.wiring.engine import Step, StepError, wait_until
+from orama.wiring.engine import Step, StepError, app_host_and_port, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 PORT = 8090
@@ -22,8 +22,8 @@ def _norm(value: object) -> str:
 
 
 def qbittorrent_steps(setup: DesiredSetup, store: Any, http: Http) -> list[Step]:
-    host = "gluetun" if setup.vpn is not None else "qbittorrent"
-    base = f"http://{host}:{PORT}/api/v2"
+    qbt_h, qbt_p = app_host_and_port("qbittorrent", setup, PORT)
+    base = f"http://{qbt_h}:{qbt_p}/api/v2"
 
     def call(method: str, path: str, **kw: Any) -> Response:
         try:

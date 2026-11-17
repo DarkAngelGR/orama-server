@@ -19,7 +19,7 @@ from typing import Any
 
 from orama.secrets import JELLYFIN_KEY_NAME, JELLYFIN_PASSWORD_NAME, JELLYFIN_USER_NAME
 from orama.setup_model import DesiredSetup
-from orama.wiring.engine import Step, StepError, wait_until
+from orama.wiring.engine import Step, StepError, app_host_and_port, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 _LOG = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ def jellyfin_steps(
     setup: DesiredSetup, store: Any, http: Http, *, timeout: float = START_TIMEOUT
 ) -> list[Step]:
     session: dict[str, str] = {}  # the sign-in token, in memory only
+    jf_h, jf_p = app_host_and_port("jellyfin", setup, 8096)
+    base = f"http://{jf_h}:{jf_p}"
 
     def call(
         method: str, path: str, *, json: Any = None, token: str | None = None,
@@ -67,7 +69,7 @@ def jellyfin_steps(
         if token is not None:
             sent["Authorization"] = f'MediaBrowser {_CLIENT}, Token="{token}"'
         try:
-            resp = http.request(method, f"{BASE}{path}{query}", headers=sent, json=json)
+            resp = http.request(method, f"{base}{path}{query}", headers=sent, json=json)
         except Unreachable:
             raise StepError("Jellyfin could not be reached — run apply again.") from None
         if resp.status in (401, 403):
@@ -96,7 +98,7 @@ def jellyfin_steps(
 
     def wait() -> str | None:
         def ready() -> bool:
-            resp = http.request("GET", f"{BASE}/System/Info/Public")
+            resp = http.request("GET", f"{base}/System/Info/Public")
             # A starting server can answer 200 before it knows whether setup is done.
             data = _json(resp) if resp.status == 200 else None
             return isinstance(data, dict) and isinstance(data.get("StartupWizardCompleted"), bool)

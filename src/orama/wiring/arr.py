@@ -14,7 +14,7 @@ from typing import Any, Literal
 from orama.catalog import QBITTORRENT_WEBUI_USER
 from orama.secrets import JELLYFIN_KEY_NAME, PLEX_TOKEN_NAME, webhook_token_name
 from orama.setup_model import DesiredSetup, enabled_apps
-from orama.wiring.engine import Step, StepError, display_name, wait_until
+from orama.wiring.engine import Step, StepError, app_host_and_port, display_name, wait_until
 from orama.wiring.http import Http, Response, Unreachable
 
 START_TIMEOUT = 600.0  # the first start migrates its database
@@ -58,8 +58,9 @@ def arr_steps(
 ) -> list[Step]:
     spec = SPECS[app]
     name = display_name(app)
-    base = f"http://{app}:{spec.port}/api/v3"
-    qbittorrent_host = "gluetun" if setup.vpn is not None else "qbittorrent"
+    arr_h, arr_p = app_host_and_port(app, setup, spec.port)
+    base = f"http://{arr_h}:{arr_p}/api/v3"
+    qbt_h, qbt_p = app_host_and_port("qbittorrent", setup, QBITTORRENT_PORT)
 
     def key() -> str:
         value = store.get(f"apikey:{app}")
@@ -209,8 +210,9 @@ def arr_steps(
         apikey = store.get("apikey:sabnzbd")
         if apikey is None:
             raise StepError("SABnzbd's API key is missing — run apply again.")
+        sab_h, sab_p = app_host_and_port("sabnzbd", setup, SAB_PORT)
         return (
-            {"host": "sabnzbd", "port": SAB_PORT, "apiKey": apikey,
+            {"host": sab_h, "port": sab_p, "apiKey": apikey,
              spec.category_field: spec.category},
             apikey,
         )
@@ -220,7 +222,7 @@ def arr_steps(
         if password is None:
             raise StepError("qBittorrent's password is missing — run apply again.")
         return (
-            {"host": qbittorrent_host, "port": QBITTORRENT_PORT,
+            {"host": qbt_h, "port": qbt_p,
              "username": QBITTORRENT_WEBUI_USER, "password": password,
              spec.category_field: spec.category},
             password,
@@ -230,8 +232,9 @@ def arr_steps(
         token = store.get(PLEX_TOKEN_NAME)
         if not token:
             raise StepError("Orama's Plex sign-in is missing — run apply again.")
+        plex_h, plex_p = app_host_and_port("plex", setup, PLEX_PORT)
         return (
-            {"host": "plex", "port": PLEX_PORT, "authToken": token, "updateLibrary": True},
+            {"host": plex_h, "port": plex_p, "authToken": token, "updateLibrary": True},
             token,
         )
 
@@ -239,9 +242,10 @@ def arr_steps(
         apikey = store.get(JELLYFIN_KEY_NAME)
         if not apikey:
             raise StepError("Jellyfin's API key is missing — run apply again.")
+        jf_h, jf_p = app_host_and_port("jellyfin", setup, JELLYFIN_PORT)
         return (
             # notify=False: refresh the library only, no pop-up on the screens playing.
-            {"host": "jellyfin", "port": JELLYFIN_PORT, "apiKey": apikey, "updateLibrary": True,
+            {"host": jf_h, "port": jf_p, "apiKey": apikey, "updateLibrary": True,
              "notify": False},
             apikey,
         )

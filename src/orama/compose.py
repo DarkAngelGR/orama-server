@@ -17,7 +17,7 @@ from orama.catalog import (
     ServiceSpec,
 )
 from orama.layout import app_config_dir, app_env_file, orama_state_dir
-from orama.setup_model import DesiredSetup, enabled_apps
+from orama.setup_model import DesiredSetup, managed_apps
 
 NETWORK = "orama"  # the network's key inside both compose files
 SHARED_NETWORK = "orama-net"  # its Docker name: created by the core compose, joined by the apps
@@ -123,7 +123,7 @@ def _service(spec: ServiceSpec, setup: DesiredSetup, vpn_on: bool) -> dict[str, 
     svc["networks"] = [NETWORK]
     if spec.name == "gluetun":
         # Gluetun owns qBittorrent's network, so it publishes qBittorrent's port.
-        if "qbittorrent" in enabled_apps(setup):
+        if "qbittorrent" in managed_apps(setup):
             svc["ports"] = [f"{_host_port(CATALOG['qbittorrent'], setup)}:{QBITTORRENT_WEBUI_PORT}"
             ]
     else:
@@ -136,7 +136,7 @@ def _service(spec: ServiceSpec, setup: DesiredSetup, vpn_on: bool) -> dict[str, 
 def build_apps_compose(setup: DesiredSetup) -> dict[str, Any]:
     vpn_on = setup.vpn is not None
     services = {
-        app: _service(CATALOG[app], setup, vpn_on) for app in enabled_apps(setup)
+        app: _service(CATALOG[app], setup, vpn_on) for app in managed_apps(setup)
     }
     return {
         "name": "orama-apps",
