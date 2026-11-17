@@ -335,3 +335,6 @@ Needs review: fixed on test in 5583032 and 875eb7b. Embedded status checks wired
 
 ## Existing-app request routing (Codex)
 Needs review: adopted-app routing fixed in 5aba065 and 1db9bfe. CI 44157159080 passed all six test/build jobs; publish skipped. NAS update and API authentication pending. See docs/tasks/adopted-request-routing.md.
+
+## App API credentials (Codex)
+In progress: approved App connections Settings form; docs/tasks/app-connections.md.
