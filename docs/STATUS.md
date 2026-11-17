@@ -340,4 +340,4 @@ Needs review: adopted-app routing fixed in 5aba065 and 1db9bfe. CI 44157159080 p
 Needs review: Settings App connections in cdec2ce. CI 44164818162 passed unit, browser (rerun), images, integration and Ubuntu/Debian end-to-end; publish skipped. NAS install of this commit is still pending. Report: docs/tasks/app-connections.md.
 
 ## Hermes on a separate mini PC
-Needs review: Settings → Hermes saves a home-network address in the state folder, and the Hermes link opens it. The Orama container never received `HERMES_URL` from `orama.env`, so the NAS kept opening the empty built-in page. NAS install of this change is still pending.
+Needs review: Settings → Hermes saves a home-network address in the state folder, and the Hermes link opens it (`dd0ab76`). The Orama container never received `HERMES_URL` from `orama.env`, so the NAS kept opening the empty built-in page. CI 44176261549 passed unit, browser, images, integration and Ubuntu/Debian end-to-end; publish skipped. NAS install of this commit is still pending.
