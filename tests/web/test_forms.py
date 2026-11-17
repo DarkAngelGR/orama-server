@@ -108,6 +108,21 @@ def test_read_media_never_has_secret_values(store):
 # ------------------------------------------------------------------ folders
 
 
+def test_default_folders_resolve_to_installed_roots(store):
+    from orama_agent.storage import StorageManifest
+    from orama_agent.validate import Roots
+
+    setup = make_setup()
+    values = forms.read_folders(setup, store)
+    manifest = StorageManifest.load(Roots(config=Path(setup.config_root), data=Path(setup.data_root), puid=setup.puid, pgid=setup.pgid))
+    app, data = manifest.resolve_selection(
+        values["app_candidate_id"], values["app_folder_name"],
+        values["data_candidate_id"], values["data_folder_name"],
+    )
+    assert app == setup.config_root / "config"
+    assert data == setup.data_root
+
+
 def test_folders_are_read_only(store):
     # The data folder is the installer's (the Agent's own root): a form cannot change it.
     setup = make_setup()
@@ -313,3 +328,4 @@ def test_vpn_key_that_is_not_shaped_like_a_wireguard_key_is_refused(store, key):
         forms.apply_downloads(make_setup(), downloads_form(vpn_key=key), store)
     assert "does not look like a WireGuard key" in e.value.errors["vpn_key"]
     assert store.get(VPN_KEY_NAME) is None
+

@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from orama import state
+from orama.catalog import CATALOG
 from orama.setup_model import DesiredSetup
 from orama.wiring.plex import WAITING_FOR_SIGN_IN
 from orama_agent import recyclarr
@@ -367,15 +368,15 @@ def test_no_app_mounts_env_files_or_docker(clean_host: Host, applied):
 
 
 def test_app_mounts_follow_storage_roots(clean_host: Host, applied):
-    setup = DesiredSetup.load(clean_host.config_root / "setup.json")
+    setup = DesiredSetup.load(clean_host.state_dir / "setup.json")
     expected_app_config_root = setup.app_config_root or (clean_host.config_root / "config")
     for app in APPS:
         info = docker_inspect(f"orama-{app}")
         sources = bind_sources(info)
         app_config = str(expected_app_config_root / app)
         assert any(s == app_config for s in sources), f"{app} did not mount {app_config}"
-        assert any(s == str(setup.data_root) for s in sources), f"{app} did not mount data_root"
-    assert (clean_host.config_root / "setup.json").is_file()
+        assert (str(setup.data_root) in sources) == CATALOG[app].mounts_data, app
+    assert (clean_host.state_dir / "setup.json").is_file()
 
 
 def test_data_folders_belong_to_the_install_user(clean_host: Host, applied):

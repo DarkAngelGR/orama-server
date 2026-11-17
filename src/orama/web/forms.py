@@ -351,7 +351,7 @@ def read_folders(setup: DesiredSetup, store: SecretStore) -> dict[str, Any]:
         "data_root": str(setup.data_root),
         "config_root": str(setup.config_root),
         "app_config_root": str(setup.app_config_root or (setup.config_root / "config")),
-        "app_candidate_id": "cand_default",
+        "app_candidate_id": "cand_config",
         "app_folder_name": setup.app_config_root.name if setup.app_config_root else "apps",
         "data_candidate_id": "cand_default",
         "data_folder_name": setup.data_root.name if setup.data_root else "data",
