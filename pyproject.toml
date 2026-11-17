@@ -23,7 +23,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/orama", "src/orama_agent"]
+packages = ["src/orama", "src/orama_agent", "src/hermes"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

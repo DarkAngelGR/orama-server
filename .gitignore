@@ -7,3 +7,5 @@ __pycache__/
 integration-logs/
 .playwright-node/
 .DS_Store
+.gemini/
+.agents/

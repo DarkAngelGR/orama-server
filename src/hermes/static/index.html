@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101426">
+  <title>Hermes · Intelligent Media & Voice Dashboard for Orama</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+
+  <!-- Floating Header Bar matching Orama's Design -->
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/" aria-label="Hermes Home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Hermes <small class="brand-sub">Ερμής</small></span>
+      </a>
+
+      <nav>
+        <a href="#conversation" aria-current="page">Assistant</a>
+        <a href="#discover">Discover</a>
+        <button id="settings-open" class="nav-btn" type="button">Settings</button>
+        <button id="connect-open" class="connection-pill" type="button" aria-label="Hermes Connection Status">
+          <span class="status-dot"></span>
+          <span id="connection-label">Connect</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Page Container -->
+  <main class="page">
+
+    <!-- Intro Banner -->
+    <div class="entry-intro">
+      <div class="eyebrow">AI-NATIVE VOICE & DISCOVERY</div>
+      <h1>Speak, discover, and request.</h1>
+      <p class="lead">Personalized recommendations from your Plex and Jellyfin watch history, powered by Gemini and Ollama with neural speech synthesis.</p>
+    </div>
+
+    <!-- Home Golden Ratio Grid (1.618fr : 1fr) -->
+    <div class="home-grid">
+
+      <!-- Main Column (1.618fr): Hermes Assistant -->
+      <section class="home-main">
+        <div class="panel-assistant entry-panel" id="conversation" aria-label="Hermes Voice and Chat">
+          <div class="panel-header">
+            <div class="panel-title-wrap">
+              <span class="status-indicator live" aria-hidden="true"></span>
+              <h2>Hermes Conversation</h2>
+            </div>
+            <div class="panel-actions">
+              <span class="lang-tag">EN / EL</span>
+              <button id="clear" class="button button-quiet" type="button">New Chat ↗</button>
+            </div>
+          </div>
+
+          <!-- Interactive Voice Stage with Frosted Orb and Projector Glows -->
+          <div class="voice-stage" id="voice-stage" data-state="idle">
+            <div class="ambient-glow" aria-hidden="true"></div>
+            <div class="orb-container">
+              <div class="orb-ring orbit-outer" aria-hidden="true"></div>
+              <div class="orb-ring orbit-inner" aria-hidden="true"></div>
+              <div class="orb-sphere" aria-hidden="true"></div>
+            </div>
+            <div class="voice-status">
+              <span id="state" role="status">Ready when you are</span>
+              <small id="voice-detail">Speak or type to begin</small>
+            </div>
+            <div class="frequency-wave" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+          </div>
+
+          <!-- Messages Viewport -->
+          <div id="messages" class="messages-viewport" role="log" aria-live="polite">
+            <div class="welcome-card welcome">
+              <span class="sparkle-icon" aria-hidden="true">✦</span>
+              <div>
+                <b>Start with a thought or question.</b>
+                <p>Ask for a movie recommendation, search your library, or verify your media services.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Suggestion Chips -->
+          <div class="suggestion-chips" id="suggestions">
+            <button data-prompt="Recommend something to watch based on my favorites" type="button">
+              ✨ Find my next movie <span>↗</span>
+            </button>
+            <button data-prompt="Πρότεινέ μου μια καλή sci-fi σειρά" type="button">
+              🇬🇷 Πρόταση σειράς <span>↗</span>
+            </button>
+            <button data-prompt="Check Plex and Orama status" type="button">
+              ◈ Check server health <span>↗</span>
+            </button>
+          </div>
+
+          <!-- Alert / Notice Bar -->
+          <div class="notice-bar" id="notice" role="alert" hidden></div>
+
+          <!-- Chat Composer Input -->
+          <form id="chat-form" class="composer-container">
+            <label class="sr-only" for="message" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0;">Message Hermes</label>
+            <textarea id="message" rows="1" maxlength="2000" placeholder="Ask Hermes anything (English or Ελληνικά)…"></textarea>
+            <button type="button" id="mic" class="btn-icon" aria-label="Toggle microphone" aria-pressed="false">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <rect x="9" y="2" width="6" height="13" rx="3"/>
+                <path d="M5 10v2a7 7 0 0014 0v-2M12 19v3M8 22h8"/>
+              </svg>
+            </button>
+            <button id="send" class="btn-send" type="submit" aria-label="Send message">↑</button>
+          </form>
+
+          <!-- Composer Controls Footer -->
+          <div class="composer-controls">
+            <button id="ptt" type="button">Hold to Talk</button>
+            <span id="mic-help">Microphone requires HTTPS</span>
+            <button id="stop" class="button button-quiet stop-btn" type="button">■ Stop</button>
+          </div>
+
+          <!-- Audio Playback Controls -->
+          <div class="audio-bar">
+            <label class="checkbox-label">
+              <input type="checkbox" id="speak" checked>
+              <span>Speak replies</span>
+            </label>
+            <button id="replay" class="button button-quiet" type="button" disabled>↻ Replay last reply</button>
+            <div class="volume-slider">
+              <span>Vol</span>
+              <input id="volume" type="range" min="0" max="1" value="0.85" step="0.05" aria-label="Speech volume">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Side Column (1fr): Telemetry Pulse & Voice Specs -->
+      <aside class="home-side">
+        <!-- Telemetry Pulse Card -->
+        <section class="telemetry-card">
+          <div class="card-header">
+            <span class="header-title">SYSTEM PULSE</span>
+            <button id="status-refresh" class="btn-icon-subtle" aria-label="Refresh status" type="button">↻</button>
+          </div>
+          <p class="card-caption">Live reachability across your home media stack.</p>
+          <div id="statuses" class="status-grid"></div>
+          <div class="telemetry-meta">
+            <small id="status-time">Connect to verify services</small>
+            <small id="model-details" class="dim"></small>
+          </div>
+        </section>
+
+        <!-- Voice Showcase Card -->
+        <section class="voice-showcase-card">
+          <div class="eyebrow">NEURAL SPEECH ENGINE</div>
+          <h3>Conversational voice designed for flow.</h3>
+          <div class="voice-badge-preview">
+            <span class="badge-icon" aria-hidden="true">◉</span>
+            <div id="voice-summary" class="badge-text">
+              Kore <small>Gemini Neural · automatic fallback</small>
+            </div>
+          </div>
+          <button class="button button-secondary" id="voice-settings" type="button">Configure Voice & Language <span>↗</span></button>
+        </section>
+      </aside>
+
+    </div>
+
+    <!-- Discover Section: Personalized Catalogue -->
+    <section id="discover" class="discover-section entry-panel">
+      <div class="discover-header">
+        <div>
+          <div class="eyebrow">PERSONALIZED CATALOGUE</div>
+          <h2>Picked For You</h2>
+          <p class="subtitle">Filtered against your library with zero AI hallucination. Click to request in Orama.</p>
+        </div>
+        <button id="refresh" class="button button-secondary" type="button">Refresh Picks ↻</button>
+      </div>
+
+      <div id="recommendations" class="recommendations-grid">
+        <div class="empty-state">
+          <div class="empty-icon">◈</div>
+          <div class="empty-title"><b>Your personalized recommendations are ready to load.</b></div>
+          <p>Connect Hermes with your application key and sync your Plex or Jellyfin library.</p>
+        </div>
+      </div>
+
+      <div class="tmdb-attribution">
+        Movie and TV metadata provided by TMDB. This service uses the TMDB API but is not certified by TMDB.
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Site Footer -->
+  <footer class="site-footer">
+    <div class="footer-left">
+      <b>Hermes 2.0</b> · Integrated Media Assistant for Orama Server
+    </div>
+    <div class="footer-right">
+      <span>Bilingual Neural Audio · English / Ελληνικά</span>
+    </div>
+  </footer>
+
+  <!-- Settings Dialog Modal -->
+  <dialog id="settings" class="settings-modal">
+    <form method="dialog" class="dialog-header">
+      <h2>Hermes Settings</h2>
+      <button class="btn-close" aria-label="Close settings" type="submit">✕</button>
+    </form>
+    <div class="settings-body">
+      <label class="form-group">
+        <span>Hermes API Key</span>
+        <input id="key" type="password" autocomplete="off" placeholder="Enter your 32+ character API key">
+        <small>Stored in memory for this tab. Backend keys remain safely configured in environment variables.</small>
+      </label>
+      <button id="connect" class="button button-primary" type="button">Connect Workspace</button>
+
+      <hr class="divider">
+
+      <label class="form-group">
+        <span>Conversation Model</span>
+        <select id="provider">
+          <option value="auto">Gemini → Ollama Fallback</option>
+          <option value="gemini">Gemini Only</option>
+          <option value="ollama">Ollama Only (Local)</option>
+        </select>
+      </label>
+
+      <div class="form-row">
+        <label class="form-group">
+          <span>Language</span>
+          <select id="language">
+            <option value="en-US">English (en-US)</option>
+            <option value="el-GR">Ελληνικά (el-GR)</option>
+          </select>
+        </label>
+        <label class="form-group">
+          <span>TTS Engine</span>
+          <select id="tts-provider">
+            <option value="auto">Gemini → Piper Fallback</option>
+            <option value="gemini">Gemini Neural Only</option>
+            <option value="piper">Piper Local CPU Only</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label class="form-group">
+          <span>Gemini Voice</span>
+          <select id="voice">
+            <option>Kore</option>
+            <option>Puck</option>
+            <option>Charon</option>
+            <option>Fenrir</option>
+            <option>Aoede</option>
+          </select>
+        </label>
+        <label class="form-group">
+          <span>Local Piper Voice</span>
+          <select id="local-voice">
+            <option value="auto">Auto-match Language</option>
+          </select>
+        </label>
+      </div>
+
+      <button class="button button-secondary" id="test-voice" type="button">Preview Voice Sample</button>
+      <p id="voice-availability" class="form-note">Local Piper voices are hosted in the server voices directory.</p>
+
+      <hr class="divider">
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="remember">
+        <div>
+          <b>Remember Conversation History</b>
+          <small>Off by default. Stores conversations locally in browser localStorage.</small>
+        </div>
+      </label>
+
+      <p class="privacy-note">
+        Speech recognition uses your browser’s secure speech API. Audio is only transmitted when you press or hold the microphone button. Hermes has no background wake-word listeners.
+      </p>
+    </div>
+  </dialog>
+
+</body>
+</html>

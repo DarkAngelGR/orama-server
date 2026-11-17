@@ -1,0 +1,65 @@
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: docker/hermes.Dockerfile
+      args:
+        INSTALL_LOCAL_TTS: ${INSTALL_LOCAL_TTS:-true}
+    image: ${HERMES_IMAGE:-ghcr.io/darkangelgr/hermes:latest}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+      - path: hermes.env
+        required: false
+    environment:
+      - HERMES_API_KEY=${HERMES_API_KEY:-}
+      - HERMES_BIND_IP=${HERMES_BIND_IP:-127.0.0.1}
+      - ORAMA_URL=${ORAMA_URL:-http://orama:8765}
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - JELLYFIN_URL=${JELLYFIN_URL:-}
+      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY:-}
+      - JELLYFIN_USER_ID=${JELLYFIN_USER_ID:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GEMINI_TTS_MODEL=${GEMINI_TTS_MODEL:-gemini-3.8-flash-tts}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - REFRESH_HOURS=${REFRESH_HOURS:-24}
+    ports:
+      - "${HERMES_BIND_IP:-127.0.0.1}:8787:8787"
+    volumes:
+      - hermes-data:/data
+      - ./voices:/voices:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 1500m
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    profiles: ["local-llm"]
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    expose:
+      - "11434"
+    mem_limit: 24g
+
+volumes:
+  hermes-data:
+  ollama-data:
