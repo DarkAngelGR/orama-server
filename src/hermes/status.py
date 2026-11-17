@@ -1,8 +1,14 @@
 """Read-only, bounded connection checks. Never expose configured URLs or credentials."""
+
 import asyncio
 import os
 import time
-import httpx
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 from .providers import private_server_url
 
 _cache = None
@@ -11,7 +17,7 @@ _lock = asyncio.Lock()
 
 
 async def probe(client, base, path, headers=None):
-    if not base:
+    if not base or httpx is None:
         return 'not_configured'
     try:
         async with client.stream('GET',private_server_url(base)+path,headers=headers or {},

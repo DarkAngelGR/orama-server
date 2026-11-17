@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import patch
 import pytest
 
-from web.conftest import HOST_NAME, LAN, csrf_from, signin, write_setup
+from web.conftest import signin, write_setup
 
 HEADERS = {"Host": "localhost"}
 

@@ -1,16 +1,21 @@
 """Gemini neural speech with an interruptible, CPU-only Piper fallback."""
+
 import asyncio
 import base64
 import importlib.util
 import io
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Literal
 import wave
+from pathlib import Path
+from typing import Literal
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .conversation import FAILURES, gemini_model

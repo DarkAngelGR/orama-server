@@ -1,15 +1,15 @@
 """Hermes assistant integration and contract tests."""
 
 import os
-from unittest.mock import AsyncMock, patch
+
 import pytest
+
+from hermes.providers import plex_records, private_server_url
+from hermes.recommend import rank as hermes_rank
+from hermes.recommend import reorder as hermes_reorder
 
 # Ensure testing API key
 os.environ.setdefault("HERMES_API_KEY", "h" * 64)
-
-from hermes.app import app
-from hermes.recommend import rank as hermes_rank, reorder as hermes_reorder
-from hermes.providers import plex_records, private_server_url
 
 
 def test_hermes_ranking_and_reorder():

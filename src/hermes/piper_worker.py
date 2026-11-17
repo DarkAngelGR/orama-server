@@ -1,4 +1,5 @@
 """One bounded utterance per process. Model paths are supplied only by the server."""
+
 import io
 import json
 from pathlib import Path
@@ -7,9 +8,9 @@ import wave
 
 
 def main():
+    import onnxruntime
     from piper import PiperVoice
     from piper.config import PiperConfig
-    import onnxruntime
     # Explicitly limit ONNX thread pools so concurrent Ollama gets CPU time.
     options = onnxruntime.SessionOptions()
     options.intra_op_num_threads = 2

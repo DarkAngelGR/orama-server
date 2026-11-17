@@ -10,19 +10,34 @@ import asyncio
 import json
 import logging
 import os
-import secrets
 from pathlib import Path
+import secrets
 from typing import Any
 
-import httpx
 from flask import Blueprint, Flask, Response, g, jsonify, redirect, request, send_from_directory
 
-from hermes.conversation import ChatRequest, stream_chat
-from hermes.recommend import rank, reorder
-from hermes.status import service_status
-from hermes.streams import encode_events
-from hermes.voice import VoiceRequest, stream_voice, voice_catalog
 from orama.web import auth
+
+try:
+    import httpx
+    from hermes.conversation import ChatRequest, stream_chat
+    from hermes.recommend import reorder
+    from hermes.status import service_status
+    from hermes.streams import encode_events
+    from hermes.voice import VoiceRequest, stream_voice, voice_catalog
+
+    HAS_HERMES_BACKEND = True
+except ImportError:
+    httpx = None
+    ChatRequest = None
+    stream_chat = None
+    reorder = None
+    service_status = None
+    encode_events = None
+    VoiceRequest = None
+    stream_voice = None
+    voice_catalog = None
+    HAS_HERMES_BACKEND = False
 
 LOG = logging.getLogger("orama.hermes")
 HERMES_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "hermes" / "static"
@@ -36,9 +51,7 @@ def _authenticate() -> bool:
         return True
     auth_hdr = request.headers.get("Authorization", "")
     token = os.environ.get("HERMES_API_KEY", os.environ.get("JARVIS_API_KEY", ""))
-    if token and len(token) >= 32 and secrets.compare_digest(auth_hdr, f"Bearer {token}"):
-        return True
-    return False
+    return bool(token and len(token) >= 32 and secrets.compare_digest(auth_hdr, f"Bearer {token}"))
 
 
 def _read_cache() -> dict[str, Any]:
@@ -66,13 +79,17 @@ def sync_stream(async_gen):
         loop.close()
 
 
-async def chat_events(req: ChatRequest):
+async def chat_events(req):
+    if not HAS_HERMES_BACKEND or httpx is None:
+        return
     async with httpx.AsyncClient(trust_env=False) as client:
         async for event in stream_chat(req, client):
             yield event
 
 
-async def voice_events(req: VoiceRequest):
+async def voice_events(req):
+    if not HAS_HERMES_BACKEND or httpx is None:
+        return
     async with httpx.AsyncClient(trust_env=False) as client:
         async for event in stream_voice(req, client):
             yield event
@@ -123,6 +140,8 @@ def _pages() -> Blueprint:
     def status():
         if not _authenticate():
             return jsonify({"error": "Unauthorized"}), 401
+        if not HAS_HERMES_BACKEND or httpx is None:
+            return jsonify({"services": {}, "models": {}}), 503
 
         async def _run():
             async with httpx.AsyncClient(trust_env=False) as client:
@@ -130,7 +149,7 @@ def _pages() -> Blueprint:
 
         try:
             return jsonify(asyncio.run(_run()))
-        except Exception as err:
+        except (OSError, RuntimeError, TimeoutError) as err:
             LOG.warning("Status check failed: %s", err)
             return jsonify({"services": {}, "models": {}}), 500
 
@@ -138,6 +157,8 @@ def _pages() -> Blueprint:
     def voices():
         if not _authenticate():
             return jsonify({"error": "Unauthorized"}), 401
+        if not HAS_HERMES_BACKEND:
+            return jsonify({"gemini_voices": [], "local_voices": []})
         return jsonify(voice_catalog())
 
     @pages.get("/v1/recommendations")
@@ -150,6 +171,8 @@ def _pages() -> Blueprint:
     def refresh():
         if not _authenticate():
             return jsonify({"error": "Unauthorized"}), 401
+        if not HAS_HERMES_BACKEND or httpx is None:
+            return jsonify({"error": "Hermes backend dependencies not installed"}), 503
 
         async def _run():
             async with httpx.AsyncClient(trust_env=False) as client:
@@ -159,7 +182,7 @@ def _pages() -> Blueprint:
         try:
             res = asyncio.run(_run())
             return jsonify(res)
-        except Exception as err:
+        except (OSError, RuntimeError, ValueError, TimeoutError) as err:
             LOG.warning("Recommendations refresh failed: %s", err)
             return jsonify({"error": str(err)}), 500
 
@@ -167,10 +190,12 @@ def _pages() -> Blueprint:
     def chat():
         if not _authenticate():
             return jsonify({"error": "Unauthorized"}), 401
+        if not HAS_HERMES_BACKEND:
+            return jsonify({"error": "Hermes backend dependencies not installed"}), 503
         payload = request.get_json(silent=True) or {}
         try:
             req = ChatRequest(**payload)
-        except Exception as err:
+        except (TypeError, ValueError) as err:
             return jsonify({"error": str(err)}), 422
 
         return Response(
@@ -187,10 +212,12 @@ def _pages() -> Blueprint:
     def tts():
         if not _authenticate():
             return jsonify({"error": "Unauthorized"}), 401
+        if not HAS_HERMES_BACKEND:
+            return jsonify({"error": "Hermes backend dependencies not installed"}), 503
         payload = request.get_json(silent=True) or {}
         try:
             req = VoiceRequest(**payload)
-        except Exception as err:
+        except (TypeError, ValueError) as err:
             return jsonify({"error": str(err)}), 422
 
         return Response(

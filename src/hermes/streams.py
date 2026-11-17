@@ -36,7 +36,7 @@ def parse_line(line, sse):
         return None
     obj = json.loads(line)
     if not isinstance(obj, dict):
-        raise ValueError('Invalid upstream object')
+        raise TypeError('Invalid upstream object')
     if obj.get('error') or obj.get('event_type') == 'error':
         raise ValueError('Upstream error event')
     return obj

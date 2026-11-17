@@ -1,12 +1,16 @@
 """Read-only external media adapters with fixed URLs and bounded responses."""
-from __future__ import annotations
-import os
-import xml.etree.ElementTree as ET
-from urllib.parse import urlparse
-import httpx
 
-MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-TIMEOUT = httpx.Timeout(10.0)
+from __future__ import annotations
+
+from urllib.parse import urlparse
+import xml.etree.ElementTree as ET
+
+try:
+    import httpx
+    TIMEOUT = httpx.Timeout(10.0)
+except ImportError:
+    httpx = None
+    TIMEOUT = None
 
 
 def private_server_url(value: str) -> str:
@@ -126,10 +130,11 @@ async def jellyfin_data(client: httpx.AsyncClient, base: str, api_key: str, user
             info = n.get("UserData") or {}
             rating = n.get("CommunityRating")
             played = info.get("Played") is True or int(info.get("PlayCount") or 0) > 0
+            community_rating = float(rating) if isinstance(rating, (int, float)) else None
             if played or info.get("IsFavorite") is True:
                 watched.append({"kind": kind, "source_id": sid,
                                 "genres": (n.get("Genres") or [])[:25], "completed": played,
-                                "liked": info.get("IsFavorite") is True, "rating": None})
+                                "liked": info.get("IsFavorite") is True, "rating": community_rating})
         if len(rows) < 200:
             break
     return watched, library

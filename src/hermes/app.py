@@ -1,26 +1,28 @@
-"""Jarvis: local read-only media assistant with Gemini chat and fallback."""
+"""Hermes: personal media assistant with conversational LLMs and voice."""
+
 from __future__ import annotations
+
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
+from pathlib import Path
 import secrets
 import time
-from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
-import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from .conversation import ChatRequest, stream_chat
-from .voice import VoiceRequest, stream_voice, voice_catalog
-from .status import service_status
-from .streams import encode_events
+import httpx
 
+from .conversation import ChatRequest, stream_chat
 from .providers import jellyfin_data, plex_data, private_server_url, tmdb_candidates
 from .recommend import rank, reorder
+from .status import service_status
+from .streams import encode_events
+from .voice import VoiceRequest, stream_voice, voice_catalog
 
 LOG = logging.getLogger("hermes")
 DATA = Path(os.environ.get("HERMES_DATA_DIR", os.environ.get("JARVIS_DATA_DIR", "/data")))
@@ -167,7 +169,7 @@ async def lifespan(_app: FastAPI):
             while True:
                 try:
                     await refresh()
-                except Exception as exc:  # scheduled refresh must not stop the API
+                except Exception as exc:  # noqa: BLE001 - background daemon loop must survive transient failures
                     LOG.warning("Background refresh unavailable: %s", type(exc).__name__)
                 await asyncio.sleep(REFRESH_SECONDS)
         task = asyncio.create_task(periodic())
@@ -280,10 +282,9 @@ async def voice_events(req):
     if _voice_slots.locked():
         yield {"type":"error","message":"Voice is busy. Try again shortly."}
         return
-    async with _voice_slots:
-        async with httpx.AsyncClient(trust_env=False) as client:
-            async for event in stream_voice(req,client):
-                yield event
+    async with _voice_slots, httpx.AsyncClient(trust_env=False) as client:
+        async for event in stream_voice(req, client):
+            yield event
 
 
 @app.post("/v1/tts/stream", dependencies=[Depends(require_auth)])

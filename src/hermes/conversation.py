@@ -1,11 +1,18 @@
 """Conversational provider adapters; no tools, credentials or network addresses in prompts."""
+
 import asyncio
 import os
 import re
 from typing import Literal
 
-import httpx
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+try:
+    import httpx
+    _HTTPError = httpx.HTTPError
+except ImportError:
+    httpx = None
+    _HTTPError = Exception
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .providers import private_server_url
 from .streams import json_lines
@@ -13,7 +20,7 @@ from .streams import json_lines
 SYSTEM = ('You are Hermes, a warm, concise personal media assistant for Orama. Reply in the user\'s language. '
           'You cannot execute commands, access private files, or control devices. '
           'Never claim to have performed actions. Keep spoken answers natural and brief.')
-FAILURES = (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError, TimeoutError)
+FAILURES = (_HTTPError, ValueError, KeyError, IndexError, TypeError, AttributeError, TimeoutError)
 
 
 class Message(BaseModel):
